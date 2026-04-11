@@ -1,10 +1,10 @@
 # Maintainer: coldbrxthe <rocattjust@gmail.com>
 pkgname=rs-pug-git
 pkgver=r.1
-pkgrel=1
+pkgrel=7
 pkgdesc="Terminal YouTube music player with mpv, yt-dlp and Lua plugin support"
 arch=('x86_64')
-url="https://github.com/coldbrxthe/rs-pug"
+url="https://github.com/JustRoccat/rs-pug"
 license=('MIT')
 depends=('mpv' 'yt-dlp')
 optdepends=('mpv-mpris: MPRIS/playerctl support')
@@ -21,8 +21,15 @@ pkgver() {
 
 build() {
     cd "$pkgname"
+    # Wymuszamy na linkerze dołączenie CAŁEJ biblioteki statycznej Lua
+    # Flaga --whole-archive sprawia, że żadne symbole nie zostaną pominięte
+    export RUSTFLAGS="-C link-arg=-Wl,--whole-archive -C link-arg=-llua -C link-arg=-Wl,--no-whole-archive"
     cargo build --release --locked
 }
+
+
+
+
 
 package() {
     cd "$pkgname"
