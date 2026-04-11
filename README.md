@@ -4,7 +4,7 @@ terminal music player powered by YouTube. search, queue, listen — no browser, 
 
 uses `mpv` and `yt-dlp` under the hood, with a terminal UI built with ratatui.
 
-![demo placeholder](https://placehold.co/800x400?text=screenshot+here)
+![demo placeholder](https://cdn.discordapp.com/attachments/1473377698478031021/1492564717183696991/image.png?ex=69dbcab7&is=69da7937&hm=87bbbd463f1802f0a254779f4f4810a9eaf9920468c77ba3bda964c850780423&)
 
 ## dependencies
 
