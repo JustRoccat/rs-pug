@@ -9,9 +9,6 @@ use crate::{
     model::{App, Focus, PlayerState, RepeatMode, Song, Tab},
 };
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                        COLOR PALETTE                            ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 struct Palette {
     text: Color,
@@ -21,8 +18,8 @@ struct Palette {
     warn: Color,
     ok: Color,
     primary: Color,
-    accent2: Color, // neon purple
-    accent3: Color, // neon cyan
+    accent2: Color,
+    accent3: Color,
 }
 
 fn palette(theme: Theme) -> Palette {
@@ -80,17 +77,14 @@ fn palette(theme: Theme) -> Palette {
             warn: Color::Rgb(255, 205, 52),
             ok: Color::Rgb(52, 255, 162),
             primary: Color::Rgb(255, 62, 205),
-            accent2: Color::Rgb(152, 82, 255), // neon purple
-            accent3: Color::Rgb(0, 228, 255),  // neon cyan
+            accent2: Color::Rgb(152, 82, 255),
+            accent3: Color::Rgb(0, 228, 255),
         },
     }
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                      ANIMATION HELPERS                          ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
-/// Smoothly cycles: neon pink → purple → cyan → pink
+
 fn animated_accent(tick: u64) -> Color {
     use std::f64::consts::TAU;
     let t = tick as f64 * 0.042;
@@ -100,7 +94,7 @@ fn animated_accent(tick: u64) -> Color {
     Color::Rgb(r, g, b)
 }
 
-/// Secondary pulsing color — offset phase from primary
+
 fn animated_secondary(tick: u64) -> Color {
     use std::f64::consts::TAU;
     let t = tick as f64 * 0.042 + TAU / 4.0;
@@ -110,9 +104,6 @@ fn animated_secondary(tick: u64) -> Color {
     Color::Rgb(r, g, b)
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                    SPECTRUM VISUALIZER                          ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 const VOLT_BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
@@ -153,14 +144,14 @@ fn spectrum_spans(tick: u64, width: usize, playing: bool) -> Vec<Span<'static>> 
             let t = tick as f64;
             let c = col as f64;
 
-            // Layered sine waves — organic spectrum feel
+
             let w1 = (c * 0.33 + t * 0.132).sin();
             let w2 = (c * 0.69 + t * 0.188).sin() * 0.58;
             let w3 = (c * 0.17 + t * 0.072).sin() * 0.38;
             let w4 = (c * 1.12 + t * 0.295).sin() * 0.18;
             let w5 = (c * 0.52 + t * 0.215).sin() * 0.12;
 
-            // Stable per-column fingerprint for realistic variation
+
             let fp = (col
                 .wrapping_mul(6271)
                 .wrapping_add(col.wrapping_mul(col).wrapping_mul(104723))
@@ -181,9 +172,6 @@ fn spectrum_spans(tick: u64, width: usize, playing: bool) -> Vec<Span<'static>> 
         .collect()
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                         MAIN DRAW                               ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let pal = palette(app.theme);
@@ -218,9 +206,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_overlays(frame, app, &pal, anim, size);
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                          TAB BAR                                ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: Color, area: Rect) {
     let active = match app.active_tab {
@@ -281,9 +266,6 @@ fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: C
     frame.render_widget(tabs, area);
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                         SEARCH BAR                              ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     let active_query = if app.active_tab == Tab::Albums {
@@ -327,10 +309,6 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     );
     frame.render_widget(widget, area);
 }
-
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                   CONTENT — RESULTS + QUEUE                     ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let split = if app.active_tab == Tab::Library {
@@ -621,9 +599,6 @@ fn dim_item(text: &'static str, pal: &Palette) -> ListItem<'static> {
     ListItem::new(Span::styled(text, Style::default().fg(pal.muted)))
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                        NOW PLAYING                              ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let inner_w = area.width.saturating_sub(2) as usize;
@@ -655,7 +630,6 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         String::new()
     };
 
-    // Line 1 — state icon + song title + badges
     let line1 = Line::from(vec![
         Span::styled(
             format!("{state_icon}  "),
@@ -671,13 +645,13 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         ),
     ]);
 
-    // Line 2 — artist / subtitle
+
     let line2 = Line::from(vec![
         Span::styled("   ◦  ".to_string(), Style::default().fg(pal.dim)),
         Span::styled(artist_str, Style::default().fg(pal.accent3)),
     ]);
 
-    // Line 3 — animated spectrum
+
     let playing = app.player_state == PlayerState::Playing;
     let spec_w = inner_w.saturating_sub(3);
     let mut spec = vec![Span::styled("  ".to_string(), Style::default())];
@@ -700,9 +674,6 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     frame.render_widget(widget, area);
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                         PROGRESS                                ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let ratio = if app.playback_duration > 0.0 {
@@ -746,9 +717,6 @@ fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
     frame.render_widget(gauge, area);
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                          HELP BAR                               ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 fn draw_help(frame: &mut Frame, pal: &Palette, area: Rect) {
     let key = |k: &'static str| -> Span<'static> {
@@ -817,9 +785,7 @@ fn draw_help(frame: &mut Frame, pal: &Palette, area: Rect) {
     frame.render_widget(widget, area);
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                        OVERLAY POPUPS                           ║
-// ╚══════════════════════════════════════════════════════════════════╝
+
 
 fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size: Rect) {
     let msg = app.shown_message();
@@ -909,9 +875,6 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
 
 }
 
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║                          UTILITIES                               ║
-// ╚══════════════════════════════════════════════════════════════════╝
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup = Layout::vertical([
