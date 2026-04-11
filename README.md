@@ -1,6 +1,6 @@
 # rs-pug
 
-terminal music player powered by YouTube. search, queue, listen — no browser, no ads, no nonsense.
+Neovim out of music players. search, queue, listen — no browser, no ads, no nonsense.
 
 uses `mpv` and `yt-dlp` under the hood, with a terminal UI built with ratatui.
 
