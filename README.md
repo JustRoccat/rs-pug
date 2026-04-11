@@ -73,6 +73,11 @@ config file is created automatically on first launch at `~/.config/rs-pug/config
 #read or sum
 Plugin system is there, it uses Lua. I don't know Lua, so feel free to PR some examples.
 
+
+
+
+Small, ugly, but there's just something about it
+
 ## license
 
 MIT
