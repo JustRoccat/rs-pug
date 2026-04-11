@@ -1,0 +1,272 @@
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
+
+use crate::config::{Config, GeneralConfig, KeybindsConfig, MpvConfig, SearchConfig, Theme};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Song {
+    pub id: String,
+    pub title: String,
+    pub webpage_url: String,
+    #[serde(default)]
+    pub uploader: Option<String>,
+    #[serde(default)]
+    pub duration: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Playlist {
+    pub name: String,
+    pub songs: Vec<Song>,
+}
+
+impl Song {
+    pub fn subtitle(&self) -> String {
+        let artist = self
+            .uploader
+            .clone()
+            .unwrap_or_else(|| "Unknown channel".to_owned());
+        let duration = self
+            .duration
+            .map(format_duration)
+            .unwrap_or_else(|| "--:--".to_owned());
+        format!("{artist} • {duration}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerState {
+    Idle,
+    Searching,
+    Playing,
+    Paused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Search,
+    Results,
+    Queue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Discover,
+    Albums,
+    Library,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatMode {
+    Off,
+    One,
+    All,
+}
+
+impl RepeatMode {
+    pub fn next(self) -> Self {
+        match self {
+            RepeatMode::Off => RepeatMode::One,
+            RepeatMode::One => RepeatMode::All,
+            RepeatMode::All => RepeatMode::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RepeatMode::Off => "OFF",
+            RepeatMode::One => "ONE",
+            RepeatMode::All => "ALL",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct App {
+    pub player_state: PlayerState,
+    pub focus: Focus,
+    pub search_mode: bool,
+    pub search_query: String,
+    pub search_results: Vec<Song>,
+    pub selected_result: usize,
+    pub album_search_query: String,
+    pub album_results: Vec<Song>,
+    pub selected_album_result: usize,
+    pub queue: VecDeque<Song>,
+    pub selected_queue: usize,
+    pub current_song: Option<Song>,
+    pub flash_message: String,
+    pub flash_until: Instant,
+    pub volume: u8,
+    pub muted: bool,
+    pub playback_pos: f64,
+    pub playback_duration: f64,
+    pub repeat_mode: RepeatMode,
+    pub theme: Theme,
+    pub active_tab: Tab,
+    pub playlists: Vec<Playlist>,
+    pub selected_playlist: usize,
+    pub context_open: bool,
+    pub context_index: usize,
+    pub playlist_expanded: Vec<bool>,
+    pub selected_playlist_song: usize,
+    pub options_index: usize,
+    pub opt_search_limit: u8,
+    pub opt_socket: String,
+    pub opt_theme: Theme,
+    pub key_next: char,
+    pub key_prev: char,
+    pub key_mute: char,
+    pub key_repeat: char,
+    pub key_shuffle: char,
+    pub key_seek_back: char,
+    pub key_seek_forward: char,
+    pub anim_tick: u64,
+    pub confirm_delete_playlist: bool,
+    pub delete_playlist_name: String,
+}
+
+impl App {
+    pub fn new() -> Self {
+        Self {
+            player_state: PlayerState::Idle,
+            focus: Focus::Results,
+            search_mode: false,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            selected_result: 0,
+            album_search_query: String::new(),
+            album_results: Vec::new(),
+            selected_album_result: 0,
+            queue: VecDeque::new(),
+            selected_queue: 0,
+            current_song: None,
+            flash_message: "Press / to search YouTube".to_owned(),
+            flash_until: Instant::now() + Duration::from_secs(4),
+            volume: 70,
+            muted: false,
+            playback_pos: 0.0,
+            playback_duration: 0.0,
+            repeat_mode: RepeatMode::Off,
+            theme: Theme::Dark,
+            active_tab: Tab::Discover,
+            playlists: Vec::new(),
+            selected_playlist: 0,
+            context_open: false,
+            context_index: 0,
+            playlist_expanded: Vec::new(),
+            selected_playlist_song: 0,
+            options_index: 0,
+            opt_search_limit: 20,
+            opt_socket: "/tmp/rs-pug.sock".to_owned(),
+            opt_theme: Theme::Dark,
+            key_next: 'n',
+            key_prev: 'p',
+            key_mute: 'm',
+            key_repeat: 'r',
+            key_shuffle: 'z',
+            key_seek_back: '[',
+            key_seek_forward: ']',
+            anim_tick: 0,
+            confirm_delete_playlist: false,
+            delete_playlist_name: String::new(),
+        }
+    }
+
+    pub fn set_flash(&mut self, msg: impl Into<String>, seconds: u64) {
+        self.flash_message = msg.into();
+        self.flash_until = Instant::now() + Duration::from_secs(seconds);
+    }
+
+    pub fn shown_message(&self) -> &str {
+        if Instant::now() <= self.flash_until {
+            &self.flash_message
+        } else {
+            ""
+        }
+    }
+
+    pub fn current_selection(&self) -> Option<&Song> {
+        self.search_results.get(self.selected_result)
+    }
+
+    pub fn queue_selection(&self) -> Option<&Song> {
+        self.queue.get(self.selected_queue)
+    }
+
+    pub fn selected_song_for_context(&self) -> Option<Song> {
+        match self.active_tab {
+            Tab::Discover => match self.focus {
+                Focus::Results => self.current_selection().cloned(),
+                Focus::Queue => self.queue_selection().cloned(),
+                Focus::Search => None,
+            },
+            Tab::Albums => match self.focus {
+                Focus::Results => self.album_results.get(self.selected_album_result).cloned(),
+                Focus::Queue => self.queue_selection().cloned(),
+                Focus::Search => None,
+            },
+            Tab::Library => self
+                .playlists
+                .get(self.selected_playlist)
+                .and_then(|p| p.songs.get(self.selected_playlist_song).cloned()),
+            Tab::Options => None,
+        }
+    }
+
+    pub fn apply_config(&mut self, cfg: &Config) {
+        self.opt_search_limit = cfg.search.limit.max(1);
+        self.opt_socket = cfg.mpv.socket.clone();
+        self.opt_theme = cfg.general.theme;
+        self.theme = cfg.general.theme;
+        self.apply_keybinds(&cfg.keybinds);
+    }
+
+    pub fn build_config(&self) -> Config {
+        Config {
+            general: GeneralConfig {
+                mpris_enabled: true,
+                mpris_command: None,
+                theme: self.opt_theme,
+                plugins_enabled: true,
+                plugins_dir: GeneralConfig::default().plugins_dir,
+            },
+            search: SearchConfig {
+                limit: self.opt_search_limit.max(1),
+            },
+            mpv: MpvConfig {
+                socket: self.opt_socket.clone(),
+            },
+            keybinds: KeybindsConfig {
+                next: self.key_next,
+                prev: self.key_prev,
+                mute: self.key_mute,
+                repeat: self.key_repeat,
+                shuffle: self.key_shuffle,
+                seek_back: self.key_seek_back,
+                seek_forward: self.key_seek_forward,
+            },
+        }
+    }
+
+    fn apply_keybinds(&mut self, keybinds: &KeybindsConfig) {
+        self.key_next = keybinds.next;
+        self.key_prev = keybinds.prev;
+        self.key_mute = keybinds.mute;
+        self.key_repeat = keybinds.repeat;
+        self.key_shuffle = keybinds.shuffle;
+        self.key_seek_back = keybinds.seek_back;
+        self.key_seek_forward = keybinds.seek_forward;
+    }
+}
+
+fn format_duration(seconds: f64) -> String {
+    let secs = seconds.round() as u64;
+    let m = secs / 60;
+    let s = secs % 60;
+    format!("{m:02}:{s:02}")
+}

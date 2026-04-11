@@ -1,0 +1,5 @@
+cargo:rerun-if-changed=build
+cargo:rustc-link-search=native=/home/coldbrxthe/Dokumenty/rplay-main/target/debug/build/mlua-sys-9e28756e5f64eff7/out/lua-build/lib
+cargo:rustc-link-lib=static=lua5.4
+cargo:include=/home/coldbrxthe/Dokumenty/rplay-main/target/debug/build/mlua-sys-9e28756e5f64eff7/out/lua-build/include
+cargo:lib=/home/coldbrxthe/Dokumenty/rplay-main/target/debug/build/mlua-sys-9e28756e5f64eff7/out/lua-build/lib

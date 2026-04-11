@@ -1,0 +1,14 @@
+[package]
+name = "rs-pug"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.27"
+ratatui = "0.26"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util"] }
+toml = "0.8"
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
