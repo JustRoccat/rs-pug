@@ -1,4 +1,4 @@
-# Maintainer: coldbrxthe <your-email@example.com>
+# Maintainer: coldbrxthe <rocattjust@gmail.com>
 pkgname=rs-pug-git
 pkgver=r.1
 pkgrel=1
