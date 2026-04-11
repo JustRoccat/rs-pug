@@ -28,7 +28,7 @@ paru -S rs-pug-git
 **manually:**
 
 ```bash
-git clone https://github.com/coldbrxthe/rs-pug
+git clone https://github.com/JustRoccat/rs-pug
 cd rs-pug
 cargo build --release
 ./target/release/rs-pug
