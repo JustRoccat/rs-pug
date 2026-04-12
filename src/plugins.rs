@@ -141,7 +141,8 @@ impl PluginManager {
             };
 
             let lua = Lua::new();
-            let chunk = lua.load(&src).set_name(p.to_string_lossy().as_ref());
+            let plugin_name = p.to_string_lossy().into_owned();
+            let chunk = lua.load(&src).set_name(plugin_name.as_str());
             let Ok(value) = chunk.eval::<Value>() else {
                 continue;
             };
