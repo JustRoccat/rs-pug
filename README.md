@@ -70,8 +70,7 @@ return {
 config file is created automatically on first launch at `~/.config/rs-pug/config.toml`.
 
 
-#read or sum
-Plugin system is there, it uses Lua. I don't know Lua, so feel free to PR some examples.
+
 
 
 
