@@ -69,7 +69,7 @@ fn palette(theme: Theme) -> Palette {
             accent3: Color::Rgb(175, 175, 175),
         },
         _ => Palette {
-            // Deep space neon palette
+          
             text: Color::Rgb(225, 218, 248),
             dim: Color::Rgb(68, 62, 102),
             muted: Color::Rgb(108, 100, 140),
