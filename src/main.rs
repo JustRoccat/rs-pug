@@ -11,6 +11,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::*, Terminal};
+use serde_json::json;
 use tokio::sync::mpsc;
 
 mod config;
@@ -351,10 +352,10 @@ async fn main() -> Result<()> {
                                 } else if app.options_index == 5 {
                                     app.eq_enabled = !app.eq_enabled;
                                     if app.eq_enabled {
-                                        let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                                        send_eq_update(&cmd_tx, app.eq_bands);
                                         app.set_flash("Equalizer ON", 2);
                                     } else {
-                                        let _ = cmd_tx.send(CoreCmd::SetEq([0.0f32; 10]));
+                                        send_eq_update(&cmd_tx, [0.0f32; 10]);
                                         app.set_flash("Equalizer OFF", 2);
                                     }
                                 } else if app.options_index == 6 {
@@ -565,7 +566,7 @@ async fn main() -> Result<()> {
                             let b = app.eq_focus_band;
                             app.eq_bands[b] = (app.eq_bands[b] + 1.0).min(12.0);
                             if app.eq_enabled {
-                                let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                                send_eq_update(&cmd_tx, app.eq_bands);
                             }
                         }
                         KeyCode::Char('-')
@@ -574,7 +575,7 @@ async fn main() -> Result<()> {
                             let b = app.eq_focus_band;
                             app.eq_bands[b] = (app.eq_bands[b] - 1.0).max(-12.0);
                             if app.eq_enabled {
-                                let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                                send_eq_update(&cmd_tx, app.eq_bands);
                             }
                         }
                         KeyCode::Char('0')
@@ -583,7 +584,7 @@ async fn main() -> Result<()> {
                             app.eq_bands = [0.0f32; 10];
                             app.eq_preset_index = 0;
                             if app.eq_enabled {
-                                let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                                send_eq_update(&cmd_tx, app.eq_bands);
                             }
                             app.set_flash("Equalizer reset to Flat", 2);
                         }
@@ -653,9 +654,27 @@ fn cycle_eq_preset(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, delta
     app.eq_preset_index = next;
     app.eq_bands = eq_preset_bands(next);
     if app.eq_enabled {
-        let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+        send_eq_update(cmd_tx, app.eq_bands);
     }
     app.set_flash(format!("EQ preset: {}", eq_preset_name(next)), 2);
+}
+
+fn send_eq_update(cmd_tx: &mpsc::UnboundedSender<CoreCmd>, bands: [f32; 10]) {
+    let freqs = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+    let parts: Vec<String> = bands
+        .iter()
+        .zip(freqs.iter())
+        .map(|(gain, freq)| {
+            format!(
+                "equalizer=frequency={}:gain={}:width_type=o:width=1.5",
+                freq, gain
+            )
+        })
+        .collect();
+    let filter = parts.join(",");
+    let _ = cmd_tx.send(CoreCmd::RawMpv(
+        json!({"command": ["set_property", "af", filter]}),
+    ));
 }
 
 fn cycle_keybind_char(current: char, delta: isize) -> char {
