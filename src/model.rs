@@ -67,6 +67,23 @@ pub enum RepeatMode {
     All,
 }
 
+pub const EQ_PRESET_NAMES: [&str; 5] =
+    ["Flat", "Bass Boost", "Vocal Boost", "Treble Boost", "Night"];
+
+pub fn eq_preset_bands(index: usize) -> [f32; 10] {
+    match index % EQ_PRESET_NAMES.len() {
+        0 => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        1 => [6.0, 5.0, 4.0, 2.0, 1.0, 0.0, -1.0, -2.0, -2.0, -2.0],
+        2 => [-2.0, -1.0, 0.0, 2.0, 3.0, 4.0, 4.0, 3.0, 1.0, 0.0],
+        3 => [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 6.0],
+        _ => [3.0, 2.0, 1.0, 0.0, -1.0, -2.0, -2.0, -2.0, -3.0, -3.0],
+    }
+}
+
+pub fn eq_preset_name(index: usize) -> &'static str {
+    EQ_PRESET_NAMES[index % EQ_PRESET_NAMES.len()]
+}
+
 impl RepeatMode {
     pub fn next(self) -> Self {
         match self {
@@ -128,6 +145,12 @@ pub struct App {
     pub anim_tick: u64,
     pub confirm_delete_playlist: bool,
     pub delete_playlist_name: String,
+    // Equalizer
+    pub eq_enabled: bool,
+    pub eq_bands: [f32; 10],
+    pub eq_focus_band: usize,
+    pub eq_preset_index: usize,
+    pub recently_played: VecDeque<Song>,
 }
 
 impl App {
@@ -174,6 +197,11 @@ impl App {
             anim_tick: 0,
             confirm_delete_playlist: false,
             delete_playlist_name: String::new(),
+            eq_enabled: false,
+            eq_bands: [0.0f32; 10],
+            eq_focus_band: 0,
+            eq_preset_index: 0,
+            recently_played: VecDeque::new(),
         }
     }
 

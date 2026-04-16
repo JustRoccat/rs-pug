@@ -22,9 +22,15 @@ mod tui;
 
 use config::{load_config, save_config};
 use core::{Core, CoreCmd, CoreEvent};
-use model::{App, Focus, PlayerState, Playlist, RepeatMode, Tab};
+use model::{
+    eq_preset_bands, eq_preset_name, App, Focus, PlayerState, Playlist, RepeatMode, Tab,
+    EQ_PRESET_NAMES,
+};
 use plugins::{PluginCoreAction, PluginDispatch, PluginEvent, PluginManager, PluginUiState};
-use storage::{load_playlists, save_playlists};
+use storage::{
+    export_playlist_to_default, import_playlist_from_default, load_playlists, load_recently_played,
+    save_playlists, save_recently_played,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -45,6 +51,7 @@ async fn main() -> Result<()> {
     app.apply_config(&config);
     app.playlists = load_playlists();
     app.playlist_expanded = vec![false; app.playlists.len()];
+    app.recently_played = load_recently_played().into();
 
     let tick_rate = Duration::from_millis(20);
     let mut running = true;
@@ -112,28 +119,15 @@ async fn main() -> Result<()> {
                         match key.code {
                             KeyCode::Esc => app.context_open = false,
                             KeyCode::Char('j') | KeyCode::Down => {
-                                app.context_index = (app.context_index + 1).min(3);
+                                app.context_index = (app.context_index + 1)
+                                    .min(context_menu_len(&app).saturating_sub(1));
                             }
                             KeyCode::Char('k') | KeyCode::Up => {
                                 app.context_index = app.context_index.saturating_sub(1);
                             }
                             KeyCode::Enter => {
-                                if let Some(song) = app.selected_song_for_context() {
-                                    match app.context_index {
-                                        0 => {
-                                            add_to_selected_playlist(&mut app, song);
-                                        }
-                                        1 => {
-                                            let name =
-                                                format!("Playlist {}", app.playlists.len() + 1);
-                                            add_to_named_playlist(&mut app, song, &name);
-                                        }
-                                        2 => remove_selected_queue_song(&mut app),
-                                        3 => remove_selected_playlist_song(&mut app),
-                                        _ => {}
-                                    }
-                                    save_playlists(&app.playlists);
-                                }
+                                let idx = app.context_index;
+                                execute_context_action(&mut app, idx);
                                 app.context_open = false;
                             }
                             _ => {}
@@ -251,7 +245,13 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Char('c') => {
-                            if app.selected_song_for_context().is_some() {
+                            let can_open =
+                                if app.active_tab == Tab::Library && app.focus == Focus::Results {
+                                    true
+                                } else {
+                                    app.selected_song_for_context().is_some()
+                                };
+                            if can_open {
                                 app.context_open = true;
                                 app.context_index = 0;
                             }
@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
                         KeyCode::Char('j') | KeyCode::Down => match app.focus {
                             Focus::Results => {
                                 if app.active_tab == Tab::Options {
-                                    app.options_index = (app.options_index + 1).min(3);
+                                    app.options_index = (app.options_index + 1).min(9);
                                 } else if app.active_tab == Tab::Library {
                                     if !app.playlists.is_empty() {
                                         app.selected_playlist = (app.selected_playlist + 1)
@@ -348,6 +348,17 @@ async fn main() -> Result<()> {
                                             3,
                                         );
                                     }
+                                } else if app.options_index == 5 {
+                                    app.eq_enabled = !app.eq_enabled;
+                                    if app.eq_enabled {
+                                        let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                                        app.set_flash("Equalizer ON", 2);
+                                    } else {
+                                        let _ = cmd_tx.send(CoreCmd::SetEq([0.0f32; 10]));
+                                        app.set_flash("Equalizer OFF", 2);
+                                    }
+                                } else if app.options_index == 6 {
+                                    cycle_eq_preset(&mut app, &cmd_tx, 1);
                                 }
                                 continue;
                             }
@@ -420,7 +431,9 @@ async fn main() -> Result<()> {
                         KeyCode::Right if app.active_tab != Tab::Options => {
                             let _ = cmd_tx.send(CoreCmd::SeekBy(10));
                         }
-                        KeyCode::Char('0') => {
+                        KeyCode::Char('0')
+                            if !(app.active_tab == Tab::Options && app.options_index == 5) =>
+                        {
                             let _ = cmd_tx.send(CoreCmd::VolumeUp);
                         }
                         KeyCode::Char('9') => {
@@ -477,6 +490,16 @@ async fn main() -> Result<()> {
                                 remove_selected_queue_song(&mut app);
                             }
                         }
+                        KeyCode::Char('i')
+                            if app.active_tab == Tab::Library && app.focus == Focus::Results =>
+                        {
+                            import_playlist_action(&mut app);
+                        }
+                        KeyCode::Char('e')
+                            if app.active_tab == Tab::Library && app.focus == Focus::Results =>
+                        {
+                            export_selected_playlist_action(&mut app);
+                        }
                         KeyCode::Char('h') | KeyCode::Left if app.active_tab == Tab::Options => {
                             match app.options_index {
                                 0 => {
@@ -492,6 +515,15 @@ async fn main() -> Result<()> {
                                         2,
                                     );
                                 }
+                                5 => {
+                                    if app.eq_focus_band > 0 {
+                                        app.eq_focus_band -= 1;
+                                    }
+                                }
+                                6 => cycle_eq_preset(&mut app, &cmd_tx, -1),
+                                7 => app.key_next = cycle_keybind_char(app.key_next, -1),
+                                8 => app.key_prev = cycle_keybind_char(app.key_prev, -1),
+                                9 => app.key_mute = cycle_keybind_char(app.key_mute, -1),
                                 _ => {}
                             }
                         }
@@ -507,13 +539,53 @@ async fn main() -> Result<()> {
                                         2,
                                     );
                                 }
+                                5 => {
+                                    if app.eq_focus_band < 9 {
+                                        app.eq_focus_band += 1;
+                                    }
+                                }
+                                6 => cycle_eq_preset(&mut app, &cmd_tx, 1),
+                                7 => app.key_next = cycle_keybind_char(app.key_next, 1),
+                                8 => app.key_prev = cycle_keybind_char(app.key_prev, 1),
+                                9 => app.key_mute = cycle_keybind_char(app.key_mute, 1),
                                 _ => {}
                             }
+                        }
+                        KeyCode::Char('p') if app.active_tab == Tab::Options => {
+                            cycle_eq_preset(&mut app, &cmd_tx, 1);
                         }
                         KeyCode::Char('s') if app.active_tab == Tab::Options => {
                             save_config(&app.build_config());
                             app.theme = app.opt_theme;
                             app.set_flash("Saved settings to ~/.config/rs-pug/config.toml", 4);
+                        }
+                        KeyCode::Char('+') | KeyCode::Char('=')
+                            if app.active_tab == Tab::Options && app.options_index == 5 =>
+                        {
+                            let b = app.eq_focus_band;
+                            app.eq_bands[b] = (app.eq_bands[b] + 1.0).min(12.0);
+                            if app.eq_enabled {
+                                let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                            }
+                        }
+                        KeyCode::Char('-')
+                            if app.active_tab == Tab::Options && app.options_index == 5 =>
+                        {
+                            let b = app.eq_focus_band;
+                            app.eq_bands[b] = (app.eq_bands[b] - 1.0).max(-12.0);
+                            if app.eq_enabled {
+                                let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                            }
+                        }
+                        KeyCode::Char('0')
+                            if app.active_tab == Tab::Options && app.options_index == 5 =>
+                        {
+                            app.eq_bands = [0.0f32; 10];
+                            app.eq_preset_index = 0;
+                            if app.eq_enabled {
+                                let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+                            }
+                            app.set_flash("Equalizer reset to Flat", 2);
                         }
                         _ => {}
                     }
@@ -572,6 +644,98 @@ fn pseudo_shuffle<T>(items: &mut [T]) {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         let j = (seed as usize) % (i + 1);
         items.swap(i, j);
+    }
+}
+
+fn cycle_eq_preset(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, delta: isize) {
+    let total = EQ_PRESET_NAMES.len() as isize;
+    let next = (app.eq_preset_index as isize + delta).rem_euclid(total) as usize;
+    app.eq_preset_index = next;
+    app.eq_bands = eq_preset_bands(next);
+    if app.eq_enabled {
+        let _ = cmd_tx.send(CoreCmd::SetEq(app.eq_bands));
+    }
+    app.set_flash(format!("EQ preset: {}", eq_preset_name(next)), 2);
+}
+
+fn cycle_keybind_char(current: char, delta: isize) -> char {
+    const POOL: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789[]-=/;',.";
+    let pos = POOL
+        .iter()
+        .position(|c| *c as char == current.to_ascii_lowercase())
+        .unwrap_or(0) as isize;
+    let next = (pos + delta).rem_euclid(POOL.len() as isize) as usize;
+    POOL[next] as char
+}
+
+fn import_playlist_action(app: &mut App) {
+    match import_playlist_from_default() {
+        Ok(mut imported) => {
+            if imported.name.trim().is_empty() {
+                imported.name = "Imported".to_owned();
+            }
+            if let Some(existing) = app.playlists.iter_mut().find(|p| p.name == imported.name) {
+                let before = existing.songs.len();
+                existing.songs.extend(imported.songs);
+                let merged_name = existing.name.clone();
+                let added = existing.songs.len().saturating_sub(before);
+                app.set_flash(
+                    format!("Imported into {} (+{} tracks)", merged_name, added),
+                    4,
+                );
+            } else {
+                app.playlists.push(imported.clone());
+                app.playlist_expanded.push(true);
+                app.selected_playlist = app.playlists.len().saturating_sub(1);
+                app.set_flash(format!("Imported playlist {}", imported.name), 4);
+            }
+            save_playlists(&app.playlists);
+        }
+        Err(err) => app.set_flash(err, 5),
+    }
+}
+
+fn export_selected_playlist_action(app: &mut App) {
+    if let Some(playlist) = app.playlists.get(app.selected_playlist) {
+        match export_playlist_to_default(playlist) {
+            Ok(path) => app.set_flash(format!("Exported to {}", path.display()), 5),
+            Err(err) => app.set_flash(err, 5),
+        }
+    } else {
+        app.set_flash("No playlist selected", 3);
+    }
+}
+
+fn context_menu_len(app: &App) -> usize {
+    if app.active_tab == Tab::Library && app.focus == Focus::Results {
+        2
+    } else {
+        4
+    }
+}
+
+fn execute_context_action(app: &mut App, index: usize) {
+    if app.active_tab == Tab::Library && app.focus == Focus::Results {
+        match index {
+            0 => import_playlist_action(app),
+            1 => export_selected_playlist_action(app),
+            _ => {}
+        }
+        return;
+    }
+
+    if let Some(song) = app.selected_song_for_context() {
+        match index {
+            0 => add_to_selected_playlist(app, song),
+            1 => {
+                let name = format!("Playlist {}", app.playlists.len() + 1);
+                add_to_named_playlist(app, song, &name);
+            }
+            2 => remove_selected_queue_song(app),
+            3 => remove_selected_playlist_song(app),
+            _ => {}
+        }
+        save_playlists(&app.playlists);
     }
 }
 
@@ -674,6 +838,13 @@ fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
             app.player_state = PlayerState::Playing;
             app.playback_pos = 0.0;
             app.playback_duration = song.duration.unwrap_or(0.0);
+            app.recently_played.retain(|s| s.id != song.id);
+            app.recently_played.push_front(song.clone());
+            while app.recently_played.len() > 40 {
+                let _ = app.recently_played.pop_back();
+            }
+            let history: Vec<_> = app.recently_played.iter().cloned().collect();
+            save_recently_played(&history);
             app.set_flash(format!("Now playing: {} ({})", song.title, song.id), 4);
             None
         }
@@ -971,7 +1142,7 @@ fn scroll_selection(app: &mut App, delta: isize) {
             Focus::Search => {}
         },
         Tab::Options => {
-            app.options_index = ((app.options_index as isize + delta).clamp(0, 3)) as usize;
+            app.options_index = ((app.options_index as isize + delta).clamp(0, 9)) as usize;
         }
     }
 }

@@ -6,9 +6,8 @@ use ratatui::{
 
 use crate::{
     config::Theme,
-    model::{App, Focus, PlayerState, RepeatMode, Song, Tab},
+    model::{eq_preset_name, App, Focus, PlayerState, RepeatMode, Song, Tab},
 };
-
 
 struct Palette {
     text: Color,
@@ -69,7 +68,7 @@ fn palette(theme: Theme) -> Palette {
             accent3: Color::Rgb(175, 175, 175),
         },
         _ => Palette {
-          
+            // Deep space neon palette
             text: Color::Rgb(225, 218, 248),
             dim: Color::Rgb(68, 62, 102),
             muted: Color::Rgb(108, 100, 140),
@@ -83,8 +82,6 @@ fn palette(theme: Theme) -> Palette {
     }
 }
 
-
-
 fn animated_accent(tick: u64) -> Color {
     use std::f64::consts::TAU;
     let t = tick as f64 * 0.042;
@@ -94,7 +91,6 @@ fn animated_accent(tick: u64) -> Color {
     Color::Rgb(r, g, b)
 }
 
-
 fn animated_secondary(tick: u64) -> Color {
     use std::f64::consts::TAU;
     let t = tick as f64 * 0.042 + TAU / 4.0;
@@ -103,7 +99,6 @@ fn animated_secondary(tick: u64) -> Color {
     let b = (((t + TAU * 2.0 / 3.0).sin() * 0.5 + 0.5) * 205.0 + 50.0) as u8;
     Color::Rgb(r, g, b)
 }
-
 
 const VOLT_BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
@@ -144,13 +139,11 @@ fn spectrum_spans(tick: u64, width: usize, playing: bool) -> Vec<Span<'static>> 
             let t = tick as f64;
             let c = col as f64;
 
-
             let w1 = (c * 0.33 + t * 0.132).sin();
             let w2 = (c * 0.69 + t * 0.188).sin() * 0.58;
             let w3 = (c * 0.17 + t * 0.072).sin() * 0.38;
             let w4 = (c * 1.12 + t * 0.295).sin() * 0.18;
             let w5 = (c * 0.52 + t * 0.215).sin() * 0.12;
-
 
             let fp = (col
                 .wrapping_mul(6271)
@@ -171,7 +164,6 @@ fn spectrum_spans(tick: u64, width: usize, playing: bool) -> Vec<Span<'static>> 
         })
         .collect()
 }
-
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let pal = palette(app.theme);
@@ -205,7 +197,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_help(frame, &pal, vertical[5]);
     draw_overlays(frame, app, &pal, anim, size);
 }
-
 
 fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: Color, area: Rect) {
     let active = match app.active_tab {
@@ -266,7 +257,6 @@ fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: C
     frame.render_widget(tabs, area);
 }
 
-
 fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     let active_query = if app.active_tab == Tab::Albums {
         app.album_search_query.as_str()
@@ -326,6 +316,15 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
     let focused = app.focus == Focus::Results;
 
     let items: Vec<ListItem> = if app.active_tab == Tab::Options {
+        let eq_label = if app.eq_enabled {
+            format!(
+                "Equalizer      ON  ·  band {}/10  ·  {:.0} dB",
+                app.eq_focus_band + 1,
+                app.eq_bands[app.eq_focus_band]
+            )
+        } else {
+            "Equalizer      OFF  (Enter to enable)".to_owned()
+        };
         let rows: Vec<(&str, String)> = vec![
             ("⊞", format!("Search limit   {}", app.opt_search_limit)),
             ("⊞", format!("MPV socket     {}", app.opt_socket)),
@@ -335,6 +334,14 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 format!("Theme          {}", theme_label(app.opt_theme)),
             ),
             ("⊞", format!("Repeat mode    {}", app.repeat_mode.label())),
+            ("⊞", eq_label),
+            (
+                "⊞",
+                format!("EQ preset      {}", eq_preset_name(app.eq_preset_index)),
+            ),
+            ("⊞", format!("Key next       {}", app.key_next)),
+            ("⊞", format!("Key prev       {}", app.key_prev)),
+            ("⊞", format!("Key mute       {}", app.key_mute)),
         ];
         rows.into_iter()
             .enumerate()
@@ -483,10 +490,37 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
 
     // ── Queue list ──────────────────────────────────────────────────
     let items: Vec<ListItem> = if app.active_tab == Tab::Options {
+        if app.options_index == 5 {
+            // EQ visualizer as list items
+            draw_eq_panel(frame, app, pal, anim, chunks[0]);
+            // skip normal list rendering by returning early after volume
+            let vol_ratio = app.volume as f64 / 100.0;
+            let vol_label = if app.muted {
+                format!(" MUTED  ({}%) ", app.volume)
+            } else {
+                format!(" VOL  {}% ", app.volume)
+            };
+            let vol_color = if app.muted { pal.muted } else { pal.ok };
+            let gauge = Gauge::default()
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(pal.dim)),
+                )
+                .gauge_style(Style::default().fg(vol_color))
+                .ratio(vol_ratio)
+                .label(Span::styled(
+                    vol_label,
+                    Style::default().fg(pal.text).add_modifier(Modifier::BOLD),
+                ));
+            frame.render_widget(gauge, chunks[1]);
+            return;
+        }
         vec![
             dim_item("j / k     navigate options", pal),
             dim_item("h / l     change value", pal),
             dim_item("Enter     run action", pal),
+            dim_item("On key rows: h/l cycle key", pal),
             dim_item("s         save config", pal),
             dim_item("r         toggle repeat", pal),
             dim_item("", pal),
@@ -522,6 +556,21 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
             .unwrap_or_default();
         items.push(dim_item("", pal));
         items.push(dim_item("Enter play  d delete  c menu", pal));
+        if !app.recently_played.is_empty() {
+            items.push(dim_item("", pal));
+            items.push(ListItem::new(Span::styled(
+                "Recently played:",
+                Style::default()
+                    .fg(pal.accent3)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            items.extend(app.recently_played.iter().take(5).map(|song| {
+                ListItem::new(Line::from(vec![
+                    Span::styled("  ↺ ".to_string(), Style::default().fg(pal.dim)),
+                    Span::styled(song.title.clone(), Style::default().fg(pal.muted)),
+                ]))
+            }));
+        }
         items
     } else {
         app.queue
@@ -599,7 +648,6 @@ fn dim_item(text: &'static str, pal: &Palette) -> ListItem<'static> {
     ListItem::new(Span::styled(text, Style::default().fg(pal.muted)))
 }
 
-
 fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let inner_w = area.width.saturating_sub(2) as usize;
 
@@ -645,12 +693,10 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         ),
     ]);
 
-
     let line2 = Line::from(vec![
         Span::styled("   ◦  ".to_string(), Style::default().fg(pal.dim)),
         Span::styled(artist_str, Style::default().fg(pal.accent3)),
     ]);
-
 
     let playing = app.player_state == PlayerState::Playing;
     let spec_w = inner_w.saturating_sub(3);
@@ -673,7 +719,6 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     );
     frame.render_widget(widget, area);
 }
-
 
 fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let ratio = if app.playback_duration > 0.0 {
@@ -716,7 +761,6 @@ fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
         ));
     frame.render_widget(gauge, area);
 }
-
 
 fn draw_help(frame: &mut Frame, pal: &Palette, area: Rect) {
     let key = |k: &'static str| -> Span<'static> {
@@ -785,7 +829,188 @@ fn draw_help(frame: &mut Frame, pal: &Palette, area: Rect) {
     frame.render_widget(widget, area);
 }
 
+fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
+    const BAND_LABELS: [&str; 10] = [
+        "32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k",
+    ];
+    const MAX_DB: f32 = 12.0;
+    const EQ_BLOCKS: [&str; 8] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "█"];
 
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let title_color = if app.eq_enabled { anim } else { pal.muted };
+
+    let block = Block::default()
+        .title(Span::styled(
+            if app.eq_enabled {
+                " ▶ EQUALIZER  (ON) "
+            } else {
+                " ⏹ EQUALIZER  (OFF) "
+            },
+            Style::default()
+                .fg(title_color)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(title_color));
+    frame.render_widget(block, area);
+
+    if inner.width < 10 || inner.height < 4 {
+        return;
+    }
+
+    let band_count = 10usize;
+    let bar_h = inner.height.saturating_sub(4) as usize; // leave room for value + label + hint
+    let bar_w = (inner.width as usize / band_count).max(2);
+
+    // draw each band
+    for (i, &gain) in app.eq_bands.iter().enumerate() {
+        let col_x = inner.x + (i * bar_w) as u16;
+        if col_x >= inner.x + inner.width {
+            break;
+        }
+
+        let focused = i == app.eq_focus_band && app.options_index == 5;
+        let band_color = if focused {
+            anim
+        } else if app.eq_enabled {
+            SPECTRUM_COLORS[i % SPECTRUM_COLORS.len()]
+        } else {
+            pal.dim
+        };
+        let bg_color = if app.eq_enabled {
+            SPECTRUM_COLORS[(i + 4) % SPECTRUM_COLORS.len()]
+        } else {
+            pal.dim
+        };
+
+        // normalise gain to -1..1 and map to cell count around 0dB center line
+        let norm = (gain / MAX_DB).clamp(-1.0, 1.0);
+        let mid_row = inner.y + (bar_h / 2) as u16;
+        let max_half = (bar_h / 2).max(1);
+        let cells_from_mid = (norm.abs() * max_half as f32 * 8.0).round() as usize;
+
+        // draw bar cells with partial-height glyphs
+        for row in inner.y..(inner.y + bar_h as u16) {
+            let cell_dist = if row <= mid_row {
+                (mid_row - row) as usize
+            } else {
+                (row - mid_row) as usize
+            };
+            let units_start = cell_dist * 8;
+            let units_end = units_start + 8;
+            let fill_units = cells_from_mid
+                .saturating_sub(units_start)
+                .min(units_end - units_start);
+
+            let is_upper_half = row < mid_row;
+            let should_fill = if norm >= 0.0 {
+                is_upper_half
+            } else {
+                row > mid_row
+            };
+
+            let ch = if row == mid_row {
+                "─".to_owned()
+            } else if should_fill {
+                EQ_BLOCKS[fill_units.min(7)].to_owned()
+            } else {
+                "·".to_owned()
+            };
+
+            let style = if row == mid_row {
+                Style::default().fg(pal.dim)
+            } else if should_fill && fill_units > 0 {
+                Style::default().fg(band_color).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(bg_color)
+            };
+            let cell_w = bar_w.min((inner.x + inner.width).saturating_sub(col_x) as usize) as u16;
+            if cell_w == 0 {
+                break;
+            }
+            let cell_area = Rect::new(col_x, row, cell_w, 1);
+            frame.render_widget(
+                Paragraph::new(ch.repeat(cell_area.width as usize))
+                    .alignment(Alignment::Center)
+                    .style(style),
+                cell_area,
+            );
+        }
+
+        // dB value
+        let db_str = if gain == 0.0 {
+            " 0".to_owned()
+        } else {
+            format!("{:+.0}", gain)
+        };
+        let db_area = Rect::new(col_x, inner.y + bar_h as u16 + 1, bar_w as u16, 1);
+        if db_area.y < inner.y + inner.height {
+            frame.render_widget(
+                Paragraph::new(db_str).alignment(Alignment::Center).style(
+                    Style::default()
+                        .fg(if focused { anim } else { pal.muted })
+                        .add_modifier(if focused {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+                db_area,
+            );
+        }
+
+        // freq label
+        let lbl_area = Rect::new(col_x, inner.y + bar_h as u16 + 2, bar_w as u16, 1);
+        if lbl_area.y < inner.y + inner.height {
+            let lbl = BAND_LABELS[i];
+            frame.render_widget(
+                Paragraph::new(lbl)
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(if focused { anim } else { pal.dim })),
+                lbl_area,
+            );
+        }
+    }
+
+    // keybind hint at bottom
+    let info_y = inner.y + inner.height.saturating_sub(2);
+    if info_y > inner.y {
+        let focus_hint = match app.eq_focus_band {
+            0 | 1 => "Sub-bass and body",
+            2 | 3 => "Warmth and kick",
+            4 | 5 => "Mids and vocals",
+            6 | 7 => "Presence and attack",
+            _ => "Air and detail",
+        };
+        let info = format!(
+            "Band {} ({})  •  {}",
+            app.eq_focus_band + 1,
+            BAND_LABELS[app.eq_focus_band],
+            focus_hint
+        );
+        frame.render_widget(
+            Paragraph::new(info)
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(pal.muted)),
+            Rect::new(inner.x, info_y, inner.width, 1),
+        );
+    }
+
+    let hint_y = inner.y + inner.height.saturating_sub(1);
+    if hint_y >= inner.y {
+        let hint = "h/l: band  +/-: gain  Enter: on/off  0: reset";
+        let hint_area = Rect::new(inner.x, hint_y, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(hint)
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(pal.dim)),
+            hint_area,
+        );
+    }
+}
 
 fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size: Rect) {
     let msg = app.shown_message();
@@ -810,14 +1035,26 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
     }
 
     if app.context_open {
-        let area = centered_rect(44, 32, size);
+        let menu_w = if app.active_tab == Tab::Library && app.focus == Focus::Results {
+            74
+        } else {
+            44
+        };
+        let area = centered_rect(menu_w, 32, size);
         frame.render_widget(Clear, area);
-        let options: &[&str] = &[
-            "◈  Add to selected playlist",
-            "✦  Create new playlist",
-            "✕  Remove from queue",
-            "✕  Remove from playlist",
-        ];
+        let options: &[&str] = if app.active_tab == Tab::Library && app.focus == Focus::Results {
+            &[
+                "⇪  Import playlist  (~/.config/rs-pug/import_playlist.json)",
+                "⇩  Export selected playlist",
+            ]
+        } else {
+            &[
+                "◈  Add to selected playlist",
+                "✦  Create new playlist",
+                "✕  Remove from queue",
+                "✕  Remove from playlist",
+            ]
+        };
         let items: Vec<ListItem> = options
             .iter()
             .enumerate()
@@ -872,9 +1109,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             area,
         );
     }
-
 }
-
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup = Layout::vertical([
