@@ -4,8 +4,9 @@ Neovim out of music players. Search, queue, listen — no browser, no ads, no no
 
 `rs-pug` uses `mpv` + `yt-dlp` under the hood, with a terminal UI built on `ratatui`.
 
-![demo placeholder](https://cdn.discordapp.com/attachments/1473377698478031021/1492564717183696991/image.png?ex=69dbcab7&is=69da7937&hm=87bbbd463f1802f0a254779f4f4810a9eaf9920468c77ba3bda964c850780423&)
-
+![img](https://cdn.discordapp.com/attachments/1473377698478031021/1492564717183696991/image.png?ex=69dbcab7&is=69da7937&hm=87bbbd463f1802f0a254779f4f4810a9eaf9920468c77ba3bda964c850780423&)
+![img](https://cdn.discordapp.com/attachments/1473377698478031021/1494436708534714368/image.png?ex=69e29a24&is=69e148a4&hm=3527f1409febfef1ee48485a71b461f50a766f5fc70be93f78221a45f76496bb&)
+![gif](https://cdn.discordapp.com/attachments/1473377698478031021/1494437452063047691/2026-04-16_22-38-26.gif?ex=69e29ad5&is=69e14955&hm=509349753483c5479c81a58289e83926dc0948cd1f0cdc18d23ec224fd9db4cd&)
 ## Features
 
 - YouTube search and queue playback in TUI
