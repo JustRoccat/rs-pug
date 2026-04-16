@@ -672,9 +672,7 @@ fn send_eq_update(cmd_tx: &mpsc::UnboundedSender<CoreCmd>, bands: [f32; 10]) {
         })
         .collect();
     let filter = parts.join(",");
-    let _ = cmd_tx.send(CoreCmd::RawMpv(
-        json!({"command": ["set_property", "af", filter]}),
-    ));
+    let _ = cmd_tx.send(CoreCmd::RawMpv(json!(["set_property", "af", filter])));
 }
 
 fn cycle_keybind_char(current: char, delta: isize) -> char {
