@@ -1,7 +1,7 @@
 use ratatui::{
     prelude::*,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Tabs, ListState},
 };
 
 use crate::{
@@ -430,6 +430,15 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         Tab::Options => (" ⚙  SETTINGS ", pal.accent2),
     };
 
+    let mut state = ListState::default();
+    let selected_idx = match app.active_tab {
+        Tab::Options => app.options_index,
+        Tab::Library => app.selected_playlist,
+        Tab::Albums => app.selected_album_result,
+        _ => app.selected_result,
+    };
+    state.select(Some(selected_idx));
+
     let list = List::new(items)
         .block(
             Block::default()
@@ -444,7 +453,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         )
         .highlight_spacing(ratatui::widgets::HighlightSpacing::Always);
 
-    frame.render_widget(list, area);
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 fn build_song_list(
@@ -494,7 +503,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
             // EQ visualizer as list items
             draw_eq_panel(frame, app, pal, anim, chunks[0]);
             // skip normal list rendering by returning early after volume
-            let vol_ratio = app.volume as f64 / 100.0;
+            let vol_ratio = (app.volume as f64 / 100.0).min(1.0);
             let vol_label = if app.muted {
                 format!(" MUTED  ({}%) ", app.volume)
             } else {
@@ -608,6 +617,14 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     };
     let border_color = if focused { pal.warn } else { pal.dim };
 
+    let mut state = ListState::default();
+    let selected_idx = if app.active_tab == Tab::Library {
+        app.selected_playlist_song
+    } else {
+        app.selected_queue
+    };
+    state.select(Some(selected_idx));
+
     let list = List::new(items).block(
         Block::default()
             .title(Span::styled(
@@ -619,10 +636,10 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color)),
     );
-    frame.render_widget(list, chunks[0]);
+    frame.render_stateful_widget(list, chunks[0], &mut state);
 
     // ── Volume gauge ─────────────────────────────────────────────────
-    let vol_ratio = app.volume as f64 / 100.0;
+    let vol_ratio = (app.volume as f64 / 100.0).min(1.0);
     let vol_label = if app.muted {
         format!(" MUTED  ({}%) ", app.volume)
     } else {

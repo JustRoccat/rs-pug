@@ -29,7 +29,6 @@ pub enum CoreCmd {
     ToggleMute,
     Next,
     Prev,
-    SetEq([f32; 10]),
     Quit,
 }
 
@@ -162,7 +161,6 @@ impl Core {
                         CoreCmd::ToggleMute => self.toggle_mute(&tx).await,
                         CoreCmd::Next => self.next(&tx).await,
                         CoreCmd::Prev => self.prev(&tx).await,
-                        CoreCmd::SetEq(bands) => self.set_eq(bands).await,
                         CoreCmd::Quit => break,
                     };
 
@@ -239,22 +237,6 @@ impl Core {
             let _ = child.kill().await;
         }
         Ok(())
-    }
-
-    async fn set_eq(&self, bands: [f32; 10]) -> Result<()> {
-        // mpv lavfi-complex equalizer via af set_property
-        // Bands (Hz): 32 64 125 250 500 1k 2k 4k 8k 16k
-        // Use mpv's "af" property with lavfi equalizer chain
-        let freqs = [32u32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
-        let filter: String = freqs
-            .iter()
-            .zip(bands.iter())
-            .map(|(freq, gain)| {
-                format!("equalizer=frequency={}:gain={}:width_type=o:width=1.5", freq, gain)
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        self.send_mpv(json!({"command": ["set_property", "af", filter]})).await
     }
 
     async fn send_mpv(&self, message: Value) -> Result<()> {
@@ -374,19 +356,6 @@ impl Core {
     }
 }
 
-
-fn extract_year(raw: &str) -> Option<u16> {
-    for token in raw.split(|c: char| !c.is_ascii_digit()) {
-        if token.len() == 4 {
-            if let Ok(year) = token.parse::<u16>() {
-                if (1900..=2100).contains(&year) {
-                    return Some(year);
-                }
-            }
-        }
-    }
-    None
-}
 
 fn parse_command(raw: &str) -> (String, Vec<String>) {
     let mut parts = raw.split_whitespace();
