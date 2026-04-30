@@ -628,23 +628,23 @@ async fn main() -> Result<()> {
                                         app.opt_search_limit.saturating_sub(1).max(1)
                                 }
                                 1 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                                3 => app.opt_theme = prev_theme(app.opt_theme),
-                                4 => {
+                                4 => app.opt_theme = prev_theme(app.opt_theme),
+                                5 => {
                                     app.repeat_mode = prev_repeat_mode(app.repeat_mode);
                                     app.set_flash(
                                         format!("Repeat mode: {}", app.repeat_mode.label()),
                                         2,
                                     );
                                 }
-                                5 => {
+                                6 => {
                                     if app.eq_focus_band > 0 {
                                         app.eq_focus_band -= 1;
                                     }
                                 }
-                                6 => cycle_eq_preset(&mut app, &cmd_tx, -1),
-                                7 => app.key_next = cycle_keybind_char(app.key_next, -1),
-                                8 => app.key_prev = cycle_keybind_char(app.key_prev, -1),
-                                9 => app.key_mute = cycle_keybind_char(app.key_mute, -1),
+                                7 => cycle_eq_preset(&mut app, &cmd_tx, -1),
+                                8 => app.key_next = cycle_keybind_char(app.key_next, -1),
+                                9 => app.key_prev = cycle_keybind_char(app.key_prev, -1),
+                                10 => app.key_mute = cycle_keybind_char(app.key_mute, -1),
                                 _ => {}
                             }
                         }
@@ -652,23 +652,23 @@ async fn main() -> Result<()> {
                             match app.options_index {
                                 0 => app.opt_search_limit = (app.opt_search_limit + 1).min(50),
                                 1 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                                3 => app.opt_theme = next_theme(app.opt_theme),
-                                4 => {
+                                4 => app.opt_theme = next_theme(app.opt_theme),
+                                5 => {
                                     app.repeat_mode = app.repeat_mode.next();
                                     app.set_flash(
                                         format!("Repeat mode: {}", app.repeat_mode.label()),
                                         2,
                                     );
                                 }
-                                5 => {
+                                6 => {
                                     if app.eq_focus_band < 9 {
                                         app.eq_focus_band += 1;
                                     }
                                 }
-                                6 => cycle_eq_preset(&mut app, &cmd_tx, 1),
-                                7 => app.key_next = cycle_keybind_char(app.key_next, 1),
-                                8 => app.key_prev = cycle_keybind_char(app.key_prev, 1),
-                                9 => app.key_mute = cycle_keybind_char(app.key_mute, 1),
+                                7 => cycle_eq_preset(&mut app, &cmd_tx, 1),
+                                8 => app.key_next = cycle_keybind_char(app.key_next, 1),
+                                9 => app.key_prev = cycle_keybind_char(app.key_prev, 1),
+                                10 => app.key_mute = cycle_keybind_char(app.key_mute, 1),
                                 _ => {}
                             }
                         }
