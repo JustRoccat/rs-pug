@@ -684,7 +684,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
 
     
     let items: Vec<ListItem> = if app.active_tab == Tab::Options {
-        if app.options_index == 5 {
+        if app.options_index == 6 || app.options_index == 7 {
             
             draw_eq_panel(frame, app, pal, anim, chunks[0]);
             

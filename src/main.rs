@@ -681,7 +681,7 @@ async fn main() -> Result<()> {
                             app.set_flash("Saved settings to ~/.config/rs-pug/config.toml", 4);
                         }
                         KeyCode::Char('+') | KeyCode::Char('=')
-                            if app.active_tab == Tab::Options && app.options_index == 5 =>
+                            if app.active_tab == Tab::Options && app.options_index == 6 =>
                         {
                             let b = app.eq_focus_band;
                             app.eq_bands[b] = (app.eq_bands[b] + 1.0).min(12.0);
@@ -690,7 +690,7 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Char('-')
-                            if app.active_tab == Tab::Options && app.options_index == 5 =>
+                            if app.active_tab == Tab::Options && app.options_index == 6 =>
                         {
                             let b = app.eq_focus_band;
                             app.eq_bands[b] = (app.eq_bands[b] - 1.0).max(-12.0);
@@ -699,7 +699,7 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Char('0')
-                            if app.active_tab == Tab::Options && app.options_index == 5 =>
+                            if app.active_tab == Tab::Options && app.options_index == 6 =>
                         {
                             app.eq_bands = [0.0f32; 10];
                             app.eq_preset_index = 0;
