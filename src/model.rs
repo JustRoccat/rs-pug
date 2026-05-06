@@ -18,6 +18,13 @@ pub struct Song {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Album {
+    pub name: String,
+    pub artist: String,
+    pub songs: Vec<Song>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Playlist {
     pub name: String,
     pub songs: Vec<Song>,
@@ -94,18 +101,30 @@ pub enum RepeatMode {
 pub const EQ_PRESET_NAMES: [&str; 5] =
     ["Flat", "Bass Boost", "Vocal Boost", "Treble Boost", "Night"];
 
-pub fn eq_preset_bands(index: usize) -> [f32; 10] {
-    match index % EQ_PRESET_NAMES.len() {
-        0 => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        1 => [6.0, 5.0, 4.0, 2.0, 1.0, 0.0, -1.0, -2.0, -2.0, -2.0],
-        2 => [-2.0, -1.0, 0.0, 2.0, 3.0, 4.0, 4.0, 3.0, 1.0, 0.0],
-        3 => [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 6.0],
-        _ => [3.0, 2.0, 1.0, 0.0, -1.0, -2.0, -2.0, -2.0, -3.0, -3.0],
+pub fn eq_preset_bands(app: &App, index: usize) -> [f32; 10] {
+    let total = EQ_PRESET_NAMES.len() + app.custom_eq_presets.len();
+    let idx = index % total;
+    if idx < EQ_PRESET_NAMES.len() {
+        match idx {
+            0 => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            1 => [6.0, 5.0, 4.0, 2.0, 1.0, 0.0, -1.0, -2.0, -2.0, -2.0],
+            2 => [-2.0, -1.0, 0.0, 2.0, 3.0, 4.0, 4.0, 3.0, 1.0, 0.0],
+            3 => [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 6.0],
+            _ => [3.0, 2.0, 1.0, 0.0, -1.0, -2.0, -2.0, -2.0, -3.0, -3.0],
+        }
+    } else {
+        app.custom_eq_presets[idx - EQ_PRESET_NAMES.len()].bands
     }
 }
 
-pub fn eq_preset_name(index: usize) -> &'static str {
-    EQ_PRESET_NAMES[index % EQ_PRESET_NAMES.len()]
+pub fn eq_preset_name(app: &App, index: usize) -> String {
+    let total = EQ_PRESET_NAMES.len() + app.custom_eq_presets.len();
+    let idx = index % total;
+    if idx < EQ_PRESET_NAMES.len() {
+        EQ_PRESET_NAMES[idx].to_string()
+    } else {
+        app.custom_eq_presets[idx - EQ_PRESET_NAMES.len()].name.clone()
+    }
 }
 
 impl RepeatMode {
@@ -135,8 +154,9 @@ pub struct App {
     pub search_results: Vec<Song>,
     pub selected_result: usize,
     pub album_search_query: String,
-    pub album_results: Vec<Song>,
+    pub album_results: Vec<Album>,
     pub selected_album_result: usize,
+    pub album_expanded: Vec<bool>,
     pub queue: VecDeque<Song>,
     pub selected_queue: usize,
     pub current_song: Option<Song>,
@@ -176,6 +196,7 @@ pub struct App {
     pub eq_bands: [f32; 10],
     pub eq_focus_band: usize,
     pub eq_preset_index: usize,
+    pub custom_eq_presets: Vec<crate::config::EqPreset>,
     pub recently_played: VecDeque<Song>,
     pub local_library: Vec<LocalSong>,
     pub local_view_mode: LocalViewMode,
@@ -199,6 +220,7 @@ impl App {
             album_search_query: String::new(),
             album_results: Vec::new(),
             selected_album_result: 0,
+            album_expanded: Vec::new(),
             queue: VecDeque::new(),
             selected_queue: 0,
             current_song: None,
@@ -238,6 +260,7 @@ impl App {
             eq_bands: [0.0f32; 10],
             eq_focus_band: 0,
             eq_preset_index: 0,
+            custom_eq_presets: Vec::new(),
             recently_played: VecDeque::new(),
             local_library: Vec::new(),
             local_view_mode: LocalViewMode::Flat,
@@ -278,11 +301,23 @@ impl App {
                 Focus::Queue => self.queue_selection().cloned(),
                 Focus::Search => None,
             },
-            Tab::Albums => match self.focus {
-                Focus::Results => self.album_results.get(self.selected_album_result).cloned(),
-                Focus::Queue => self.queue_selection().cloned(),
-                Focus::Search => None,
-            },
+            Tab::Albums => {
+                let mut current_flat_idx = 0;
+                for (i, album) in self.album_results.iter().enumerate() {
+                    let expanded = self.album_expanded.get(i).copied().unwrap_or(false);
+                    let album_size = 1 + if expanded { album.songs.len() } else { 0 };
+                    if self.selected_album_result < current_flat_idx + album_size {
+                        if self.selected_album_result == current_flat_idx {
+                            return None;
+                        } else {
+                            let song_idx = self.selected_album_result - current_flat_idx - 1;
+                            return album.songs.get(song_idx).cloned();
+                        }
+                    }
+                    current_flat_idx += album_size;
+                }
+                None
+            }
             Tab::Library => self
                 .playlists
                 .get(self.selected_playlist)
@@ -305,9 +340,9 @@ impl App {
     pub fn apply_config(&mut self, cfg: &Config) {
         self.opt_search_limit = cfg.search.limit.max(1);
         self.opt_socket = cfg.mpv.socket.clone();
-        self.opt_theme = cfg.general.theme;
+        self.opt_theme = cfg.general.theme.clone();
         self.opt_music_dirs = cfg.general.music_directories.clone();
-        self.theme = cfg.general.theme;
+        self.theme = cfg.general.theme.clone();
         self.apply_keybinds(&cfg.keybinds);
     }
 
@@ -316,7 +351,7 @@ impl App {
             general: GeneralConfig {
                 mpris_enabled: true,
                 mpris_command: None,
-                theme: self.opt_theme,
+                theme: self.opt_theme.clone(),
                 plugins_enabled: true,
                 plugins_dir: GeneralConfig::default().plugins_dir,
                 music_directories: self.opt_music_dirs.clone(),

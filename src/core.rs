@@ -37,7 +37,7 @@ pub enum CoreCmd {
 #[derive(Debug)]
 pub enum CoreEvent {
     SearchDone(Vec<Song>),
-    AlbumSearchDone(Vec<Song>),
+    AlbumSearchDone(Vec<crate::model::Album>),
     SearchFailed(String),
     AlbumSearchFailed(String),
     Started(Song),
@@ -76,7 +76,7 @@ impl Core {
             .spawn()
             .map_err(|err| anyhow::anyhow!("failed to start mpv (is `mpv` installed?): {err}"))?;
 
-        tokio::time::sleep(Duration::from_millis(180)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         let mut core = Self {
             plugins: PluginManager::load(
@@ -106,7 +106,10 @@ impl Core {
             tokio::select! {
                 _ = tick.tick() => {
                     if let Err(err) = self.poll_playback_finished(&tx).await {
-                        let _ = tx.send(CoreEvent::Error(format!("{err:#}")));
+                        // Ignore connection errors during polling to avoid spamming the user
+                        if !err.to_string().contains("failed to connect to mpv ipc socket") {
+                            let _ = tx.send(CoreEvent::Error(format!("{err:#}")));
+                        }
                     }
                 }
                 maybe_cmd = rx.recv() => {
@@ -130,9 +133,8 @@ impl Core {
                             let limit = self.config.search.limit.max(1);
                             let query = self.plugins.transform_search_query(query);
                             match search_albums(limit, query).await {
-                                Ok(songs) => {
-                                    let songs = self.plugins.transform_search_results(songs);
-                                    let _ = tx.send(CoreEvent::AlbumSearchDone(songs));
+                                Ok(albums) => {
+                                    let _ = tx.send(CoreEvent::AlbumSearchDone(albums));
                                 }
                                 Err(err) => {
                                     let _ = tx.send(CoreEvent::AlbumSearchFailed(format!("{err:#}")));
@@ -420,6 +422,7 @@ struct FlatSearch {
 struct FlatEntry {
     id: String,
     title: String,
+    url: String,
     #[serde(default)]
     uploader: Option<String>,
 }
@@ -460,9 +463,45 @@ async fn search_songs(limit: u8, query: String) -> Result<Vec<Song>> {
     Ok(songs)
 }
 
-async fn search_albums(limit: u8, query: String) -> Result<Vec<Song>> {
-    let album_query = format!("{query} album");
-    search_songs(limit, album_query).await
+async fn search_albums(limit: u8, query: String) -> Result<Vec<crate::model::Album>> {
+    let needle = format!("ytsearch{limit}:{query} full album");
+    let output = Command::new("yt-dlp")
+        .arg("--flat-playlist")
+        .arg("--dump-single-json")
+        .arg(needle)
+        .output()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to run yt-dlp: {err}"))?;
+
+    if !output.status.success() {
+        anyhow::bail!("yt-dlp returned non-zero status");
+    }
+
+    let parsed: FlatSearch =
+        serde_json::from_slice(&output.stdout).context("failed parsing yt-dlp search output")?;
+
+    let mut albums = Vec::new();
+    for entry in parsed.entries {
+        let title_lower = entry.title.to_lowercase();
+        if title_lower.contains("full album") || title_lower.contains("complete album") || title_lower.contains("full album") {
+            let artist = entry.uploader.clone().unwrap_or_else(|| "Unknown Artist".to_string());
+            let song = Song {
+                id: entry.id.clone(),
+                title: entry.title.clone(),
+                webpage_url: entry.url.clone(),
+                uploader: Some(artist.clone()),
+                duration: None,
+            };
+
+            albums.push(crate::model::Album {
+                name: entry.title,
+                artist,
+                songs: vec![song],
+            });
+        }
+    }
+
+    Ok(albums)
 }
 
 pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {

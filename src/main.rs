@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
     app.playlist_expanded = vec![false; app.playlists.len()];
     app.recently_played = load_recently_played().into();
     app.local_library = load_local_library();
+    app.custom_eq_presets = config::load_eq_presets();
 
     if let Some(songs) = core::check_and_refresh_library(&config) {
         app.local_library = songs;
@@ -301,6 +302,11 @@ async fn main() -> Result<()> {
                                 2,
                             );
                         }
+                        KeyCode::Char('f') if app.active_tab == Tab::Options && app.options_index == 7 => {
+                            app.opt_editing = true;
+                            app.opt_edit_buffer = "New Preset".to_string();
+                            app.set_flash("Editing EQ Preset Name... (Enter to save)", 3);
+                        }
                         KeyCode::Char('j') | KeyCode::Down => match app.focus {
                             Focus::Results => {
                                 if app.active_tab == Tab::Options {
@@ -313,8 +319,7 @@ async fn main() -> Result<()> {
                                     }
                                 } else if app.active_tab == Tab::Albums {
                                     if !app.album_results.is_empty() {
-                                        app.selected_album_result = (app.selected_album_result + 1)
-                                            .min(app.album_results.len().saturating_sub(1));
+                                        app.selected_album_result = (app.selected_album_result + 1).min(app.album_results.len().saturating_sub(1));
                                     }
                                 } else if app.active_tab == Tab::Local {
                                     if !app.local_library.is_empty() {
@@ -351,8 +356,7 @@ async fn main() -> Result<()> {
                                     app.selected_playlist = app.selected_playlist.saturating_sub(1);
                                     app.selected_playlist_song = 0;
                                 } else if app.active_tab == Tab::Albums {
-                                    app.selected_album_result =
-                                        app.selected_album_result.saturating_sub(1);
+                                    app.selected_album_result = app.selected_album_result.saturating_sub(1);
                                 } else if app.active_tab == Tab::Local {
                                     app.selected_local_song = app.selected_local_song.saturating_sub(1);
                                 } else {
@@ -394,6 +398,19 @@ async fn main() -> Result<()> {
                                         app.opt_edit_buffer = app.opt_music_dirs.first().cloned().unwrap_or_default();
                                         app.set_flash("Editing Music Directory... (Enter to save)", 3);
                                     }
+                                } else if app.options_index == 7 && app.opt_editing {
+                                    let name = app.opt_edit_buffer.clone();
+                                    let preset = crate::config::EqPreset {
+                                        name: name.clone(),
+                                        bands: app.eq_bands,
+                                    };
+                                    if let Err(e) = crate::config::save_eq_preset(&preset) {
+                                        app.set_flash(format!("Error saving preset: {e}"), 4);
+                                    } else {
+                                        app.custom_eq_presets.push(preset);
+                                        app.set_flash(format!("Saved preset: {name}"), 3);
+                                    }
+                                    app.opt_editing = false;
                                 } else if app.options_index == 3 {
                                     if let Some(current) = app.current_song.clone() {
                                         app.player_state = PlayerState::Searching;
@@ -428,12 +445,12 @@ async fn main() -> Result<()> {
                                     }
                                 }
                                 Focus::Results if app.active_tab == Tab::Albums => {
-                                    if let Some(song) =
-                                        app.album_results.get(app.selected_album_result).cloned()
-                                    {
-                                        app.queue.push_back(song.clone());
-                                        app.selected_queue = app.queue.len().saturating_sub(1);
-                                        let _ = cmd_tx.send(CoreCmd::Play(song));
+                                    if let Some(album) = app.album_results.get(app.selected_album_result) {
+                                        if let Some(song) = album.songs.first() {
+                                            app.queue.push_back(song.clone());
+                                            app.selected_queue = app.queue.len().saturating_sub(1);
+                                            let _ = cmd_tx.send(CoreCmd::Play(song.clone()));
+                                        }
                                     }
                                 }
                                 Focus::Results if app.active_tab == Tab::Library => {
@@ -628,7 +645,7 @@ async fn main() -> Result<()> {
                                         app.opt_search_limit.saturating_sub(1).max(1)
                                 }
                                 1 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                                4 => app.opt_theme = prev_theme(app.opt_theme),
+                                4 => app.opt_theme = prev_theme(app.opt_theme.clone()),
                                 5 => {
                                     app.repeat_mode = prev_repeat_mode(app.repeat_mode);
                                     app.set_flash(
@@ -652,7 +669,7 @@ async fn main() -> Result<()> {
                             match app.options_index {
                                 0 => app.opt_search_limit = (app.opt_search_limit + 1).min(50),
                                 1 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                                4 => app.opt_theme = next_theme(app.opt_theme),
+                                4 => app.opt_theme = next_theme(app.opt_theme.clone()),
                                 5 => {
                                     app.repeat_mode = app.repeat_mode.next();
                                     app.set_flash(
@@ -677,7 +694,7 @@ async fn main() -> Result<()> {
                         }
                         KeyCode::Char('s') if app.active_tab == Tab::Options => {
                             save_config(&app.build_config());
-                            app.theme = app.opt_theme;
+                            app.theme = app.opt_theme.clone();
                             app.set_flash("Saved settings to ~/.config/rs-pug/config.toml", 4);
                         }
                         KeyCode::Char('+') | KeyCode::Char('=')
@@ -769,14 +786,14 @@ fn pseudo_shuffle<T>(items: &mut [T]) {
 }
 
 fn cycle_eq_preset(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, delta: isize) {
-    let total = EQ_PRESET_NAMES.len() as isize;
+    let total = (EQ_PRESET_NAMES.len() + app.custom_eq_presets.len()) as isize;
     let next = (app.eq_preset_index as isize + delta).rem_euclid(total) as usize;
     app.eq_preset_index = next;
-    app.eq_bands = eq_preset_bands(next);
+    app.eq_bands = eq_preset_bands(app, next);
     if app.eq_enabled {
         send_eq_update(cmd_tx, app.eq_bands);
     }
-    app.set_flash(format!("EQ preset: {}", eq_preset_name(next)), 2);
+    app.set_flash(format!("EQ preset: {}", eq_preset_name(app, next)), 2);
 }
 
 fn send_eq_update(cmd_tx: &mpsc::UnboundedSender<CoreCmd>, bands: [f32; 10]) {
@@ -1101,7 +1118,10 @@ fn apply_plugin_dispatch(
         app.selected_result = index.min(app.search_results.len().saturating_sub(1));
     }
     if let Some(index) = dispatch.ui.set_selected_album_result {
-        app.selected_album_result = index.min(app.album_results.len().saturating_sub(1));
+        let total_items: usize = app.album_results.iter().enumerate().map(|(i, a)| {
+            1 + if app.album_expanded.get(i).copied().unwrap_or(false) { a.songs.len() } else { 0 }
+        }).sum();
+        app.selected_album_result = index.min(total_items.saturating_sub(1));
     }
     if let Some(index) = dispatch.ui.set_selected_queue {
         app.selected_queue = index.min(app.queue.len().saturating_sub(1));
@@ -1240,10 +1260,12 @@ fn scroll_selection(app: &mut App, delta: isize) {
         },
         Tab::Albums => match app.focus {
             Focus::Results => {
-                let len = app.album_results.len();
-                if len > 0 {
+                let total_items: usize = app.album_results.iter().enumerate().map(|(i, a)| {
+                    1 + if app.album_expanded.get(i).copied().unwrap_or(false) { a.songs.len() } else { 0 }
+                }).sum();
+                if total_items > 0 {
                     app.selected_album_result = ((app.selected_album_result as isize + delta)
-                        .clamp(0, len as isize - 1))
+                        .clamp(0, total_items as isize - 1))
                         as usize;
                 }
             }
@@ -1336,25 +1358,19 @@ fn scroll_selection(app: &mut App, delta: isize) {
 }
 
 fn next_theme(theme: config::Theme) -> config::Theme {
-    match theme {
-        config::Theme::Dark => config::Theme::Light,
-        config::Theme::Light => config::Theme::Custom,
-        config::Theme::Custom => config::Theme::Nord,
-        config::Theme::Nord => config::Theme::Gruvbox,
-        config::Theme::Gruvbox => config::Theme::Mono,
-        config::Theme::Mono => config::Theme::Dark,
-    }
+    let available = config::get_available_themes();
+    let current_str = config::theme_to_str(&theme);
+    let pos = available.iter().position(|s| s == &current_str).unwrap_or(0);
+    let next_pos = (pos + 1) % available.len();
+    config::theme_from_str(&available[next_pos])
 }
 
 fn prev_theme(theme: config::Theme) -> config::Theme {
-    match theme {
-        config::Theme::Dark => config::Theme::Mono,
-        config::Theme::Light => config::Theme::Dark,
-        config::Theme::Custom => config::Theme::Light,
-        config::Theme::Nord => config::Theme::Custom,
-        config::Theme::Gruvbox => config::Theme::Nord,
-        config::Theme::Mono => config::Theme::Gruvbox,
-    }
+    let available = config::get_available_themes();
+    let current_str = config::theme_to_str(&theme);
+    let pos = available.iter().position(|s| s == &current_str).unwrap_or(0);
+    let prev_pos = (pos + available.len() - 1) % available.len();
+    config::theme_from_str(&available[prev_pos])
 }
 
 fn prev_repeat_mode(mode: RepeatMode) -> RepeatMode {
