@@ -524,7 +524,7 @@ pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
             continue;
         }
 
-        for entry in walkdir::WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir::WalkDir::new(path).follow_links(true).into_iter().filter_map(|e| e.ok()) {
             if entry.file_type().is_file() {
                 if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                     if extensions.contains(&ext.to_lowercase().as_str()) {
@@ -586,6 +586,43 @@ pub fn check_and_refresh_library(config: &Config) -> Option<Vec<LocalSong>> {
         Some(songs)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use crate::config::Config;
+
+    #[test]
+    fn test_scan_local_library_follows_symlinks() {
+        let tmp_dir = std::env::temp_dir().join("rs_pug_test_symlinks");
+        if tmp_dir.exists() {
+            let _ = fs::remove_dir_all(&tmp_dir);
+        }
+        fs::create_dir_all(&tmp_dir).unwrap();
+
+        let source_dir = tmp_dir.join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+        let song_path = source_dir.join("test.mp3");
+        fs::write(&song_path, "dummy content").unwrap();
+
+        let scan_dir = tmp_dir.join("scan");
+        fs::create_dir_all(&scan_dir).unwrap();
+        let link_path = scan_dir.join("music_link");
+        symlink(&source_dir, &link_path).unwrap();
+
+        let mut config = Config::default();
+        config.general.music_directories = vec![scan_dir.to_str().unwrap().to_string()];
+
+        let songs = scan_local_library(&config);
+
+        let result = !songs.is_empty();
+        let _ = fs::remove_dir_all(&tmp_dir);
+
+        assert!(result, "Should have found songs in symlinked directory. Found: {}", songs.len());
     }
 }
 
