@@ -6,18 +6,23 @@ Neovim out of music players. Search, queue, listen — no browser, no ads, no no
 
 ![img](https://cdn.discordapp.com/attachments/1473377698478031021/1492564717183696991/image.png?ex=69dbcab7&is=69da7937&hm=87bbbd463f1802f0a254779f4f4810a9eaf9920468c77ba3bda964c850780423&)
 ![img](https://cdn.discordapp.com/attachments/1473377698478031021/1494436708534714368/image.png?ex=69e29a24&is=69e148a4&hm=3527f1409febfef1ee48485a71b461f50a766f5fc70be93f78221a45f76496bb&)
+
 ## Features
 
-- YouTube search and queue playback in TUI
-- Local files playback from a configurable directory
-- Albums tab + playlist library
-- 10-band equalizer with built-in and custom presets
-- Dynamic, reactive audio visualizer
-- Recently played history (saved to disk)
-- Playlist import/export from context menu (`c`)
-- Theme switching + custom themes support
-- Basic keybind customization in Options
-- Lua plugin system
+- **YouTube search** and queue playback in TUI.
+- **Album search** support (Albums tab).
+- **Smart Queue**: Automatically find and play similar tracks.
+- **Local files playback** with metadata support (Artist/Album/Title).
+- **Organized Local View**: Switch between Flat and Organized (Artist -> Album -> Song) views.
+- **Playlist library**: Create, delete, and manage your own playlists.
+- **10-band equalizer** with built-in and custom presets.
+- **Dynamic, reactive audio visualizer**.
+- **Recently played history** (saved to SQLite database).
+- **Playlist import/export** from context menu (`c`).
+- **Theme switching**: Multiple built-in themes + custom JSON themes.
+- **Mouse support**: Scroll through lists and click tabs.
+- **Lua plugin system** for extending functionality.
+- **MPRIS support**: Media key and playerctl integration.
 
 ## Dependencies
 
@@ -28,7 +33,7 @@ Required:
 
 Optional:
 
-- `mpv-mpris` (if you want `playerctl` / media key support)
+- `mpv-mpris` (for media key / `playerctl` support)
 
 ## Installation
 
@@ -49,37 +54,62 @@ cargo build --release
 ./target/release/rs-pug
 ```
 
-## Default keybinds
+## Keybinds
+
+### Navigation & Global
 
 | Key | Action |
 |-----|--------|
-| `/` | Search |
-| `Enter` | Play / confirm |
-| `Space` | Pause / resume |
-| `n` | Next |
-| `p` | Previous |
-| `m` | Mute |
-| `r` | Repeat mode |
-| `Tab` | Focus switch |
-| `c` | Context menu |
+| `1`-`5` | Switch Tabs (Discover, Albums, Library, Local, Options) |
+| `Tab` | Switch focus between panels (Results / Queue) |
+| `j` / `Down` | Move selection down |
+| `k` / `Up` | Move selection up |
+| `PgUp` / `PgDn` | Scroll selection by 10 |
+| `/` | Start searching (Discover/Albums tabs) |
+| `c` | Open Context Menu |
 | `q` | Quit |
+| `Ctrl+c` | Force quit |
 
-> Note: some keys are context-specific (Library, Options, EQ panel).
+### Playback
 
-## Options / EQ quick notes
+| Key | Action |
+|-----|--------|
+| `Enter` | Play selected song / Confirm |
+| `Space` | Pause / Resume |
+| `n` | Next track |
+| `p` | Previous track |
+| `m` | Mute / Unmute |
+| `r` | Cycle Repeat mode (None, Track, Queue) |
+| `z` | Toggle Shuffle |
+| `[` / `]` | Seek backward / forward |
 
-- In **Options** you can:
-  - change search limit, theme, repeat mode
-  - edit selected keybind values (`next`, `prev`, `mute`) using `h/l`
-  - open EQ controls (10-band gain editing)
-- EQ preset selection is available through the Options row (`EQ preset`) via `h/l` or `Enter`.
-- **Save custom EQ presets**: While focusing the `EQ preset` option, press `f` to name and save your current settings.
+### Tab Specific
+
+- **Library Tab**:
+  - `a`: Create new playlist.
+  - `x`: Delete selected playlist (with confirmation).
+  - `e`: Expand / Collapse playlist folders.
+- **Local Tab**:
+  - `v`: Toggle view mode (**Flat** vs **Organized**).
+- **Options Tab**:
+  - `f`: While focusing "EQ preset", press to save current EQ as a new preset.
+
+## Mouse Support
+
+- **Scroll Wheel**: Scroll through search results, playlists, and the queue.
+- **Left Click**: Click on tab icons at the top to switch between views.
+
+## Smart Queue
+
+In the **Options** tab, you can trigger the **Smart Queue**. This feature analyzes the currently playing song and automatically finds similar tracks from the same uploader or with similar titles to keep the music flowing.
 
 ## Customization
 
 ### Themes
-You can add your own themes by creating `.json` files in:
-`~/.config/rs-pug/themes/`
+
+`rs-pug` comes with several built-in themes: `dark` (default), `light`, `nord`, `gruvbox`, and `mono`.
+
+You can add your own themes by creating `.json` files in `~/.config/rs-pug/themes/`.
 
 Example `mytheme.json`:
 ```json
@@ -97,77 +127,31 @@ Example `mytheme.json`:
 ```
 
 ### EQ Presets
-Your custom EQ presets are stored as `.json` files in:
-`~/.config/rs-pug/eqpresets/`
 
-You can create them directly in the app by pressing `f` while focusing the **EQ preset** option in the Settings tab.
+Your custom EQ presets are stored as `.json` files in `~/.config/rs-pug/eqpresets/`.
 
 ## Local Music
 
-Support for playing local audio files. By default, rs-pug scans:
+By default, `rs-pug` scans `~/.config/rs-pug/music-local/`. You can change this or add more directories in the **Options** tab. The app supports natural sorting and metadata extraction.
 
-`~/.config/rs-pug/music-local/`
+## Playlists & Storage
 
-You can change this directory in the **Options** tab.
+Data is stored in a SQLite database at `~/.config/rs-pug/pug.db`. Legacy JSON files are automatically migrated on first run.
 
-## Playlists
-
-- Library tab supports playlist create/delete and song management.
-- Context menu (`c`) in **Library + Results** includes:
-  - Import playlist
-  - Export selected playlist
-
-### Import path
-
-`~/.config/rs-pug/import_playlist.json`
-
-If the file does not exist, rs-pug will create a template automatically.
-
-### Export path
-
-`~/.config/rs-pug/exports/<playlist_name>.json`
-
-## Recently played
-
-- Recently played entries are updated when a song starts.
-- Stored at:
-
-`~/.config/rs-pug/recently_played.json`
-
-- Top recent entries are shown in the Library panel.
+- **Import path**: `~/.config/rs-pug/import_playlist.json`
+- **Export path**: `~/.config/rs-pug/exports/<playlist_name>.json`
 
 ## Plugins (Lua)
 
-Drop Lua scripts into:
-
-`~/.config/rs-pug/plugins/`
-
-They are loaded automatically. Plugins receive events (song start, search results, keypresses) and can modify app behavior.
-
-Example plugin:
-
-```lua
-return {
-    on_key = function(key, state)
-        if key == "char:x" then
-            return { flash = "hey!" }
-        end
-    end
-}
-```
+Drop Lua scripts into `~/.config/rs-pug/plugins/`. They are loaded automatically and can react to keys, search queries, and playback events. See `docs.md` for the full API reference.
 
 ## Configuration
 
-Config file path:
-
-`~/.config/rs-pug/config.toml`
+Config file path: `~/.config/rs-pug/config.toml`. The app also looks for `rs-pug.toml` or `pug.toml` in the current working directory.
 
 ## Contributing
 
 Plugin system is Lua-based. If you know Lua, example plugins / plugin PRs are very welcome.
-
-Small, ugly, but there's just something about it.
-
 
 ## BTW
 

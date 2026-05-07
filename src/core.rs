@@ -1,4 +1,5 @@
-use std::{collections::VecDeque, process::Stdio, time::Duration};
+use std::{collections::{VecDeque, HashSet}, process::Stdio, time::Duration};
+use std::os::unix::fs::MetadataExt;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -48,6 +49,7 @@ pub enum CoreEvent {
     VolumeChanged(u8),
     MuteChanged(bool),
     Error(String),
+    LibraryRefreshDone,
 }
 
 pub struct Core {
@@ -506,6 +508,7 @@ async fn search_albums(limit: u8, query: String) -> Result<Vec<crate::model::Alb
 
 pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
     let mut songs = Vec::new();
+    let mut seen_files = HashSet::new();
     let extensions = ["mp3", "flac", "wav", "ogg", "m4a"];
 
     for dir in &config.general.music_directories {
@@ -518,7 +521,6 @@ pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
         } else {
             dir.clone()
         };
-
         let path = std::path::Path::new(&path_str);
         if !path.exists() {
             continue;
@@ -526,9 +528,16 @@ pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
 
         for entry in walkdir::WalkDir::new(path).follow_links(true).into_iter().filter_map(|e| e.ok()) {
             if entry.file_type().is_file() {
-                if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+                let p = entry.path();
+                if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
                     if extensions.contains(&ext.to_lowercase().as_str()) {
-                        let song = extract_metadata(entry.path());
+                        if let Ok(meta) = entry.metadata() {
+                            let dev_ino = (meta.dev(), meta.ino());
+                            if !seen_files.insert(dev_ino) {
+                                continue;
+                            }
+                        }
+                        let song = extract_metadata(p);
                         songs.push(song);
                     }
                 }
@@ -545,6 +554,11 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
         .unwrap_or("Unknown")
         .to_string();
 
+    let mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+        .unwrap_or(0);
+
     if let Ok(tagged_file) = lofty::read_from_path(path) {
         let properties = tagged_file.properties();
         let tag = tagged_file.primary_tag();
@@ -560,6 +574,7 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
             artist,
             album,
             duration,
+            mtime,
         }
     } else {
         LocalSong {
@@ -568,21 +583,23 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
             artist: "Unknown".to_string(),
             album: "Unknown".to_string(),
             duration: 0.0,
+            mtime,
         }
     }
 }
 
-pub fn refresh_library(config: &Config) -> Vec<LocalSong> {
+pub fn refresh_library(config: &Config, storage: &crate::storage::Storage) -> Vec<LocalSong> {
     let songs = scan_local_library(config);
-    crate::storage::save_local_library(&songs);
+    storage.save_local_library(&songs).expect("Failed to save local library");
     songs
 }
 
-pub fn check_and_refresh_library(config: &Config) -> Option<Vec<LocalSong>> {
-    let last_dirs = crate::storage::load_last_scanned_dirs();
-    if last_dirs != config.general.music_directories {
-        let songs = refresh_library(config);
-        crate::storage::save_last_scanned_dirs(&config.general.music_directories);
+pub fn check_and_refresh_library(config: &Config, storage: &crate::storage::Storage) -> Option<Vec<LocalSong>> {
+    let current_lib = storage.load_local_library().unwrap_or_default();
+    let last_dirs = storage.load_last_scanned_dirs();
+    if last_dirs != config.general.music_directories || current_lib.is_empty() {
+        let songs = refresh_library(config, storage);
+        storage.save_last_scanned_dirs(&config.general.music_directories);
         Some(songs)
     } else {
         None
@@ -623,6 +640,38 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp_dir);
 
         assert!(result, "Should have found songs in symlinked directory. Found: {}", songs.len());
+    }
+
+    #[test]
+    fn test_scan_local_library_deduplicates_symlinks() {
+        let tmp_dir = std::env::temp_dir().join("rs_pug_test_dedup");
+        if tmp_dir.exists() {
+            let _ = fs::remove_dir_all(&tmp_dir);
+        }
+        fs::create_dir_all(&tmp_dir).unwrap();
+
+        let source_dir = tmp_dir.join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+        let song_path = source_dir.join("test.mp3");
+        fs::write(&song_path, "dummy content").unwrap();
+
+        let scan_dir = tmp_dir.join("scan");
+        fs::create_dir_all(&scan_dir).unwrap();
+
+        // Create multiple symlinks to the same file
+        let link1 = scan_dir.join("link1.mp3");
+        let link2 = scan_dir.join("link2.mp3");
+        symlink(&song_path, &link1).unwrap();
+        symlink(&song_path, &link2).unwrap();
+
+        let mut config = Config::default();
+        config.general.music_directories = vec![scan_dir.to_str().unwrap().to_string()];
+
+        let songs = scan_local_library(&config);
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+
+        assert_eq!(songs.len(), 1, "Should have deduplicated symlinks to the same file. Found: {}", songs.len());
     }
 }
 

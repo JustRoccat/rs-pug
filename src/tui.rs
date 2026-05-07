@@ -7,6 +7,7 @@ use ratatui::{
 use crate::{
     config::{Theme, Palette},
     model::{eq_preset_name, App, Focus, PlayerState, RepeatMode, Song, Tab},
+    utils::natural_compare,
 };
 
 fn palette(theme: Theme) -> Palette {
@@ -380,7 +381,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
     } else if app.active_tab == Tab::Local {
         if app.local_view_mode == crate::model::LocalViewMode::Flat {
             build_local_song_list(
-                &app.local_library,
+                &app.local_library_window,
                 app.selected_local_song,
                 focused,
                 pal,
@@ -548,8 +549,8 @@ fn build_organized_local_list<'a>(
 ) -> (Vec<ListItem<'a>>, Option<usize>) {
     match app.local_nav_level {
         crate::model::LocalNavLevel::Artists => {
-            let mut artists: Vec<String> = app.local_library.iter().map(|s| s.artist.clone()).collect();
-            artists.sort();
+            let mut artists: Vec<String> = app.local_library_window.iter().map(|s| s.artist.clone()).collect();
+            artists.sort_by(|a, b| natural_compare(a, b));
             artists.dedup();
 
             let items = artists.iter().enumerate().map(|(idx, artist)| {
@@ -571,11 +572,11 @@ fn build_organized_local_list<'a>(
         }
         crate::model::LocalNavLevel::Albums => {
             let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
-            let mut albums: Vec<String> = app.local_library.iter()
+            let mut albums: Vec<String> = app.local_library_window.iter()
                 .filter(|s| s.artist == artist)
                 .map(|s| s.album.clone())
                 .collect();
-            albums.sort();
+            albums.sort_by(|a, b| natural_compare(a, b));
             albums.dedup();
 
             let items = albums.iter().enumerate().map(|(idx, album)| {
@@ -598,10 +599,10 @@ fn build_organized_local_list<'a>(
         crate::model::LocalNavLevel::Songs => {
             let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
             let album = app.local_nav_album.as_deref().unwrap_or("Unknown");
-            let mut songs: Vec<&crate::model::LocalSong> = app.local_library.iter()
+            let mut songs: Vec<&crate::model::LocalSong> = app.local_library_window.iter()
                 .filter(|s| s.artist == artist && s.album == album)
                 .collect();
-            songs.sort_by(|a, b| a.title.cmp(&b.title));
+            songs.sort_by(|a, b| natural_compare(&a.title, &b.title));
 
             let items = songs.iter().enumerate().map(|(idx, song)| {
                 let is_sel = idx == app.selected_local_nav_idx && focused;
@@ -1271,6 +1272,22 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
                         .border_style(Style::default().fg(pal.get_color("warn"))),
                 )
                 .style(Style::default().fg(pal.get_color("text"))),
+            area,
+        );
+    }
+
+    if app.scanning {
+        let area = centered_rect(40, 14, size);
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(" ⚙  Scanning library... ")
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(anim)),
+                )
+                .style(Style::default().fg(pal.get_color("text")).add_modifier(Modifier::BOLD))
+                .alignment(Alignment::Center),
             area,
         );
     }

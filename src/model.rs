@@ -37,12 +37,25 @@ pub struct LocalSong {
     pub artist: String,
     pub album: String,
     pub duration: f64,
+    pub mtime: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub enum LocalViewMode {
     Flat,
     Organized,
+}
+
+impl From<&LocalSong> for Song {
+    fn from(ls: &LocalSong) -> Self {
+        Self {
+            id: ls.path.clone(),
+            title: ls.title.clone(),
+            webpage_url: ls.path.clone(),
+            uploader: Some(ls.artist.clone()),
+            duration: Some(ls.duration),
+        }
+    }
 }
 
 impl Song {
@@ -198,7 +211,10 @@ pub struct App {
     pub eq_preset_index: usize,
     pub custom_eq_presets: Vec<crate::config::EqPreset>,
     pub recently_played: VecDeque<Song>,
-    pub local_library: Vec<LocalSong>,
+    pub scanning: bool,
+    pub local_library_window: Vec<LocalSong>,
+    pub local_library_offset: usize,
+    pub local_library_total: usize,
     pub local_view_mode: LocalViewMode,
     pub selected_local_song: usize,
     pub local_nav_level: LocalNavLevel,
@@ -206,10 +222,11 @@ pub struct App {
     pub local_nav_album: Option<String>,
     pub selected_local_nav_idx: usize,
     pub adding_song_to_playlist: bool,
+    pub storage: crate::storage::Storage,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(storage: crate::storage::Storage) -> Self {
         Self {
             player_state: PlayerState::Idle,
             focus: Focus::Results,
@@ -262,7 +279,10 @@ impl App {
             eq_preset_index: 0,
             custom_eq_presets: Vec::new(),
             recently_played: VecDeque::new(),
-            local_library: Vec::new(),
+            scanning: false,
+            local_library_window: Vec::new(),
+            local_library_offset: 0,
+            local_library_total: 0,
             local_view_mode: LocalViewMode::Flat,
             selected_local_song: 0,
             local_nav_level: LocalNavLevel::Artists,
@@ -270,6 +290,7 @@ impl App {
             local_nav_album: None,
             selected_local_nav_idx: 0,
             adding_song_to_playlist: false,
+            storage,
         }
     }
 
@@ -323,13 +344,10 @@ impl App {
                 .get(self.selected_playlist)
                 .and_then(|p| p.songs.get(self.selected_playlist_song).cloned()),
             Tab::Local => match self.focus {
-                Focus::Results => self.local_library.get(self.selected_local_song).map(|ls| Song {
-                    id: ls.path.clone(),
-                    title: ls.title.clone(),
-                    webpage_url: ls.path.clone(),
-                    uploader: Some(ls.artist.clone()),
-                    duration: Some(ls.duration),
-                }),
+                Focus::Results => {
+                    let relative_idx = self.selected_local_song.saturating_sub(self.local_library_offset);
+                    self.local_library_window.get(relative_idx).map(Song::from)
+                }
                 Focus::Queue => self.queue_selection().cloned(),
                 Focus::Search => None,
             },

@@ -1,164 +1,159 @@
-use std::{fs, path::PathBuf};
-
+use std::{fs, path::PathBuf, sync::{Arc, Mutex}};
+use crate::db::DbStorage;
 use crate::model::{Playlist, Song, LocalSong};
 
-fn playlist_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        let dir = PathBuf::from(home).join(".config/rs-pug");
-        let _ = fs::create_dir_all(&dir);
-        return dir.join("playlists.json");
-    }
-
-    PathBuf::from("playlists.json")
+#[derive(Clone)]
+pub struct Storage {
+    db: Arc<Mutex<DbStorage>>,
 }
 
-pub fn load_playlists() -> Vec<Playlist> {
-    let path = playlist_path();
-    if let Ok(raw) = fs::read_to_string(path) {
-        if let Ok(data) = serde_json::from_str::<Vec<Playlist>>(&raw) {
-            return data;
+impl std::fmt::Debug for Storage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Storage").finish()
+    }
+}
+
+impl Storage {
+    pub fn init() -> Result<Self, String> {
+        let dir = Self::config_dir().map_err(|e| e.to_string())?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+        let db_path = dir.join("pug.db");
+        let mut db = DbStorage::open(db_path).map_err(|e| e.to_string())?;
+
+        Self::migrate_from_json(&mut db)?;
+
+        Ok(Self { db: Arc::new(Mutex::new(db)) })
+    }
+
+    fn config_dir() -> Result<PathBuf, std::io::Error> {
+        if let Ok(home) = std::env::var("HOME") {
+            Ok(PathBuf::from(home).join(".config/rs-pug"))
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))
         }
     }
-    Vec::new()
-}
 
-pub fn save_playlists(playlists: &[Playlist]) {
-    if let Ok(raw) = serde_json::to_string_pretty(playlists) {
-        let _ = fs::write(playlist_path(), raw);
-    }
-}
-
-fn recently_played_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        let dir = PathBuf::from(home).join(".config/rs-pug");
-        let _ = fs::create_dir_all(&dir);
-        return dir.join("recently_played.json");
+    fn json_path(filename: &str) -> PathBuf {
+        Self::config_dir().unwrap_or_else(|_| PathBuf::from(".")).join(filename)
     }
 
-    PathBuf::from("recently_played.json")
-}
+    fn migrate_from_json(db: &mut DbStorage) -> Result<(), String> {
+        let local_path = Self::json_path("local_library.json");
+        let playlist_path = Self::json_path("playlists.json");
+        let recent_path = Self::json_path("recently_played.json");
 
-pub fn load_recently_played() -> Vec<Song> {
-    let path = recently_played_path();
-    if let Ok(raw) = fs::read_to_string(path) {
-        if let Ok(data) = serde_json::from_str::<Vec<Song>>(&raw) {
-            return data;
-        }
-    }
-    Vec::new()
-}
-
-pub fn save_recently_played(songs: &[Song]) {
-    if let Ok(raw) = serde_json::to_string_pretty(songs) {
-        let _ = fs::write(recently_played_path(), raw);
-    }
-}
-
-pub fn import_playlist_from_default() -> Result<Playlist, String> {
-    let path = if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/rs-pug/import_playlist.json")
-    } else {
-        PathBuf::from("import_playlist.json")
-    };
-    let raw = fs::read_to_string(&path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
+        let mut local_library = Vec::new();
+        if let Ok(raw) = fs::read_to_string(&local_path) {
+            if let Ok(data) = serde_json::from_str::<Vec<LocalSong>>(&raw) {
+                local_library = data;
             }
-            let template = Playlist {
-                name: "Imported".to_owned(),
+        }
+
+        let mut playlists = Vec::new();
+        if let Ok(raw) = fs::read_to_string(&playlist_path) {
+            if let Ok(data) = serde_json::from_str::<Vec<Playlist>>(&raw) {
+                playlists = data;
+            }
+        }
+
+        let mut recently_played = Vec::new();
+        if let Ok(raw) = fs::read_to_string(&recent_path) {
+            if let Ok(data) = serde_json::from_str::<Vec<Song>>(&raw) {
+                recently_played = data;
+            }
+        }
+
+        if !local_library.is_empty() || !playlists.is_empty() || !recently_played.is_empty() {
+            db.migrate_from_json(local_library, playlists, recently_played).map_err(|e| e.to_string())?;
+
+            // Delete legacy JSON files to prevent re-migration on every startup
+            let _ = fs::remove_file(Self::json_path("local_library.json"));
+            let _ = fs::remove_file(Self::json_path("playlists.json"));
+            let _ = fs::remove_file(Self::json_path("recently_played.json"));
+        }
+
+        Ok(())
+    }
+
+    pub fn load_local_library(&self) -> Result<Vec<LocalSong>, String> {
+        self.db.lock().unwrap().load_local_songs().map_err(|e| e.to_string())
+    }
+
+    pub fn fetch_local_songs_window(&self, target_index: usize, window_size: usize) -> Result<(Vec<LocalSong>, usize, usize), String> {
+        let db = self.db.lock().unwrap();
+        let total = db.get_local_songs_count().map_err(|e| e.to_string())?;
+
+        // Center the target_index in the window
+        let offset = target_index
+            .saturating_sub(window_size / 2)
+            .min(total.saturating_sub(window_size));
+
+        let songs = db.load_local_songs_paginated(window_size, offset).map_err(|e| e.to_string())?;
+
+        Ok((songs, offset, total))
+    }
+
+    pub fn save_local_library(&self, songs: &[LocalSong]) -> Result<(), String> {
+        self.db.lock().unwrap().save_local_songs_bulk(songs).map_err(|e| e.to_string())
+    }
+
+    pub fn load_playlists(&self) -> Result<Vec<Playlist>, String> {
+        self.db.lock().unwrap().load_playlists().map_err(|e| e.to_string())
+    }
+
+    pub fn save_playlists(&self, playlists: &[Playlist]) -> Result<(), String> {
+        self.db.lock().unwrap().save_playlists(playlists).map_err(|e| e.to_string())
+    }
+
+    pub fn load_recently_played(&self) -> Result<Vec<Song>, String> {
+        self.db.lock().unwrap().load_recently_played().map_err(|e| e.to_string())
+    }
+
+    pub fn save_recently_played(&self, songs: &[Song]) -> Result<(), String> {
+        self.db.lock().unwrap().save_recently_played(songs).map_err(|e| e.to_string())
+    }
+
+    pub fn load_last_scanned_dirs(&self) -> Vec<String> {
+        let path = Self::json_path("last_scanned_dirs.json");
+        if let Ok(raw) = fs::read_to_string(path) {
+            if let Ok(data) = serde_json::from_str::<Vec<String>>(&raw) {
+                return data;
+            }
+        }
+        Vec::new()
+    }
+
+    pub fn save_last_scanned_dirs(&self, dirs: &[String]) {
+        let path = Self::json_path("last_scanned_dirs.json");
+        if let Ok(raw) = serde_json::to_string_pretty(dirs) {
+            let _ = fs::write(path, raw);
+        }
+    }
+
+    pub fn import_playlist_from_default(&self) -> Result<crate::model::Playlist, String> {
+        let path = Self::json_path("import_playlist.json");
+        if !path.exists() {
+            let template = crate::model::Playlist {
+                name: "Imported".to_string(),
                 songs: Vec::new(),
             };
-            match serde_json::to_string_pretty(&template)
-                .ok()
-                .and_then(|raw| fs::write(&path, raw).ok())
-            {
-                Some(_) => format!(
-                    "Created import template: {} (fill songs and import again)",
-                    path.display()
-                ),
-                None => format!(
-                    "Import file not found and could not create template: {}",
-                    path.display()
-                ),
-            }
-        } else {
-            format!("Cannot read {}: {e}", path.display())
+            let raw = serde_json::to_string_pretty(&template).map_err(|e| e.to_string())?;
+            fs::write(&path, raw).map_err(|e| e.to_string())?;
         }
-    })?;
-    serde_json::from_str::<Playlist>(&raw)
-        .map_err(|e| format!("Invalid playlist JSON in {}: {e}", path.display()))
-}
-
-pub fn export_playlist_to_default(playlist: &Playlist) -> Result<PathBuf, String> {
-    let base = if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/rs-pug/exports")
-    } else {
-        PathBuf::from("exports")
-    };
-    fs::create_dir_all(&base)
-        .map_err(|e| format!("Cannot create export dir {}: {e}", base.display()))?;
-    let safe_name: String = playlist
-        .name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    let out = base.join(format!("{safe_name}.json"));
-    let raw = serde_json::to_string_pretty(playlist)
-        .map_err(|e| format!("Cannot serialize playlist: {e}"))?;
-    fs::write(&out, raw).map_err(|e| format!("Cannot write {}: {e}", out.display()))?;
-    Ok(out)
-}
-
-fn local_library_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        let dir = PathBuf::from(home).join(".config/rs-pug");
-        let _ = fs::create_dir_all(&dir);
-        return dir.join("local_library.json");
+        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&raw).map_err(|e| e.to_string())
     }
 
-    PathBuf::from("local_library.json")
-}
-
-fn last_scanned_dirs_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        let dir = PathBuf::from(home).join(".config/rs-pug");
-        let _ = fs::create_dir_all(&dir);
-        return dir.join("last_scanned_dirs.json");
-    }
-
-    PathBuf::from("last_scanned_dirs.json")
-}
-
-pub fn load_last_scanned_dirs() -> Vec<String> {
-    let path = last_scanned_dirs_path();
-    if let Ok(raw) = fs::read_to_string(path) {
-        if let Ok(data) = serde_json::from_str::<Vec<String>>(&raw) {
-            return data;
-        }
-    }
-    Vec::new()
-}
-
-pub fn save_last_scanned_dirs(dirs: &[String]) {
-    if let Ok(raw) = serde_json::to_string_pretty(dirs) {
-        let _ = fs::write(last_scanned_dirs_path(), raw);
-    }
-}
-
-pub fn load_local_library() -> Vec<LocalSong> {
-
-    let path = local_library_path();
-    if let Ok(raw) = fs::read_to_string(path) {
-        if let Ok(data) = serde_json::from_str::<Vec<LocalSong>>(&raw) {
-            return data;
-        }
-    }
-    Vec::new()
-}
-
-pub fn save_local_library(songs: &[LocalSong]) {
-    if let Ok(raw) = serde_json::to_string_pretty(songs) {
-        let _ = fs::write(local_library_path(), raw);
+    pub fn export_playlist_to_default(&self, playlist: &crate::model::Playlist) -> Result<std::path::PathBuf, String> {
+        let config_dir = Self::config_dir().map_err(|e| e.to_string())?;
+        let exports_dir = config_dir.join("exports");
+        fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
+        let sanitized_name = playlist.name.replace(|c: char| !c.is_alphanumeric(), "_");
+        let filename = format!("{}.json", sanitized_name);
+        let path = exports_dir.join(filename);
+        let raw = serde_json::to_string_pretty(playlist).map_err(|e| e.to_string())?;
+        fs::write(&path, raw).map_err(|e| e.to_string())?;
+        Ok(path)
     }
 }

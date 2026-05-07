@@ -16,10 +16,12 @@ use tokio::sync::mpsc;
 
 mod config;
 mod core;
+mod db;
 mod model;
 mod plugins;
 mod storage;
 mod tui;
+mod utils;
 
 use config::{load_config, save_config};
 use core::{Core, CoreCmd, CoreEvent};
@@ -28,10 +30,7 @@ use model::{
     EQ_PRESET_NAMES,
 };
 use plugins::{PluginCoreAction, PluginDispatch, PluginEvent, PluginManager, PluginUiState};
-use storage::{
-    export_playlist_to_default, import_playlist_from_default, load_local_library, load_playlists,
-    load_recently_played, save_playlists, save_recently_played,
-};
+use storage::Storage;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -47,19 +46,43 @@ async fn main() -> Result<()> {
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
 
     let core = Core::new(config.clone()).await?;
-    tokio::spawn(core.run(cmd_rx, evt_tx));
+    tokio::spawn(core.run(cmd_rx, evt_tx.clone()));
 
-    let mut app = App::new();
+    let storage = Storage::init().expect("Failed to init storage");
+    let mut app = App::new(storage);
     app.apply_config(&config);
-    app.playlists = load_playlists();
-    app.playlist_expanded = vec![false; app.playlists.len()];
-    app.recently_played = load_recently_played().into();
-    app.local_library = load_local_library();
+
+    match app.storage.load_playlists() {
+        Ok(playlists) => {
+            app.playlists = playlists;
+            app.playlist_expanded = vec![false; app.playlists.len()];
+        }
+        Err(e) => app.set_flash(format!("Error loading playlists: {e}"), 5),
+    }
+
+    match app.storage.load_recently_played() {
+        Ok(recent) => app.recently_played = recent.into(),
+        Err(e) => app.set_flash(format!("Error loading recent: {e}"), 5),
+    }
+
+    match app.storage.fetch_local_songs_window(0, 200) {
+        Ok((window, offset, total)) => {
+            app.local_library_window = window;
+            app.local_library_offset = offset;
+            app.local_library_total = total;
+        }
+        Err(e) => app.set_flash(format!("Error loading library window: {e}"), 5),
+    }
     app.custom_eq_presets = config::load_eq_presets();
 
-    if let Some(songs) = core::check_and_refresh_library(&config) {
-        app.local_library = songs;
-    }
+    app.scanning = true;
+    let storage_clone = app.storage.clone();
+    let config_clone = config.clone();
+    let evt_tx_clone = evt_tx.clone();
+    tokio::spawn(async move {
+        let _ = core::check_and_refresh_library(&config_clone, &storage_clone);
+        let _ = evt_tx_clone.send(CoreEvent::LibraryRefreshDone);
+    });
 
     let tick_rate = Duration::from_millis(20);
     let mut running = true;
@@ -167,7 +190,7 @@ async fn main() -> Result<()> {
                                     app.selected_playlist = app
                                         .selected_playlist
                                         .min(app.playlists.len().saturating_sub(1));
-                                    save_playlists(&app.playlists);
+                                    app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
                                     app.set_flash(format!("Deleted {}", deleted.name), 3);
                                 }
                                 app.confirm_delete_playlist = false;
@@ -251,7 +274,7 @@ async fn main() -> Result<()> {
                             });
                             app.playlist_expanded.push(true);
                             app.selected_playlist = app.playlists.len().saturating_sub(1);
-                            save_playlists(&app.playlists);
+                            app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
                             app.set_flash(format!("Created {name}"), 3);
                         }
                         KeyCode::Char('x') if app.active_tab == Tab::Library => {
@@ -322,9 +345,9 @@ async fn main() -> Result<()> {
                                         app.selected_album_result = (app.selected_album_result + 1).min(app.album_results.len().saturating_sub(1));
                                     }
                                 } else if app.active_tab == Tab::Local {
-                                    if !app.local_library.is_empty() {
+                                    if app.local_library_total > 0 {
                                         app.selected_local_song = (app.selected_local_song + 1)
-                                            .min(app.local_library.len().saturating_sub(1));
+                                            .min(app.local_library_total.saturating_sub(1));
                                     }
                                 } else if !app.search_results.is_empty() {
                                     app.selected_result = (app.selected_result + 1)
@@ -495,14 +518,8 @@ async fn main() -> Result<()> {
                                 Focus::Results => {
                                     if app.active_tab == Tab::Local {
                                         if app.local_view_mode == crate::model::LocalViewMode::Flat {
-                                            if let Some(ls) = app.local_library.get(app.selected_local_song) {
-                                                let song = model::Song {
-                                                    id: ls.path.clone(),
-                                                    title: ls.title.clone(),
-                                                    webpage_url: ls.path.clone(),
-                                                    uploader: Some(ls.artist.clone()),
-                                                    duration: Some(ls.duration),
-                                                };
+                                            if let Some(ls) = app.local_library_window.get(app.selected_local_song.saturating_sub(app.local_library_offset)) {
+                                                let song = model::Song::from(ls);
                                                 app.queue.push_back(song.clone());
                                                 app.selected_queue = app.queue.len().saturating_sub(1);
                                                 let _ = cmd_tx.send(CoreCmd::Play(song));
@@ -510,8 +527,8 @@ async fn main() -> Result<()> {
                                         } else {
                                             match app.local_nav_level {
                                                 crate::model::LocalNavLevel::Artists => {
-                                                    let mut artists: Vec<String> = app.local_library.iter().map(|s| s.artist.clone()).collect();
-                                                    artists.sort();
+                                                    let mut artists: Vec<String> = app.local_library_window.iter().map(|s| s.artist.clone()).collect();
+                                                    artists.sort_by(|a, b| utils::natural_compare(a, b));
                                                     artists.dedup();
                                                     if let Some(artist) = artists.get(app.selected_local_nav_idx) {
                                                         app.local_nav_artist = Some(artist.clone());
@@ -521,11 +538,11 @@ async fn main() -> Result<()> {
                                                 }
                                                 crate::model::LocalNavLevel::Albums => {
                                                     let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
-                                                    let mut albums: Vec<String> = app.local_library.iter()
+                                                    let mut albums: Vec<String> = app.local_library_window.iter()
                                                         .filter(|s| s.artist == artist)
                                                         .map(|s| s.album.clone())
                                                         .collect();
-                                                    albums.sort();
+                                                    albums.sort_by(|a, b| utils::natural_compare(a, b));
                                                     albums.dedup();
                                                     if let Some(album) = albums.get(app.selected_local_nav_idx) {
                                                         app.local_nav_album = Some(album.clone());
@@ -536,18 +553,12 @@ async fn main() -> Result<()> {
                                                 crate::model::LocalNavLevel::Songs => {
                                                     let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
                                                     let album = app.local_nav_album.as_deref().unwrap_or("Unknown");
-                                                    let mut songs: Vec<&crate::model::LocalSong> = app.local_library.iter()
+                                                    let mut songs: Vec<&crate::model::LocalSong> = app.local_library_window.iter()
                                                         .filter(|s| s.artist == artist && s.album == album)
                                                         .collect();
-                                                    songs.sort_by(|a, b| a.title.cmp(&b.title));
+                                                    songs.sort_by(|a, b| utils::natural_compare(&a.title, &b.title));
                                                     if let Some(ls) = songs.get(app.selected_local_nav_idx) {
-                                                        let song = model::Song {
-                                                            id: ls.path.clone(),
-                                                            title: ls.title.clone(),
-                                                            webpage_url: ls.path.clone(),
-                                                            uploader: Some(ls.artist.clone()),
-                                                            duration: Some(ls.duration),
-                                                        };
+                                                        let song = model::Song::from(*ls);
                                                         app.queue.push_back(song.clone());
                                                         app.selected_queue = app.queue.len().saturating_sub(1);
                                                         let _ = cmd_tx.send(CoreCmd::Play(song));
@@ -623,7 +634,7 @@ async fn main() -> Result<()> {
                         KeyCode::Char('d') => {
                             if app.active_tab == Tab::Library && app.focus == Focus::Queue {
                                 remove_selected_playlist_song(&mut app);
-                                save_playlists(&app.playlists);
+                                app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
                             } else if app.focus == Focus::Queue {
                                 remove_selected_queue_song(&mut app);
                             }
@@ -739,15 +750,30 @@ async fn main() -> Result<()> {
 }
 
 fn add_to_named_playlist(app: &mut App, song: model::Song, name: &str) {
-    if let Some(p) = app.playlists.iter_mut().find(|p| p.name == name) {
-        p.songs.push(song);
+    let already_exists = if let Some(p) = app.playlists.iter().find(|p| p.name == name) {
+        Some(p.songs.iter().any(|s| s.id == song.id))
     } else {
-        app.playlists.push(Playlist {
-            name: name.to_owned(),
-            songs: vec![song],
-        });
-        app.playlist_expanded.push(true);
-        app.selected_playlist = app.playlists.len().saturating_sub(1);
+        None
+    };
+
+    match already_exists {
+        Some(true) => {
+            app.set_flash(format!("Song already in playlist {name}"), 3);
+            return;
+        }
+        Some(false) => {
+            if let Some(p) = app.playlists.iter_mut().find(|p| p.name == name) {
+                p.songs.push(song);
+            }
+        }
+        None => {
+            app.playlists.push(Playlist {
+                name: name.to_owned(),
+                songs: vec![song],
+            });
+            app.playlist_expanded.push(true);
+            app.selected_playlist = app.playlists.len().saturating_sub(1);
+        }
     }
     app.set_flash(format!("Added to playlist: {name}"), 3);
 }
@@ -823,14 +849,18 @@ fn cycle_keybind_char(current: char, delta: isize) -> char {
 }
 
 fn import_playlist_action(app: &mut App) {
-    match import_playlist_from_default() {
+    match app.storage.import_playlist_from_default() {
         Ok(mut imported) => {
             if imported.name.trim().is_empty() {
                 imported.name = "Imported".to_owned();
             }
             if let Some(existing) = app.playlists.iter_mut().find(|p| p.name == imported.name) {
                 let before = existing.songs.len();
-                existing.songs.extend(imported.songs);
+                for song in imported.songs {
+                    if !existing.songs.iter().any(|s| s.id == song.id) {
+                        existing.songs.push(song);
+                    }
+                }
                 let merged_name = existing.name.clone();
                 let added = existing.songs.len().saturating_sub(before);
                 app.set_flash(
@@ -843,7 +873,7 @@ fn import_playlist_action(app: &mut App) {
                 app.selected_playlist = app.playlists.len().saturating_sub(1);
                 app.set_flash(format!("Imported playlist {}", imported.name), 4);
             }
-            save_playlists(&app.playlists);
+            app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
         }
         Err(err) => app.set_flash(err, 5),
     }
@@ -851,7 +881,7 @@ fn import_playlist_action(app: &mut App) {
 
 fn export_selected_playlist_action(app: &mut App) {
     if let Some(playlist) = app.playlists.get(app.selected_playlist) {
-        match export_playlist_to_default(playlist) {
+        match app.storage.export_playlist_to_default(playlist) {
             Ok(path) => app.set_flash(format!("Exported to {}", path.display()), 5),
             Err(err) => app.set_flash(err, 5),
         }
@@ -889,7 +919,7 @@ fn execute_context_action(app: &mut App, index: usize) {
             3 => remove_selected_playlist_song(app),
             _ => {}
         }
-        save_playlists(&app.playlists);
+        app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
     }
 }
 
@@ -898,8 +928,20 @@ fn add_to_selected_playlist(app: &mut App, song: model::Song) {
         add_to_named_playlist(app, song, "Favorites");
         return;
     }
-    if let Some(pl) = app.playlists.get_mut(app.selected_playlist) {
-        let name = pl.name.clone();
+
+    let playlist_idx = app.selected_playlist;
+    let (exists, name) = if let Some(pl) = app.playlists.get(playlist_idx) {
+        (pl.songs.iter().any(|s| s.id == song.id), pl.name.clone())
+    } else {
+        return;
+    };
+
+    if exists {
+        app.set_flash(format!("Song already in {}", name), 3);
+        return;
+    }
+
+    if let Some(pl) = app.playlists.get_mut(playlist_idx) {
         pl.songs.push(song);
         app.set_flash(format!("Added to {}", name), 3);
     }
@@ -949,7 +991,7 @@ fn ensure_playlist_state(app: &mut App) {
 }
 
 fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
-    match event {
+    let cmd = match event {
         CoreEvent::SearchDone(songs) => {
             app.search_results = songs;
             app.selected_result = 0;
@@ -998,7 +1040,7 @@ fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
                 let _ = app.recently_played.pop_back();
             }
             let history: Vec<_> = app.recently_played.iter().cloned().collect();
-            save_recently_played(&history);
+            app.storage.save_recently_played(&history).expect("Failed to save recently played");
             app.set_flash(format!("Now playing: {} ({})", song.title, song.id), 4);
             None
         }
@@ -1074,7 +1116,21 @@ fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
             app.set_flash(msg, 6);
             None
         }
+        CoreEvent::LibraryRefreshDone => {
+            app.scanning = false;
+            if let Ok((window, offset, total)) = app.storage.fetch_local_songs_window(app.selected_local_song, 200) {
+                app.local_library_window = window;
+                app.local_library_offset = offset;
+                app.local_library_total = total;
+            }
+            app.set_flash("Library refreshed", 3);
+            None
+        }
+    };
+    if app.active_tab == Tab::Local {
+        update_local_library_window(app);
     }
+    cmd
 }
 
 fn map_plugin_action(action: PluginCoreAction) -> Option<CoreCmd> {
@@ -1303,7 +1359,7 @@ fn scroll_selection(app: &mut App, delta: isize) {
         Tab::Local => match app.focus {
             Focus::Results => {
                 if app.local_view_mode == crate::model::LocalViewMode::Flat {
-                    let len = app.local_library.len();
+                    let len = app.local_library_total;
                     if len > 0 {
                         app.selected_local_song = ((app.selected_local_song as isize + delta)
                             .clamp(0, len as isize - 1))
@@ -1312,25 +1368,25 @@ fn scroll_selection(app: &mut App, delta: isize) {
                 } else {
                     let len = match app.local_nav_level {
                         crate::model::LocalNavLevel::Artists => {
-                            let mut artists: Vec<_> = app.local_library.iter().map(|s| &s.artist).collect();
-                            artists.sort();
+                            let mut artists: Vec<_> = app.local_library_window.iter().map(|s| &s.artist).collect();
+                            artists.sort_by(|a, b| utils::natural_compare(a, b));
                             artists.dedup();
                             artists.len()
                         }
                         crate::model::LocalNavLevel::Albums => {
                             let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
-                            let mut albums: Vec<_> = app.local_library.iter()
+                            let mut albums: Vec<_> = app.local_library_window.iter()
                                 .filter(|s| s.artist == artist)
                                 .map(|s| &s.album)
                                 .collect();
-                            albums.sort();
+                            albums.sort_by(|a, b| utils::natural_compare(a, b));
                             albums.dedup();
                             albums.len()
                         }
                         crate::model::LocalNavLevel::Songs => {
                             let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
                             let album = app.local_nav_album.as_deref().unwrap_or("Unknown");
-                            app.local_library.iter()
+                            app.local_library_window.iter()
                                 .filter(|s| s.artist == artist && s.album == album)
                                 .count()
                         }
@@ -1353,6 +1409,20 @@ fn scroll_selection(app: &mut App, delta: isize) {
         },
         Tab::Options => {
             app.options_index = ((app.options_index as isize + delta).clamp(0, 10)) as usize;
+        }
+    }
+    if app.active_tab == Tab::Local {
+        update_local_library_window(app);
+    }
+}
+
+fn update_local_library_window(app: &mut App) {
+    let start = app.local_library_offset;
+    let end = start + app.local_library_window.len();
+    if app.selected_local_song < start || app.selected_local_song >= end {
+        if let Ok((window, offset, _total)) = app.storage.fetch_local_songs_window(app.selected_local_song, 200) {
+            app.local_library_window = window;
+            app.local_library_offset = offset;
         }
     }
 }
@@ -1380,3 +1450,4 @@ fn prev_repeat_mode(mode: RepeatMode) -> RepeatMode {
         RepeatMode::All => RepeatMode::One,
     }
 }
+
