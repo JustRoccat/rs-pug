@@ -1,3 +1,4 @@
+/* WARNING: Adding a function here is like playing Jenga with a live grenade. Change at your own risk. */
 use ratatui::{
     prelude::*,
     text::{Line, Span},
