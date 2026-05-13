@@ -9,7 +9,8 @@ Neovim out of music players. Search, queue, listen — no browser, no ads, no no
 
 ## Features
 
-- **YouTube search** and queue playback in TUI.
+- **YouTube & SoundCloud search** and queue playback in TUI.
+- **Switchable Search Sources**: Toggle between YouTube and SoundCloud in the Options tab or via CLI.
 - **Album search** support (Albums tab).
 - **Smart Queue**: Automatically find and play similar tracks.
 - **Local files playback** with metadata support (Artist/Album/Title).
@@ -23,6 +24,7 @@ Neovim out of music players. Search, queue, listen — no browser, no ads, no no
 - **Mouse support**: Scroll through lists and click tabs.
 - **Lua plugin system** for extending functionality.
 - **MPRIS support**: Media key and playerctl integration.
+- **Asynchronous Core**: High responsiveness; the UI remains fluid during searches and library scanning.
 
 ## Dependencies
 

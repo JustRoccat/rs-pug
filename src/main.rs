@@ -2,6 +2,7 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use anyhow::Result;
+use clap::{Parser, ValueEnum};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
@@ -23,7 +24,7 @@ mod storage;
 mod tui;
 mod utils;
 
-use config::{load_config, save_config};
+use config::{load_config, save_config, SearchSource};
 use core::{Core, CoreCmd, CoreEvent};
 use model::{
     eq_preset_bands, eq_preset_name, App, Focus, PlayerState, Playlist, RepeatMode, Tab,
@@ -32,10 +33,39 @@ use model::{
 use plugins::{PluginCoreAction, PluginDispatch, PluginEvent, PluginManager, PluginUiState};
 use storage::Storage;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about = "rs-pug music player", long_about = None)]
+struct Args {
+    /// Search source: youtube or soundcloud
+    #[arg(short, long)]
+    source: Option<SourceArg>,
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+enum SourceArg {
+    Youtube,
+    Soundcloud,
+}
+
+impl From<SourceArg> for SearchSource {
+    fn from(arg: SourceArg) -> Self {
+        match arg {
+            SourceArg::Youtube => SearchSource::YouTube,
+            SourceArg::Soundcloud => SearchSource::SoundCloud,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
     config::ensure_default_dirs();
-    let config = load_config();
+    let mut config = load_config();
+
+    if let Some(source_arg) = args.source {
+        config.search.source = SearchSource::from(source_arg);
+    }
+
     let plugin_manager = PluginManager::load(
         config.general.plugins_enabled,
         config.general.plugins_dir.as_str(),
@@ -46,7 +76,7 @@ async fn main() -> Result<()> {
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
 
     let core = Core::new(config.clone()).await?;
-    tokio::spawn(core.run(cmd_rx, evt_tx.clone()));
+    tokio::spawn(core.run(cmd_rx, evt_tx.clone(), cmd_tx.clone()));
 
     let storage = Storage::init().expect("Failed to init storage");
     let mut app = App::new(storage);
@@ -80,7 +110,9 @@ async fn main() -> Result<()> {
     let config_clone = config.clone();
     let evt_tx_clone = evt_tx.clone();
     tokio::spawn(async move {
-        let _ = core::check_and_refresh_library(&config_clone, &storage_clone);
+        let _ = tokio::task::spawn_blocking(move || {
+            core::check_and_refresh_library(&config_clone, &storage_clone)
+        }).await;
         let _ = evt_tx_clone.send(CoreEvent::LibraryRefreshDone);
     });
 
@@ -325,7 +357,7 @@ async fn main() -> Result<()> {
                                 2,
                             );
                         }
-                        KeyCode::Char('f') if app.active_tab == Tab::Options && app.options_index == 7 => {
+                        KeyCode::Char('f') if app.active_tab == Tab::Options && app.options_index == 8 => {
                             app.opt_editing = true;
                             app.opt_edit_buffer = "New Preset".to_string();
                             app.set_flash("Editing EQ Preset Name... (Enter to save)", 3);
@@ -333,7 +365,7 @@ async fn main() -> Result<()> {
                         KeyCode::Char('j') | KeyCode::Down => match app.focus {
                             Focus::Results => {
                                 if app.active_tab == Tab::Options {
-                                    app.options_index = (app.options_index + 1).min(10);
+                                    app.options_index = (app.options_index + 1).min(11);
                                 } else if app.active_tab == Tab::Library {
                                     if !app.playlists.is_empty() {
                                         app.selected_playlist = (app.selected_playlist + 1)
@@ -409,7 +441,7 @@ async fn main() -> Result<()> {
                         }
                         KeyCode::Enter => {
                             if app.active_tab == Tab::Options {
-                                if app.options_index == 2 {
+                                if app.options_index == 3 {
                                     if app.opt_editing {
                                         let new_dir = app.opt_edit_buffer.clone();
                                         app.opt_music_dirs = vec![new_dir];
@@ -421,7 +453,7 @@ async fn main() -> Result<()> {
                                         app.opt_edit_buffer = app.opt_music_dirs.first().cloned().unwrap_or_default();
                                         app.set_flash("Editing Music Directory... (Enter to save)", 3);
                                     }
-                                } else if app.options_index == 7 && app.opt_editing {
+                                } else if app.options_index == 8 && app.opt_editing {
                                     let name = app.opt_edit_buffer.clone();
                                     let preset = crate::config::EqPreset {
                                         name: name.clone(),
@@ -434,7 +466,7 @@ async fn main() -> Result<()> {
                                         app.set_flash(format!("Saved preset: {name}"), 3);
                                     }
                                     app.opt_editing = false;
-                                } else if app.options_index == 3 {
+                                } else if app.options_index == 4 {
                                     if let Some(current) = app.current_song.clone() {
                                         app.player_state = PlayerState::Searching;
                                         app.set_flash("Smart Queue: searching similar song...", 3);
@@ -445,7 +477,7 @@ async fn main() -> Result<()> {
                                             3,
                                         );
                                     }
-                                } else if app.options_index == 6 {
+                                } else if app.options_index == 7 {
                                     app.eq_enabled = !app.eq_enabled;
                                     if app.eq_enabled {
                                         send_eq_update(&cmd_tx, app.eq_bands);
@@ -454,7 +486,7 @@ async fn main() -> Result<()> {
                                         send_eq_update(&cmd_tx, [0.0f32; 10]);
                                         app.set_flash("Equalizer OFF", 2);
                                     }
-                                } else if app.options_index == 7 {
+                                } else if app.options_index == 8 {
                                     cycle_eq_preset(&mut app, &cmd_tx, 1);
                                 }
                                 continue;
@@ -652,51 +684,71 @@ async fn main() -> Result<()> {
                         KeyCode::Char('h') | KeyCode::Left if app.active_tab == Tab::Options => {
                             match app.options_index {
                                 0 => {
-                                    app.opt_search_limit =
-                                        app.opt_search_limit.saturating_sub(1).max(1)
+                                    app.opt_source = match app.opt_source {
+                                        crate::config::SearchSource::YouTube => crate::config::SearchSource::SoundCloud,
+                                        crate::config::SearchSource::SoundCloud => crate::config::SearchSource::YouTube,
+                                    };
+                                    let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(app.opt_source));
+                                    save_config(&app.build_config());
+                                    app.set_flash(format!("Search source: {}", if matches!(app.opt_source, crate::config::SearchSource::YouTube) { "YouTube" } else { "SoundCloud" }), 2);
                                 }
-                                1 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                                4 => app.opt_theme = prev_theme(app.opt_theme.clone()),
+                                1 => {
+                                    app.opt_search_limit =
+                                        app.opt_search_limit.saturating_sub(1).max(1);
+                                }
+                                2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
                                 5 => {
+                                    app.opt_theme = prev_theme(app.opt_theme.clone());
+                                }
+                                6 => {
                                     app.repeat_mode = prev_repeat_mode(app.repeat_mode);
                                     app.set_flash(
                                         format!("Repeat mode: {}", app.repeat_mode.label()),
                                         2,
                                     );
                                 }
-                                6 => {
+                                7 => {
                                     if app.eq_focus_band > 0 {
                                         app.eq_focus_band -= 1;
                                     }
                                 }
-                                7 => cycle_eq_preset(&mut app, &cmd_tx, -1),
-                                8 => app.key_next = cycle_keybind_char(app.key_next, -1),
-                                9 => app.key_prev = cycle_keybind_char(app.key_prev, -1),
-                                10 => app.key_mute = cycle_keybind_char(app.key_mute, -1),
+                                8 => cycle_eq_preset(&mut app, &cmd_tx, -1),
+                                9 => app.key_next = cycle_keybind_char(app.key_next, -1),
+                                10 => app.key_prev = cycle_keybind_char(app.key_prev, -1),
+                                11 => app.key_mute = cycle_keybind_char(app.key_mute, -1),
                                 _ => {}
                             }
                         }
                         KeyCode::Char('l') | KeyCode::Right if app.active_tab == Tab::Options => {
                             match app.options_index {
-                                0 => app.opt_search_limit = (app.opt_search_limit + 1).min(50),
-                                1 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                                4 => app.opt_theme = next_theme(app.opt_theme.clone()),
-                                5 => {
+                                0 => {
+                                    app.opt_source = match app.opt_source {
+                                        crate::config::SearchSource::YouTube => crate::config::SearchSource::SoundCloud,
+                                        crate::config::SearchSource::SoundCloud => crate::config::SearchSource::YouTube,
+                                    };
+                                    let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(app.opt_source));
+                                    save_config(&app.build_config());
+                                    app.set_flash(format!("Search source: {}", if matches!(app.opt_source, crate::config::SearchSource::YouTube) { "YouTube" } else { "SoundCloud" }), 2);
+                                }
+                                1 => app.opt_search_limit = (app.opt_search_limit + 1).min(50),
+                                2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
+                                5 => app.opt_theme = next_theme(app.opt_theme.clone()),
+                                6 => {
                                     app.repeat_mode = app.repeat_mode.next();
                                     app.set_flash(
                                         format!("Repeat mode: {}", app.repeat_mode.label()),
                                         2,
                                     );
                                 }
-                                6 => {
+                                7 => {
                                     if app.eq_focus_band < 9 {
                                         app.eq_focus_band += 1;
                                     }
                                 }
-                                7 => cycle_eq_preset(&mut app, &cmd_tx, 1),
-                                8 => app.key_next = cycle_keybind_char(app.key_next, 1),
-                                9 => app.key_prev = cycle_keybind_char(app.key_prev, 1),
-                                10 => app.key_mute = cycle_keybind_char(app.key_mute, 1),
+                                8 => cycle_eq_preset(&mut app, &cmd_tx, 1),
+                                9 => app.key_next = cycle_keybind_char(app.key_next, 1),
+                                10 => app.key_prev = cycle_keybind_char(app.key_prev, 1),
+                                11 => app.key_mute = cycle_keybind_char(app.key_mute, 1),
                                 _ => {}
                             }
                         }
@@ -709,7 +761,7 @@ async fn main() -> Result<()> {
                             app.set_flash("Saved settings to ~/.config/rs-pug/config.toml", 4);
                         }
                         KeyCode::Char('+') | KeyCode::Char('=')
-                            if app.active_tab == Tab::Options && app.options_index == 6 =>
+                            if app.active_tab == Tab::Options && app.options_index == 7 =>
                         {
                             let b = app.eq_focus_band;
                             app.eq_bands[b] = (app.eq_bands[b] + 1.0).min(12.0);
@@ -718,7 +770,7 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Char('-')
-                            if app.active_tab == Tab::Options && app.options_index == 6 =>
+                            if app.active_tab == Tab::Options && app.options_index == 7 =>
                         {
                             let b = app.eq_focus_band;
                             app.eq_bands[b] = (app.eq_bands[b] - 1.0).max(-12.0);
@@ -727,7 +779,7 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Char('0')
-                            if app.active_tab == Tab::Options && app.options_index == 6 =>
+                            if app.active_tab == Tab::Options && app.options_index == 7 =>
                         {
                             app.eq_bands = [0.0f32; 10];
                             app.eq_preset_index = 0;
@@ -1408,7 +1460,7 @@ fn scroll_selection(app: &mut App, delta: isize) {
             Focus::Search => {}
         },
         Tab::Options => {
-            app.options_index = ((app.options_index as isize + delta).clamp(0, 10)) as usize;
+            app.options_index = ((app.options_index as isize + delta).clamp(0, 11)) as usize;
         }
     }
     if app.active_tab == Tab::Local {
@@ -1451,3 +1503,5 @@ fn prev_repeat_mode(mode: RepeatMode) -> RepeatMode {
     }
 }
 
+/* todo: 
+ * add update reminder*/

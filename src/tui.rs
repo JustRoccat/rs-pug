@@ -15,6 +15,13 @@ fn palette(theme: Theme) -> Palette {
     crate::config::load_palette(&theme)
 }
 
+fn search_source_label(source: &crate::config::SearchSource) -> String {
+    match source {
+        crate::config::SearchSource::YouTube => "YouTube".to_string(),
+        crate::config::SearchSource::SoundCloud => "SoundCloud".to_string(),
+    }
+}
+
 const VOLT_BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 const SPECTRUM_COLORS: [Color; 12] = [
@@ -227,6 +234,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             "Equalizer      OFF  (Enter to enable)".to_owned()
         };
         let rows: Vec<(&str, String)> = vec![
+            ("⊞", format!("Search source  {}", search_source_label(&app.opt_source))),
             ("⊞", format!("Search limit   {}", app.opt_search_limit)),
             ("⊞", format!("MPV socket     {}", app.opt_socket)),
             ("⊞", if app.opt_editing && app.options_index == 2 {
@@ -1028,7 +1036,7 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
             break;
         }
 
-        let focused = i == app.eq_focus_band && app.options_index == 5;
+        let focused = i == app.eq_focus_band && app.options_index == 7;
         let band_color = if focused {
             anim
         } else if app.eq_enabled {

@@ -178,16 +178,32 @@ impl Default for KeybindsConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchSource {
+    YouTube,
+    SoundCloud,
+}
+
+impl Default for SearchSource {
+    fn default() -> Self {
+        SearchSource::YouTube
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchConfig {
     #[serde(default = "default_limit")]
     pub limit: u8,
+    #[serde(default)]
+    pub source: SearchSource,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
             limit: default_limit(),
+            source: SearchSource::default(),
         }
     }
 }

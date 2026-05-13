@@ -32,7 +32,10 @@ pub enum CoreCmd {
     ToggleMute,
     Next,
     Prev,
+    UpdateSearchSource(crate::config::SearchSource),
     Quit,
+    HandleSearchDone(Vec<Song>),
+    HandleAlbumSearchDone(Vec<crate::model::Album>),
 }
 
 #[derive(Debug)]
@@ -102,6 +105,7 @@ impl Core {
         mut self,
         mut rx: mpsc::UnboundedReceiver<CoreCmd>,
         tx: mpsc::UnboundedSender<CoreEvent>,
+        cmd_tx: mpsc::UnboundedSender<CoreCmd>,
     ) {
         let mut tick = time::interval(Duration::from_millis(700));
         loop {
@@ -120,32 +124,51 @@ impl Core {
                         CoreCmd::Search(query) => {
                             let limit = self.config.search.limit.max(1);
                             let query = self.plugins.transform_search_query(query);
-                            match search_songs(limit, query).await {
-                                Ok(songs) => {
-                                    let songs = self.plugins.transform_search_results(songs);
-                                    let _ = tx.send(CoreEvent::SearchDone(songs));
+                            let source = self.config.search.source;
+                            let cmd_tx = cmd_tx.clone();
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                match search_songs(limit, query, source).await {
+                                    Ok(songs) => {
+                                        let _ = cmd_tx.send(CoreCmd::HandleSearchDone(songs));
+                                    }
+                                    Err(err) => {
+                                        let _ = tx.send(CoreEvent::SearchFailed(format!("{err:#}")));
+                                    }
                                 }
-                                Err(err) => {
-                                    let _ = tx.send(CoreEvent::SearchFailed(format!("{err:#}")));
-                                }
-                            }
+                            });
                             Ok(())
                         }
                         CoreCmd::SearchAlbums(query) => {
                             let limit = self.config.search.limit.max(1);
                             let query = self.plugins.transform_search_query(query);
-                            match search_albums(limit, query).await {
-                                Ok(albums) => {
-                                    let _ = tx.send(CoreEvent::AlbumSearchDone(albums));
+                            let source = self.config.search.source;
+                            let cmd_tx = cmd_tx.clone();
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                match search_albums(limit, query, source).await {
+                                    Ok(albums) => {
+                                        let _ = cmd_tx.send(CoreCmd::HandleAlbumSearchDone(albums));
+                                    }
+                                    Err(err) => {
+                                        let _ = tx.send(CoreEvent::AlbumSearchFailed(format!("{err:#}")));
+                                    }
                                 }
-                                Err(err) => {
-                                    let _ = tx.send(CoreEvent::AlbumSearchFailed(format!("{err:#}")));
-                                }
-                            }
+                            });
                             Ok(())
                         }
                         CoreCmd::Play(song) => self.play(song, &tx).await,
-                        CoreCmd::SmartQueue(song) => self.smart_queue(song, &tx).await,
+                        CoreCmd::SmartQueue(song) => {
+                            let source = self.config.search.source;
+                            let tx = tx.clone();
+                            let cmd_tx = cmd_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = perform_smart_queue(song, source, cmd_tx).await {
+                                    let _ = tx.send(CoreEvent::Error(format!("{err:#}")));
+                                }
+                            });
+                            Ok(())
+                        }
                         CoreCmd::TogglePause => self.toggle_pause(&tx).await,
                         CoreCmd::VolumeUp => self.change_volume(5, &tx).await,
                         CoreCmd::VolumeDown => self.change_volume(-5, &tx).await,
@@ -167,6 +190,19 @@ impl Core {
                         CoreCmd::ToggleMute => self.toggle_mute(&tx).await,
                         CoreCmd::Next => self.next(&tx).await,
                         CoreCmd::Prev => self.prev(&tx).await,
+                        CoreCmd::UpdateSearchSource(source) => {
+                            self.config.search.source = source;
+                            Ok(())
+                        }
+                        CoreCmd::HandleSearchDone(songs) => {
+                            let songs = self.plugins.transform_search_results(songs);
+                            let _ = tx.send(CoreEvent::SearchDone(songs));
+                            Ok(())
+                        }
+                        CoreCmd::HandleAlbumSearchDone(albums) => {
+                            let _ = tx.send(CoreEvent::AlbumSearchDone(albums));
+                            Ok(())
+                        }
                         CoreCmd::Quit => break,
                     };
 
@@ -192,29 +228,6 @@ impl Core {
         self.was_playing = true;
         let _ = tx.send(CoreEvent::Started(song));
         Ok(())
-    }
-
-    async fn smart_queue(
-        &mut self,
-        current: Song,
-        tx: &mpsc::UnboundedSender<CoreEvent>,
-    ) -> Result<()> {
-        let query = current
-            .uploader
-            .as_ref()
-            .map(|u| format!("{u} {}", current.title))
-            .unwrap_or_else(|| current.title.clone());
-        let candidates = search_songs(8, query).await?;
-        let maybe_next = candidates
-            .into_iter()
-            .find(|song| song.id != current.id && song.title != current.title);
-
-        if let Some(next_song) = maybe_next {
-            self.play(next_song, tx).await?;
-            Ok(())
-        } else {
-            anyhow::bail!("smart queue: no similar song found")
-        }
     }
 
     async fn toggle_pause(&self, tx: &mpsc::UnboundedSender<CoreEvent>) -> Result<()> {
@@ -425,12 +438,39 @@ struct FlatEntry {
     id: String,
     title: String,
     url: String,
+    webpage_url: Option<String>,
     #[serde(default)]
     uploader: Option<String>,
 }
 
-async fn search_songs(limit: u8, query: String) -> Result<Vec<Song>> {
-    let needle = format!("ytsearch{limit}:{query}");
+async fn perform_smart_queue(
+    current: Song,
+    source: crate::config::SearchSource,
+    cmd_tx: mpsc::UnboundedSender<CoreCmd>,
+) -> Result<()> {
+    let query = current
+        .uploader
+        .as_ref()
+        .map(|u| format!("{u} {}", current.title))
+        .unwrap_or_else(|| current.title.clone());
+    let candidates = search_songs(8, query, source).await?;
+    let maybe_next = candidates
+        .into_iter()
+        .find(|song| song.id != current.id && song.title != current.title);
+
+    if let Some(next_song) = maybe_next {
+        let _ = cmd_tx.send(CoreCmd::Play(next_song));
+        Ok(())
+    } else {
+        anyhow::bail!("smart queue: no similar song found")
+    }
+}
+
+async fn search_songs(limit: u8, query: String, source: crate::config::SearchSource) -> Result<Vec<Song>> {
+    let needle = match source {
+        crate::config::SearchSource::YouTube => format!("ytsearch{limit}:{query}"),
+        crate::config::SearchSource::SoundCloud => format!("scsearch{limit}:{query}"),
+    };
     let output = Command::new("yt-dlp")
         .arg("--flat-playlist")
         .arg("--dump-single-json")
@@ -453,20 +493,29 @@ async fn search_songs(limit: u8, query: String) -> Result<Vec<Song>> {
     let songs = parsed
         .entries
         .into_iter()
-        .map(|e| Song {
-            id: e.id.clone(),
-            title: e.title,
-            webpage_url: format!("https://www.youtube.com/watch?v={}", e.id),
-            uploader: e.uploader,
-            duration: None,
+        .map(|e| {
+            let webpage_url = match source {
+                crate::config::SearchSource::YouTube => format!("https://www.youtube.com/watch?v={}", e.id),
+                crate::config::SearchSource::SoundCloud => e.webpage_url.clone().unwrap_or_else(|| e.url.clone()),
+            };
+            Song {
+                id: e.id.clone(),
+                title: e.title,
+                webpage_url,
+                uploader: e.uploader,
+                duration: None,
+            }
         })
         .collect();
 
     Ok(songs)
 }
 
-async fn search_albums(limit: u8, query: String) -> Result<Vec<crate::model::Album>> {
-    let needle = format!("ytsearch{limit}:{query} full album");
+async fn search_albums(limit: u8, query: String, source: crate::config::SearchSource) -> Result<Vec<crate::model::Album>> {
+    let needle = match source {
+        crate::config::SearchSource::YouTube => format!("ytsearch{limit}:{query} full album"),
+        crate::config::SearchSource::SoundCloud => format!("scsearch{limit}:{query} full album"),
+    };
     let output = Command::new("yt-dlp")
         .arg("--flat-playlist")
         .arg("--dump-single-json")
@@ -487,10 +536,14 @@ async fn search_albums(limit: u8, query: String) -> Result<Vec<crate::model::Alb
         let title_lower = entry.title.to_lowercase();
         if title_lower.contains("full album") || title_lower.contains("complete album") || title_lower.contains("full album") {
             let artist = entry.uploader.clone().unwrap_or_else(|| "Unknown Artist".to_string());
+            let webpage_url = match source {
+                crate::config::SearchSource::YouTube => format!("https://www.youtube.com/watch?v={}", entry.id),
+                crate::config::SearchSource::SoundCloud => entry.webpage_url.clone().unwrap_or_else(|| entry.url.clone()),
+            };
             let song = Song {
                 id: entry.id.clone(),
                 title: entry.title.clone(),
-                webpage_url: entry.url.clone(),
+                webpage_url,
                 uploader: Some(artist.clone()),
                 duration: None,
             };
