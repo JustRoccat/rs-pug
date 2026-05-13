@@ -1504,4 +1504,5 @@ fn prev_repeat_mode(mode: RepeatMode) -> RepeatMode {
 }
 
 /* todo: 
- * add update reminder*/
+ * add update reminder
+ make main into smaller chunks because this shit is big as fuck*/
