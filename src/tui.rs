@@ -180,7 +180,7 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
 
     let content = if active_query.is_empty() && !app.search_mode {
         Line::from(Span::styled(
-            "  search YouTube...",
+            format!("  search {}...", search_source_label(&app.opt_source)),
             Style::default().fg(pal.get_color("dim")).add_modifier(Modifier::ITALIC),
         ))
     } else {
@@ -646,7 +646,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
 
     
     let items: Vec<ListItem> = if app.active_tab == Tab::Options {
-        if app.options_index == 6 || app.options_index == 7 {
+        if app.options_index == 7 || app.options_index == 8 {
             
             draw_eq_panel(frame, app, pal, anim, chunks[0]);
             
