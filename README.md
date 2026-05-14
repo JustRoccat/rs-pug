@@ -159,6 +159,9 @@ Plugin system is Lua-based. If you know Lua, example plugins / plugin PRs are ve
 
 Now you can see examples and you can download plugins, themes, eqpresets here: https://github.com/JustRoccat/all-rspug/
 
+We have a discord server now, i will post there updates about the project and news!
+https://discord.gg/6FcBWwRQBX
+
 ![gif](https://github.com/user-attachments/assets/43e4fc61-cd06-43a3-872c-632059467259)
 
 ## License
