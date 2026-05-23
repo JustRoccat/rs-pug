@@ -1,9 +1,10 @@
 use std::{
-    collections::{VecDeque},
+    collections::VecDeque,
     time::{Duration, Instant},
 };
 
 use crate::config::{Config, GeneralConfig, KeybindsConfig, MpvConfig, SearchConfig, Theme};
+use crate::plugins::{PluginPanel, PluginTab};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -89,7 +90,6 @@ pub enum LocalNavLevel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-
     Search,
     Results,
     Queue,
@@ -136,7 +136,9 @@ pub fn eq_preset_name(app: &App, index: usize) -> String {
     if idx < EQ_PRESET_NAMES.len() {
         EQ_PRESET_NAMES[idx].to_string()
     } else {
-        app.custom_eq_presets[idx - EQ_PRESET_NAMES.len()].name.clone()
+        app.custom_eq_presets[idx - EQ_PRESET_NAMES.len()]
+            .name
+            .clone()
     }
 }
 
@@ -223,6 +225,9 @@ pub struct App {
     pub local_nav_album: Option<String>,
     pub selected_local_nav_idx: usize,
     pub adding_song_to_playlist: bool,
+    pub plugin_panels: Vec<PluginPanel>,
+    pub plugin_tabs: Vec<PluginTab>,
+    pub active_plugin_tab: Option<String>,
     pub storage: crate::storage::Storage,
 }
 
@@ -292,6 +297,9 @@ impl App {
             local_nav_album: None,
             selected_local_nav_idx: 0,
             adding_song_to_playlist: false,
+            plugin_panels: Vec::new(),
+            plugin_tabs: Vec::new(),
+            active_plugin_tab: None,
             storage,
         }
     }
@@ -347,7 +355,9 @@ impl App {
                 .and_then(|p| p.songs.get(self.selected_playlist_song).cloned()),
             Tab::Local => match self.focus {
                 Focus::Results => {
-                    let relative_idx = self.selected_local_song.saturating_sub(self.local_library_offset);
+                    let relative_idx = self
+                        .selected_local_song
+                        .saturating_sub(self.local_library_offset);
                     self.local_library_window.get(relative_idx).map(Song::from)
                 }
                 Focus::Queue => self.queue_selection().cloned(),

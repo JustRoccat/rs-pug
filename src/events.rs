@@ -1,8 +1,8 @@
-use tokio::sync::mpsc;
-use crate::model::{App, Focus, PlayerState, RepeatMode, Tab};
 use crate::core::{CoreCmd, CoreEvent};
+use crate::model::{App, Focus, PlayerState, RepeatMode, Tab};
 use crate::plugins::{PluginCoreAction, PluginDispatch, PluginEvent};
 use crate::ui_helpers;
+use tokio::sync::mpsc;
 
 pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
     let cmd = match event {
@@ -54,7 +54,9 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
                 let _ = app.recently_played.pop_back();
             }
             let history: Vec<_> = app.recently_played.iter().cloned().collect();
-            app.storage.save_recently_played(&history).expect("Failed to save recently played");
+            app.storage
+                .save_recently_played(&history)
+                .expect("Failed to save recently played");
             app.set_flash(format!("Now playing: {} ({})", song.title, song.id), 4);
             None
         }
@@ -132,7 +134,10 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
         }
         CoreEvent::LibraryRefreshDone => {
             app.scanning = false;
-            if let Ok((window, offset, total)) = app.storage.fetch_local_songs_window(app.selected_local_song, 200) {
+            if let Ok((window, offset, total)) = app
+                .storage
+                .fetch_local_songs_window(app.selected_local_song, 200)
+            {
                 app.local_library_window = window;
                 app.local_library_offset = offset;
                 app.local_library_total = total;
@@ -170,7 +175,13 @@ pub fn apply_plugin_dispatch(
     dispatch: PluginDispatch,
 ) -> bool {
     if let Some(tab) = dispatch.ui.set_tab {
-        app.active_tab = parse_tab_name(&tab).unwrap_or(app.active_tab);
+        if let Some(core_tab) = parse_tab_name(&tab) {
+            app.active_tab = core_tab;
+            app.active_plugin_tab = None;
+        } else if app.plugin_tabs.iter().any(|t| t.id == tab) {
+            app.active_tab = Tab::Options;
+            app.active_plugin_tab = Some(tab);
+        }
     }
     if let Some(query) = dispatch.ui.set_search_query {
         app.search_query = query;
@@ -188,9 +199,18 @@ pub fn apply_plugin_dispatch(
         app.selected_result = index.min(app.search_results.len().saturating_sub(1));
     }
     if let Some(index) = dispatch.ui.set_selected_album_result {
-        let total_items: usize = app.album_results.iter().enumerate().map(|(i, a)| {
-            1 + if app.album_expanded.get(i).copied().unwrap_or(false) { a.songs.len() } else { 0 }
-        }).sum();
+        let total_items: usize = app
+            .album_results
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                1 + if app.album_expanded.get(i).copied().unwrap_or(false) {
+                    a.songs.len()
+                } else {
+                    0
+                }
+            })
+            .sum();
         app.selected_album_result = index.min(total_items.saturating_sub(1));
     }
     if let Some(index) = dispatch.ui.set_selected_queue {

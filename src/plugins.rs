@@ -76,6 +76,33 @@ pub struct PluginEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum PluginPanelItem {
+    Text { text: String },
+    Info { text: String },
+    Option { key: String, value: String },
+    Stat { label: String, value: String },
+    Separator,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginPanel {
+    pub title: String,
+    #[serde(default)]
+    pub lines: Vec<String>,
+    #[serde(default)]
+    pub items: Vec<PluginPanelItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginTab {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginUiState {
     pub active_tab: String,
     pub player_state: String,
@@ -228,6 +255,59 @@ impl PluginManager {
         merged
     }
 
+    pub fn collect_tabs(&self, state: &PluginUiState) -> Vec<PluginTab> {
+        let mut tabs = Vec::new();
+        for plugin in &self.plugins {
+            let Some(func) = self.read_hook(plugin, "on_tabs") else {
+                continue;
+            };
+            let Ok(state_lua) = plugin.lua.to_value(state) else {
+                continue;
+            };
+            let Ok(output) = func.call::<Value>(state_lua) else {
+                continue;
+            };
+            if output.is_nil() {
+                continue;
+            }
+            if let Ok(mut plugin_tabs) = plugin.lua.from_value::<Vec<PluginTab>>(output) {
+                tabs.append(&mut plugin_tabs);
+            }
+        }
+        tabs
+    }
+
+    pub fn collect_ui_panels(&self, state: &PluginUiState) -> Vec<PluginPanel> {
+        let mut panels = Vec::new();
+        for plugin in &self.plugins {
+            let Some(func) = self.read_hook(plugin, "on_ui_panels") else {
+                continue;
+            };
+            let Ok(state_lua) = plugin.lua.to_value(state) else {
+                continue;
+            };
+            let Ok(output) = func.call::<Value>(state_lua) else {
+                continue;
+            };
+            if output.is_nil() {
+                continue;
+            }
+            if let Ok(mut plugin_panels) = plugin.lua.from_value::<Vec<PluginPanel>>(output) {
+                for panel in &mut plugin_panels {
+                    if panel.items.is_empty() && !panel.lines.is_empty() {
+                        panel.items = panel
+                            .lines
+                            .iter()
+                            .cloned()
+                            .map(|text| PluginPanelItem::Text { text })
+                            .collect();
+                    }
+                }
+                panels.append(&mut plugin_panels);
+            }
+        }
+        panels
+    }
     fn merge_dispatch(&self, merged: &mut PluginDispatch, plugin: &LuaPlugin, output: Value) {
         if output.is_nil() {
             return;
@@ -302,5 +382,89 @@ impl PluginManager {
             }
         }
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn collects_ui_panels_from_lua_hook() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let plugin_path = dir.path().join("panel.lua");
+        fs::write(
+            &plugin_path,
+            r#"
+plugin = {}
+function plugin.on_ui_panels(state)
+  return {
+    {
+      title = "Stats",
+      items = {
+        { type = "text", text = "tab:" .. state.active_tab },
+        { type = "option", key = "source", value = "youtube" },
+        { type = "stat", label = "vol", value = tostring(state.volume) }
+      }
+    }
+  }
+end
+return plugin
+"#,
+        )
+        .expect("write plugin");
+
+        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"));
+        let state = PluginUiState::from_runtime(
+            Tab::Discover,
+            "playing",
+            70,
+            false,
+            RepeatMode::Off,
+            String::new(),
+            String::new(),
+            1,
+        );
+
+        let panels = manager.collect_ui_panels(&state);
+        assert_eq!(panels.len(), 1);
+        assert_eq!(panels[0].title, "Stats");
+        assert!(matches!(panels[0].items[0], PluginPanelItem::Text { .. }));
+        assert!(matches!(panels[0].items[1], PluginPanelItem::Option { .. }));
+        assert!(matches!(panels[0].items[2], PluginPanelItem::Stat { .. }));
+    }
+
+    #[test]
+    fn collects_legacy_lines_as_text_items() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let plugin_path = dir.path().join("panel.lua");
+        fs::write(
+            &plugin_path,
+            r#"
+plugin = {}
+function plugin.on_ui_panels(state)
+  return {
+    { title = "Legacy", lines = {"a", "b"} }
+  }
+end
+return plugin
+"#,
+        )
+        .expect("write plugin");
+        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"));
+        let state = PluginUiState::from_runtime(
+            Tab::Discover,
+            "idle",
+            10,
+            false,
+            RepeatMode::Off,
+            String::new(),
+            String::new(),
+            0,
+        );
+        let panels = manager.collect_ui_panels(&state);
+        assert_eq!(panels[0].items.len(), 2);
+        assert!(matches!(panels[0].items[0], PluginPanelItem::Text { .. }));
     }
 }

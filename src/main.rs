@@ -2,28 +2,24 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::{
-    event::{
-        self, Event,
-    },
-};
+use crossterm::event::{self, Event};
 use tokio::sync::mpsc;
 
-mod config;
-mod input;
 mod cli;
+mod config;
 mod core;
 mod db;
+mod eq;
+mod events;
+mod input;
 mod model;
+mod playlist;
 mod plugins;
 mod storage;
-mod tui;
-mod utils;
 mod terminal;
-mod eq;
+mod tui;
 mod ui_helpers;
-mod events;
-mod playlist;
+mod utils;
 
 use config::{load_config, SearchSource};
 use core::{Core, CoreCmd, CoreEvent};
@@ -87,7 +83,8 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || {
             core::check_and_refresh_library(&config_clone, &storage_clone)
-        }).await;
+        })
+        .await;
         let _ = evt_tx_clone.send(CoreEvent::LibraryRefreshDone);
     });
 
@@ -105,6 +102,13 @@ async fn main() -> Result<()> {
             app.album_search_query.clone(),
             app.queue.len(),
         );
+        app.plugin_tabs = plugin_manager.collect_tabs(&ui_state);
+        if let Some(active) = app.active_plugin_tab.clone() {
+            if !app.plugin_tabs.iter().any(|t| t.id == active) {
+                app.active_plugin_tab = None;
+            }
+        }
+        app.plugin_panels = plugin_manager.collect_ui_panels(&ui_state);
         app.anim_tick = app.anim_tick.wrapping_add(1);
         terminal.draw(|frame| tui::draw(frame, &app))?;
 
@@ -113,10 +117,7 @@ async fn main() -> Result<()> {
             if let Some(cmd) = events::apply_event(&mut app, event) {
                 let _ = cmd_tx.send(cmd);
             }
-            let dispatch = plugin_manager.dispatch_event(
-                &plugin_event,
-                &ui_state,
-            );
+            let dispatch = plugin_manager.dispatch_event(&plugin_event, &ui_state);
             if events::apply_plugin_dispatch(&mut app, &cmd_tx, dispatch) {
                 continue;
             }
@@ -128,7 +129,8 @@ async fn main() -> Result<()> {
                     input::handle_mouse_event(&mut app, mouse);
                 }
                 Event::Key(key) => {
-                    if !input::handle_key_event(&mut app, key, &ui_state, &plugin_manager, &cmd_tx) {
+                    if !input::handle_key_event(&mut app, key, &ui_state, &plugin_manager, &cmd_tx)
+                    {
                         break;
                     }
                 }

@@ -1,13 +1,15 @@
-use crossterm::event::{KeyEvent, MouseEvent, KeyEventKind, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
-use tokio::sync::mpsc;
-use crate::model::{App, Focus, LocalNavLevel, LocalViewMode, PlayerState, Tab, Song};
-use crate::plugins::{PluginManager, PluginUiState};
+use crate::config::{save_config, EqPreset, SearchSource};
 use crate::core::CoreCmd;
-use crate::ui_helpers;
-use crate::playlist;
 use crate::eq;
-use crate::config::{save_config, SearchSource, EqPreset};
 use crate::events;
+use crate::model::{App, Focus, LocalNavLevel, LocalViewMode, PlayerState, Song, Tab};
+use crate::playlist;
+use crate::plugins::{PluginManager, PluginUiState};
+use crate::ui_helpers;
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use tokio::sync::mpsc;
 
 pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
@@ -21,17 +23,35 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
         }
         MouseEventKind::Down(MouseButton::Left) => {
             if mouse.row <= 2 {
-                app.active_tab = if mouse.column < 16 {
-                    Tab::Discover
-                } else if mouse.column < 32 {
-                    Tab::Albums
-                } else if mouse.column < 48 {
-                    Tab::Library
-                } else if mouse.column < 64 {
-                    Tab::Local
-                } else {
-                    Tab::Options
-                };
+                let tab_idx = (mouse.column / 16) as usize;
+                match tab_idx {
+                    0 => {
+                        app.active_tab = Tab::Discover;
+                        app.active_plugin_tab = None;
+                    }
+                    1 => {
+                        app.active_tab = Tab::Albums;
+                        app.active_plugin_tab = None;
+                    }
+                    2 => {
+                        app.active_tab = Tab::Library;
+                        app.active_plugin_tab = None;
+                    }
+                    3 => {
+                        app.active_tab = Tab::Local;
+                        app.active_plugin_tab = None;
+                    }
+                    4 => {
+                        app.active_tab = Tab::Options;
+                        app.active_plugin_tab = None;
+                    }
+                    n => {
+                        if let Some(tab) = app.plugin_tabs.get(n.saturating_sub(5)) {
+                            app.active_tab = Tab::Options;
+                            app.active_plugin_tab = Some(tab.id.clone());
+                        }
+                    }
+                }
             }
         }
         _ => {}
@@ -49,9 +69,7 @@ pub fn handle_key_event(
         return true;
     }
 
-    if key.code == KeyCode::Char('c')
-        && key.modifiers.contains(KeyModifiers::CONTROL)
-    {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return false;
     }
 
@@ -71,8 +89,8 @@ pub fn handle_key_event(
         match key.code {
             KeyCode::Esc => app.context_open = false,
             KeyCode::Char('j') | KeyCode::Down => {
-                app.context_index = (app.context_index + 1)
-                    .min(context_menu_len(app).saturating_sub(1));
+                app.context_index =
+                    (app.context_index + 1).min(context_menu_len(app).saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 app.context_index = app.context_index.saturating_sub(1);
@@ -98,7 +116,9 @@ pub fn handle_key_event(
                     app.selected_playlist = app
                         .selected_playlist
                         .min(app.playlists.len().saturating_sub(1));
-                    app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
+                    app.storage
+                        .save_playlists(&app.playlists)
+                        .expect("Failed to save playlists");
                     app.set_flash(format!("Deleted {}", deleted.name), 3);
                     playlist::ensure_playlist_state(app);
                 }
@@ -152,47 +172,71 @@ pub fn handle_key_event(
     }
 
     let key_label = ui_helpers::describe_key_event(&key.code);
-    let plugin_dispatch = plugin_manager.dispatch_key(
-        key_label.as_str(),
-        ui_state,
-    );
+    let plugin_dispatch = plugin_manager.dispatch_key(key_label.as_str(), ui_state);
     if events::apply_plugin_dispatch(app, cmd_tx, plugin_dispatch) {
         return true;
     }
 
     match key.code {
-        KeyCode::Char('1') => app.active_tab = Tab::Discover,
-        KeyCode::Char('2') => app.active_tab = Tab::Albums,
-        KeyCode::Char('3') => app.active_tab = Tab::Library,
-        KeyCode::Char('4') => app.active_tab = Tab::Local,
-        KeyCode::Char('5') => app.active_tab = Tab::Options,
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            let idx = c.to_digit(10).unwrap_or(0) as usize;
+            match idx {
+                1 => {
+                    app.active_tab = Tab::Discover;
+                    app.active_plugin_tab = None;
+                }
+                2 => {
+                    app.active_tab = Tab::Albums;
+                    app.active_plugin_tab = None;
+                }
+                3 => {
+                    app.active_tab = Tab::Library;
+                    app.active_plugin_tab = None;
+                }
+                4 => {
+                    app.active_tab = Tab::Local;
+                    app.active_plugin_tab = None;
+                }
+                5 => {
+                    app.active_tab = Tab::Options;
+                    app.active_plugin_tab = None;
+                }
+                n if n >= 6 => {
+                    let plugin_idx = n - 6;
+                    if let Some(tab) = app.plugin_tabs.get(plugin_idx) {
+                        app.active_tab = Tab::Options;
+                        app.active_plugin_tab = Some(tab.id.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
         KeyCode::Char('a') if app.active_tab == Tab::Library => {
             let name = format!("Playlist {}", app.playlists.len() + 1);
             playlist::create_empty_playlist(app, &name);
-            app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
+            app.storage
+                .save_playlists(&app.playlists)
+                .expect("Failed to save playlists");
             app.set_flash(format!("Created {name}"), 3);
             playlist::ensure_playlist_state(app);
         }
         KeyCode::Char('x') if app.active_tab == Tab::Library => {
             if app.selected_playlist < app.playlists.len() {
                 app.confirm_delete_playlist = true;
-                app.delete_playlist_name =
-                    app.playlists[app.selected_playlist].name.clone();
+                app.delete_playlist_name = app.playlists[app.selected_playlist].name.clone();
             }
         }
         KeyCode::Char('e') if app.active_tab == Tab::Library => {
-            if let Some(open) = app.playlist_expanded.get_mut(app.selected_playlist)
-            {
+            if let Some(open) = app.playlist_expanded.get_mut(app.selected_playlist) {
                 *open = !*open;
             }
         }
         KeyCode::Char('c') => {
-            let can_open =
-                if app.active_tab == Tab::Library && app.focus == Focus::Results {
-                    true
-                } else {
-                    app.selected_song_for_context().is_some()
-                };
+            let can_open = if app.active_tab == Tab::Library && app.focus == Focus::Results {
+                true
+            } else {
+                app.selected_song_for_context().is_some()
+            };
             if can_open {
                 app.context_open = true;
                 app.context_index = 0;
@@ -232,14 +276,15 @@ pub fn handle_key_event(
                     app.options_index = (app.options_index + 1).min(ui_helpers::MAX_OPTIONS_INDEX);
                 } else if app.active_tab == Tab::Library {
                     if !app.playlists.is_empty() {
-                        app.selected_playlist = (app.selected_playlist + 1)
-                            .min(app.playlists.len().saturating_sub(1));
+                        app.selected_playlist =
+                            (app.selected_playlist + 1).min(app.playlists.len().saturating_sub(1));
                         app.selected_playlist_song = 0;
                         playlist::ensure_playlist_state(app);
                     }
                 } else if app.active_tab == Tab::Albums {
                     if !app.album_results.is_empty() {
-                        app.selected_album_result = (app.selected_album_result + 1).min(app.album_results.len().saturating_sub(1));
+                        app.selected_album_result = (app.selected_album_result + 1)
+                            .min(app.album_results.len().saturating_sub(1));
                     }
                 } else if app.active_tab == Tab::Local {
                     if app.local_library_total > 0 {
@@ -247,14 +292,13 @@ pub fn handle_key_event(
                             .min(app.local_library_total.saturating_sub(1));
                     }
                 } else if !app.search_results.is_empty() {
-                    app.selected_result = (app.selected_result + 1)
-                        .min(app.search_results.len().saturating_sub(1));
+                    app.selected_result =
+                        (app.selected_result + 1).min(app.search_results.len().saturating_sub(1));
                 }
             }
             Focus::Queue => {
                 if app.active_tab == Tab::Library {
-                    if let Some(playlist) = app.playlists.get(app.selected_playlist)
-                    {
+                    if let Some(playlist) = app.playlists.get(app.selected_playlist) {
                         if !playlist.songs.is_empty() {
                             app.selected_playlist_song = (app.selected_playlist_song + 1)
                                 .min(playlist.songs.len().saturating_sub(1));
@@ -262,8 +306,8 @@ pub fn handle_key_event(
                         }
                     }
                 } else if !app.queue.is_empty() {
-                    app.selected_queue = (app.selected_queue + 1)
-                        .min(app.queue.len().saturating_sub(1));
+                    app.selected_queue =
+                        (app.selected_queue + 1).min(app.queue.len().saturating_sub(1));
                 }
             }
             Focus::Search => app.focus = Focus::Results,
@@ -286,8 +330,7 @@ pub fn handle_key_event(
             }
             Focus::Queue => {
                 if app.active_tab == Tab::Library {
-                    app.selected_playlist_song =
-                        app.selected_playlist_song.saturating_sub(1);
+                    app.selected_playlist_song = app.selected_playlist_song.saturating_sub(1);
                     playlist::ensure_playlist_state(app);
                 } else {
                     app.selected_queue = app.selected_queue.saturating_sub(1);
@@ -323,7 +366,8 @@ pub fn handle_key_event(
                         app.set_flash("Music directory updated", 3);
                     } else {
                         app.opt_editing = true;
-                        app.opt_edit_buffer = app.opt_music_dirs.first().cloned().unwrap_or_default();
+                        app.opt_edit_buffer =
+                            app.opt_music_dirs.first().cloned().unwrap_or_default();
                         app.set_flash("Editing Music Directory... (Enter to save)", 3);
                     }
                 } else if app.options_index == 8 && app.opt_editing {
@@ -345,10 +389,7 @@ pub fn handle_key_event(
                         app.set_flash("Smart Queue: searching similar song...", 3);
                         let _ = cmd_tx.send(CoreCmd::SmartQueue(current));
                     } else {
-                        app.set_flash(
-                            "Smart Queue needs a currently playing song",
-                            3,
-                        );
+                        app.set_flash("Smart Queue needs a currently playing song", 3);
                     }
                 } else if app.options_index == 7 {
                     app.eq_enabled = !app.eq_enabled;
@@ -382,8 +423,7 @@ pub fn handle_key_event(
                     }
                 }
                 Focus::Results if app.active_tab == Tab::Library => {
-                    if let Some(playlist) = app.playlists.get(app.selected_playlist)
-                    {
+                    if let Some(playlist) = app.playlists.get(app.selected_playlist) {
                         app.queue.clear();
                         for s in &playlist.songs {
                             app.queue.push_back(s.clone());
@@ -395,9 +435,7 @@ pub fn handle_key_event(
                 }
                 Focus::Queue => {
                     if app.active_tab == Tab::Library {
-                        if let Some(playlist) =
-                            app.playlists.get(app.selected_playlist)
-                        {
+                        if let Some(playlist) = app.playlists.get(app.selected_playlist) {
                             if !playlist.songs.is_empty() {
                                 app.queue.clear();
                                 let start = app
@@ -423,7 +461,10 @@ pub fn handle_key_event(
                 Focus::Results => {
                     if app.active_tab == Tab::Local {
                         if app.local_view_mode == LocalViewMode::Flat {
-                            if let Some(ls) = app.local_library_window.get(app.selected_local_song.saturating_sub(app.local_library_offset)) {
+                            if let Some(ls) = app.local_library_window.get(
+                                app.selected_local_song
+                                    .saturating_sub(app.local_library_offset),
+                            ) {
                                 let song = Song::from(ls);
                                 app.queue.push_back(song.clone());
                                 app.selected_queue = app.queue.len().saturating_sub(1);
@@ -459,9 +500,9 @@ pub fn handle_key_event(
                     }
                 }
                 Focus::Search => {}
-                }
             }
-            KeyCode::Char(' ') => {
+        }
+        KeyCode::Char(' ') => {
             let _ = cmd_tx.send(CoreCmd::TogglePause);
         }
         KeyCode::Left if app.active_tab != Tab::Options => {
@@ -470,9 +511,7 @@ pub fn handle_key_event(
         KeyCode::Right if app.active_tab != Tab::Options => {
             let _ = cmd_tx.send(CoreCmd::SeekBy(10));
         }
-        KeyCode::Char('0')
-            if !(app.active_tab == Tab::Options && app.options_index == 5) =>
-        {
+        KeyCode::Char('0') if !(app.active_tab == Tab::Options && app.options_index == 5) => {
             let _ = cmd_tx.send(CoreCmd::VolumeUp);
         }
         KeyCode::Char('9') => {
@@ -525,20 +564,18 @@ pub fn handle_key_event(
             if app.active_tab == Tab::Library && app.focus == Focus::Queue {
                 playlist::remove_selected_playlist_song(app);
                 playlist::ensure_playlist_state(app);
-                app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
+                app.storage
+                    .save_playlists(&app.playlists)
+                    .expect("Failed to save playlists");
             } else if app.focus == Focus::Queue {
                 playlist::remove_selected_queue_song(app);
             }
         }
-        KeyCode::Char('i')
-            if app.active_tab == Tab::Library && app.focus == Focus::Results =>
-        {
+        KeyCode::Char('i') if app.active_tab == Tab::Library && app.focus == Focus::Results => {
             playlist::import_playlist_action(app);
             playlist::ensure_playlist_state(app);
         }
-        KeyCode::Char('e')
-            if app.active_tab == Tab::Library && app.focus == Focus::Results =>
-        {
+        KeyCode::Char('e') if app.active_tab == Tab::Library && app.focus == Focus::Results => {
             playlist::export_selected_playlist_action(app);
         }
         KeyCode::Char('h') | KeyCode::Left if app.active_tab == Tab::Options => {
@@ -547,8 +584,7 @@ pub fn handle_key_event(
                     toggle_search_source(app, cmd_tx);
                 }
                 1 => {
-                    app.opt_search_limit =
-                        app.opt_search_limit.saturating_sub(1).max(1);
+                    app.opt_search_limit = app.opt_search_limit.saturating_sub(1).max(1);
                 }
                 2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
                 5 => {
@@ -556,10 +592,7 @@ pub fn handle_key_event(
                 }
                 6 => {
                     app.repeat_mode = ui_helpers::prev_repeat_mode(app.repeat_mode);
-                    app.set_flash(
-                        format!("Repeat mode: {}", app.repeat_mode.label()),
-                        2,
-                    );
+                    app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
                 }
                 7 => {
                     if app.eq_focus_band > 0 {
@@ -569,7 +602,9 @@ pub fn handle_key_event(
                 8 => eq::cycle_eq_preset(app, cmd_tx, -1),
                 9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, -1),
                 10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, -1),
-                ui_helpers::MAX_OPTIONS_INDEX => app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, -1),
+                ui_helpers::MAX_OPTIONS_INDEX => {
+                    app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, -1)
+                }
                 _ => {}
             }
         }
@@ -585,10 +620,7 @@ pub fn handle_key_event(
                 }
                 6 => {
                     app.repeat_mode = app.repeat_mode.next();
-                    app.set_flash(
-                        format!("Repeat mode: {}", app.repeat_mode.label()),
-                        2,
-                    );
+                    app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
                 }
                 7 => {
                     if app.eq_focus_band < 9 {
@@ -598,7 +630,9 @@ pub fn handle_key_event(
                 8 => eq::cycle_eq_preset(app, cmd_tx, 1),
                 9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, 1),
                 10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, 1),
-                ui_helpers::MAX_OPTIONS_INDEX => app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, 1),
+                ui_helpers::MAX_OPTIONS_INDEX => {
+                    app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, 1)
+                }
                 _ => {}
             }
         }
@@ -619,18 +653,14 @@ pub fn handle_key_event(
                 eq::send_eq_update(cmd_tx, app.eq_bands);
             }
         }
-        KeyCode::Char('-')
-            if app.active_tab == Tab::Options && app.options_index == 7 =>
-        {
+        KeyCode::Char('-') if app.active_tab == Tab::Options && app.options_index == 7 => {
             let b = app.eq_focus_band;
             app.eq_bands[b] = (app.eq_bands[b] - 1.0).max(-12.0);
             if app.eq_enabled {
                 eq::send_eq_update(cmd_tx, app.eq_bands);
             }
         }
-        KeyCode::Char('0')
-            if app.active_tab == Tab::Options && app.options_index == 7 =>
-        {
+        KeyCode::Char('0') if app.active_tab == Tab::Options && app.options_index == 7 => {
             app.eq_bands = [0.0f32; 10];
             app.eq_preset_index = 0;
             if app.eq_enabled {

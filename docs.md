@@ -1,177 +1,395 @@
-# rs-pug Lua Plugin System
+# rs-pug Lua Plugin API
 
-The `rs-pug` music player features a powerful and flexible plugin system powered by Lua. This allows users to extend the application's functionality, modify its behavior, and integrate it with external tools without modifying the core Rust codebase.
+This document explains how to build Lua plugins for `rs-pug`, including live plugin panels (`on_ui_panels`) and dynamic plugin tabs (`on_tabs`).
 
-## Getting Started
+## Plugin location
 
-To create a plugin, simply write a Lua script and place it in the `~/.config/rs-pug/plugins/` directory. The application automatically loads all `.lua` files found in this directory upon startup.
+Place `.lua` files in:
 
-Each plugin script must return a Lua table containing specific hook functions. These functions are called by `rs-pug` when certain events occur within the application.
+- `~/.config/rs-pug/plugins/`
+
+A plugin should return a table with hooks:
 
 ```lua
--- Example: ~/.config/rs-pug/plugins/hello_world.lua
-return {
-    on_key = function(key, state)
-        if key == "char:h" then
-            return { flash = "Hello from Lua!" }
-        end
-    end
+plugin = {}
+
+function plugin.on_key(key, state)
+  if key == "char:h" then
+    return { flash = "Hello from Lua" }
+  end
+end
+
+return plugin
+```
+
+## Available hooks
+
+Implement any subset you need.
+
+### `on_key(key, state) -> PluginDispatch|nil`
+
+Called on every key press.
+
+### `on_event(event, state) -> PluginDispatch|nil`
+
+Called on core events.
+
+Common `event.kind` values:
+
+- `"started"`
+- `"search_done"`
+- `"album_search_done"`
+- `"progress"`
+- `"error"`
+- `"event"` (fallback)
+
+### `on_search_query(query) -> string|nil`
+
+Modify outgoing search query.
+
+### `on_search_results(songs) -> songs|nil`
+
+Modify search results.
+
+### `on_song_start(song) -> song|nil`
+
+Modify track metadata/URL before playback starts.
+
+### `on_ui_panels(state) -> PluginPanel[]|nil`
+
+Return live panels rendered on the right side of the UI.
+
+### `on_tabs(state) -> PluginTab[]|nil`
+
+Return dynamic plugin tabs.
+
+Each `PluginTab` has:
+
+- `id` (unique identifier)
+- `title` (tab label)
+- `icon` (optional icon)
+
+## PluginUiState (`state`)
+
+The `state` object passed to `on_key`, `on_event`, `on_ui_panels`, and `on_tabs` includes:
+
+- `active_tab`: `discover | albums | library | local | options`
+- `player_state`: `idle | searching | playing | paused`
+- `volume`: `0..100`
+- `muted`: `true/false`
+- `repeat_mode`: `off | one | all`
+- `search_query`
+- `album_search_query`
+- `queue_len`
+
+## PluginDispatch
+
+Optional return from `on_key`/`on_event`:
+
+- `consume` (bool)
+- `flash` (string)
+- `flash_seconds` (number)
+- `core_actions` (array)
+- `ui` (UI patch)
+
+### Core actions (`core_actions`)
+
+Each action has `type`:
+
+- `{ type = "search", query = "..." }`
+- `{ type = "search_albums", query = "..." }`
+- `{ type = "seek", seconds = 10 }`
+- `{ type = "toggle_pause" }`
+- `{ type = "toggle_mute" }`
+- `{ type = "volume_up" }`
+- `{ type = "volume_down" }`
+- `{ type = "next" }`
+- `{ type = "prev" }`
+- `{ type = "set_volume", value = 50 }`
+- `{ type = "play_url", url = "...", title = "..." }`
+- `{ type = "raw_mpv", command = { ... } }`
+
+### UI patch (`ui`)
+
+- `set_tab`: core tab (`discover|albums|library|options`) or plugin tab id
+- `set_search_query`
+- `set_album_search_query`
+- `set_focus`: `search | results | queue`
+- `set_search_mode`: bool
+- `set_selected_result`: number
+- `set_selected_album_result`: number
+- `set_selected_queue`: number
+
+## PluginPanel
+
+`on_ui_panels` returns an array of panels:
+
+```lua
+{
+  {
+    title = "My Panel",
+    items = {
+      { type = "text", text = "hello" },
+      { type = "info", text = "network ok" },
+      { type = "option", key = "Source", value = "YouTube" },
+      { type = "stat", label = "Queue", value = "12" },
+      { type = "separator" }
+    }
+  }
 }
 ```
 
-## Available Hooks
+### Item types
 
-The plugin system provides several hooks that you can implement in your returned table. You only need to define the hooks you actually intend to use.
+- `text`
+- `info`
+- `option` (`key/value`)
+- `stat` (`label/value`)
+- `separator`
 
-### `on_key(key, state)`
+### Backward compatibility
 
-This hook is triggered whenever the user presses a key. It is the primary way to add custom keybindings or override existing ones.
-
-*   **`key` (string):** The string representation of the pressed key. Examples include `"char:a"`, `"ctrl:c"`, `"enter"`, `"tab"`, `"space"`, `"up"`, `"down"`, etc.
-*   **`state` (table):** A table containing the current state of the user interface. See the [PluginUiState](#pluginuistate) section for details.
-*   **Returns:** A `PluginDispatch` table (optional). If you return a table, it dictates what actions the application should take. See the [PluginDispatch](#plugindispatch) section.
-
-### `on_event(event, state)`
-
-This hook is triggered by various application events, such as when a song starts playing or when the player state changes.
-
-*   **`event` (table):** A table describing the event. It typically contains a `kind` field (string) and optional `message` (string) or `value` (number) fields.
-*   **`state` (table):** The current UI state.
-*   **Returns:** A `PluginDispatch` table (optional).
-
-### `on_search_query(query)`
-
-This hook allows you to intercept and modify the search query before it is sent to YouTube.
-
-*   **`query` (string):** The original search query entered by the user.
-*   **Returns:** A string representing the modified search query.
-
-### `on_search_results(songs)`
-
-This hook allows you to filter, sort, or modify the list of songs returned from a search.
-
-*   **`songs` (table):** An array-like table of song objects.
-*   **Returns:** A modified array-like table of song objects.
-
-### `on_song_start(song)`
-
-This hook is called right before a song begins playing. You can use it to modify the song's metadata or URL.
-
-*   **`song` (table):** The song object about to be played.
-*   **Returns:** The modified song object.
-
-## Data Structures
-
-When interacting with the `rs-pug` API, you will frequently use the following data structures.
-
-### PluginUiState
-
-The `state` parameter passed to `on_key` and `on_event` provides a snapshot of the application's current status. It contains the following fields:
-
-*   `active_tab` (string): The currently active tab (e.g., `"discover"`, `"albums"`, `"library"`, `"options"`).
-*   `player_state` (string): The current state of the media player (e.g., `"playing"`, `"paused"`, `"stopped"`).
-*   `volume` (number): The current volume level, from 0 to 100.
-*   `muted` (boolean): Whether the player is currently muted.
-*   `repeat_mode` (string): The current repeat mode (`"none"`, `"all"`, `"one"`).
-*   `search_query` (string): The text currently in the search input field.
-*   `album_search_query` (string): The text currently in the album search input field.
-*   `queue_len` (number): The number of items currently in the playback queue.
-
-### PluginDispatch
-
-The `PluginDispatch` table is what your `on_key` and `on_event` hooks return to instruct `rs-pug` to perform actions. All fields are optional.
-
-*   `consume` (boolean): If set to `true`, `rs-pug` will stop processing this event. This prevents default keybindings from triggering if your plugin handles the key.
-*   `flash` (string): A message to display briefly on the screen.
-*   `flash_seconds` (number): The duration (in seconds) to display the flash message.
-*   `core_actions` (table): An array of action tables to execute. See [Core Actions](#core-actions).
-*   `ui` (table): A table of UI state changes to apply. See [UI Patches](#ui-patches).
-
-#### Core Actions
-
-You can trigger core application functions by adding action tables to the `core_actions` array in your `PluginDispatch` return value. Each action table must have a `type` field.
-
-*   `{ type = "search", query = "..." }`: Initiates a search.
-*   `{ type = "search_albums", query = "..." }`: Initiates an album search.
-*   `{ type = "seek", seconds = 120 }`: Seeks to a specific position in the current song.
-*   `{ type = "toggle_pause" }`: Toggles playback pause state.
-*   `{ type = "toggle_mute" }`: Toggles audio mute state.
-*   `{ type = "volume_up" }`: Increases the volume.
-*   `{ type = "volume_down" }`: Decreases the volume.
-*   `{ type = "next" }`: Skips to the next song in the queue.
-*   `{ type = "prev" }`: Returns to the previous song.
-*   `{ type = "set_volume", value = 50 }`: Sets the volume to a specific level (0-100).
-*   `{ type = "play_url", url = "...", title = "..." }`: Plays a specific URL directly.
-*   `{ type = "raw_mpv", command = { ... } }`: Sends a raw JSON IPC command directly to the underlying `mpv` instance.
-
-#### UI Patches
-
-You can modify the user interface state by providing a `ui` table in your `PluginDispatch` return value.
-
-*   `set_tab` (string): Switches to the specified tab (`"discover"`, `"albums"`, `"library"`, `"options"`).
-*   `set_search_query` (string): Updates the text in the search input.
-*   `set_album_search_query` (string): Updates the text in the album search input.
-*   `set_focus` (string): Changes the currently focused UI element.
-*   `set_search_mode` (boolean): Toggles search input mode.
-*   `set_selected_result` (number): Changes the selected index in the search results list.
-*   `set_selected_album_result` (number): Changes the selected index in the album search results list.
-*   `set_selected_queue` (number): Changes the selected index in the playback queue.
-
-## Example Plugins
-
-Here are a few practical examples of what you can build with the `rs-pug` Lua API.
-
-### 1. Custom Keybind: Quick Volume Set
-
-This plugin adds a custom keybinding (`v`) that instantly sets the volume to 50% and flashes a confirmation message.
+Legacy format still works:
 
 ```lua
--- ~/.config/rs-pug/plugins/quick_volume.lua
+{ title = "Legacy", lines = { "line 1", "line 2" } }
+```
+
+`lines` are automatically converted to `items` (`text`).
+
+## Plugin tabs
+
+Example:
+
+```lua
 return {
-    on_key = function(key, state)
-        if key == "char:v" then
-            return {
-                consume = true,
-                flash = "Volume set to 50%",
-                core_actions = {
-                    { type = "set_volume", value = 50 }
-                }
-            }
-        end
-    end
+  on_tabs = function(state)
+    return {
+      { id = "my_settings", title = "My Settings", icon = "★" },
+      { id = "diag", title = "Diagnostics", icon = "!" }
+    }
+  end
 }
 ```
 
-### 2. System Notifications on Song Start
-
-This plugin uses the `os.execute` function (available in standard Lua) to trigger a system notification whenever a new song starts playing.
+Open a plugin tab from dispatch:
 
 ```lua
--- ~/.config/rs-pug/plugins/notify.lua
+ui = { set_tab = "my_settings" }
+```
+
+Keyboard navigation:
+
+- `1..5` = built-in tabs
+- `6,7,8...` = plugin tabs in `on_tabs` order
+
+## Examples
+
+### 1) Keybind + action
+
+```lua
 return {
-    on_event = function(event, state)
-        if event.kind == "song_start" and event.message then
-            -- Escape single quotes to prevent shell injection
-            local safe_title = event.message:gsub("'", "'\\''")
-            os.execute("notify-send 'rs-pug' 'Now playing: " .. safe_title .. "'")
-        end
+  on_key = function(key, state)
+    if key == "char:v" then
+      return {
+        consume = true,
+        flash = "Volume: 50%",
+        core_actions = {
+          { type = "set_volume", value = 50 }
+        }
+      }
     end
+  end
 }
 ```
 
-### 3. Auto-Append "Live" to Searches
-
-This plugin intercepts all search queries and automatically appends the word "live" to them, ensuring you always get live performance results.
+### 2) Live panel with options/stats
 
 ```lua
--- ~/.config/rs-pug/plugins/always_live.lua
 return {
-    on_search_query = function(query)
-        -- Only append if it's not already there
-        if not query:lower():match("live") then
-            return query .. " live"
-        end
-        return query
-    end
+  on_ui_panels = function(state)
+    return {
+      {
+        title = "Session",
+        items = {
+          { type = "option", key = "Tab", value = state.active_tab },
+          { type = "option", key = "State", value = state.player_state },
+          { type = "stat", label = "Volume", value = tostring(state.volume) .. "%" },
+          { type = "stat", label = "Queue", value = tostring(state.queue_len) },
+          { type = "separator" },
+          { type = "info", text = "Plugin panel live" }
+        }
+      }
+    }
+  end
 }
 ```
+
+### 3) Event-driven diagnostics
+
+```lua
+local last_error = "none"
+
+return {
+  on_event = function(event, state)
+    if event.kind == "error" and event.message then
+      last_error = event.message
+    end
+  end,
+
+  on_ui_panels = function(state)
+    return {
+      {
+        title = "Diagnostics",
+        items = {
+          { type = "text", text = "muted: " .. tostring(state.muted) },
+          { type = "info", text = "last error: " .. last_error }
+        }
+      }
+    }
+  end
+}
+```
+
+### 4) Pseudo-tab flow inside Options
+
+```lua
+local plugin_tab_open = false
+local quality_idx = 1
+local qualities = { "low", "medium", "high" }
+local normalize_audio = true
+
+local function current_quality()
+  return qualities[quality_idx]
+end
+
+return {
+  on_key = function(key, state)
+    if key == "char:t" then
+      plugin_tab_open = not plugin_tab_open
+      return {
+        consume = true,
+        ui = { set_tab = "options" },
+        flash = plugin_tab_open and "Plugin tab: ON" or "Plugin tab: OFF"
+      }
+    end
+
+    if not plugin_tab_open then
+      return nil
+    end
+
+    if key == "left" then
+      quality_idx = math.max(1, quality_idx - 1)
+      return { consume = true }
+    elseif key == "right" then
+      quality_idx = math.min(#qualities, quality_idx + 1)
+      return { consume = true }
+    elseif key == "char:n" then
+      normalize_audio = not normalize_audio
+      return { consume = true }
+    end
+  end,
+
+  on_ui_panels = function(state)
+    if not plugin_tab_open then
+      return nil
+    end
+
+    return {
+      {
+        title = "Plugin Settings",
+        items = {
+          { type = "info", text = "Pseudo-tab active in Options" },
+          { type = "separator" },
+          { type = "option", key = "Quality", value = current_quality() },
+          { type = "option", key = "Normalize", value = tostring(normalize_audio) },
+          { type = "text", text = "left/right: quality" },
+          { type = "text", text = "n: toggle normalize" },
+          { type = "text", text = "t: close plugin tab" }
+        }
+      }
+    }
+  end
+}
+```
+
+### 5) Full dynamic tab example (tab + options + panel)
+
+Save as `~/.config/rs-pug/plugins/radio_tab.lua`:
+
+```lua
+local genre_idx = 1
+local genres = { "lofi", "jazz", "synthwave", "ambient" }
+local autoplay = true
+local tab_id = "radio"
+
+local function genre()
+  return genres[genre_idx]
+end
+
+return {
+  on_tabs = function(state)
+    return {
+      { id = tab_id, title = "Radio", icon = "📻" }
+    }
+  end,
+
+  on_key = function(key, state)
+    if key == "char:6" then
+      return {
+        consume = true,
+        ui = { set_tab = tab_id },
+        flash = "Opened Radio tab"
+      }
+    end
+
+    if state.active_tab ~= "options" then
+      return nil
+    end
+
+    if key == "left" then
+      genre_idx = math.max(1, genre_idx - 1)
+      return { consume = true, flash = "Genre: " .. genre() }
+    elseif key == "right" then
+      genre_idx = math.min(#genres, genre_idx + 1)
+      return { consume = true, flash = "Genre: " .. genre() }
+    elseif key == "char:a" then
+      autoplay = not autoplay
+      return { consume = true, flash = "Autoplay: " .. tostring(autoplay) }
+    elseif key == "enter" then
+      return {
+        consume = true,
+        flash = "Searching radio: " .. genre(),
+        core_actions = {
+          { type = "search", query = genre() .. " radio" }
+        }
+      }
+    end
+  end,
+
+  on_ui_panels = function(state)
+    return {
+      {
+        title = "Radio Control",
+        items = {
+          { type = "option", key = "Genre", value = genre() },
+          { type = "option", key = "Autoplay", value = tostring(autoplay) },
+          { type = "stat", label = "Queue", value = tostring(state.queue_len) },
+          { type = "separator" },
+          { type = "text", text = "left/right: change genre" },
+          { type = "text", text = "a: toggle autoplay" },
+          { type = "text", text = "enter: search station" }
+        }
+      }
+    }
+  end
+}
+```
+
+Aby wejść do zakładki pluginowej, z pluginu ustaw:
+to go to the plugin tab, from plugin set:
+
+```lua
+ui = { set_tab = "my_settings" }
+```
+
