@@ -74,6 +74,7 @@ Each `PluginTab` has:
 The `state` object passed to `on_key`, `on_event`, `on_ui_panels`, and `on_tabs` includes:
 
 - `active_tab`: `discover | albums | library | local | options`
+- `active_plugin_tab`: plugin tab id (string) or `nil` when no plugin tab is active
 - `player_state`: `idle | searching | playing | paused`
 - `volume`: `0..100`
 - `muted`: `true/false`
@@ -343,7 +344,7 @@ return {
       }
     end
 
-    if state.active_tab ~= "options" then
+    if state.active_plugin_tab ~= tab_id then
       return nil
     end
 
@@ -386,9 +387,145 @@ return {
 }
 ```
 
-to go to the plugin tab, from plugin set:
+
+## Panel placement
+
+By default, plugin panels are rendered in the normal plugin tab content area (left/main pane) when your plugin tab is active.
+
+If you want a floating top-right panel, set:
 
 ```lua
-ui = { set_tab = "my_settings" }
+{
+  title = "My Overlay",
+  target = "overlay",
+  items = { { type = "text", text = "hello" } }
+}
 ```
 
+Supported targets:
+
+- `main` or `results` (default/main list area in active plugin tab)
+- `queue` (right pane list area in active plugin tab)
+- `overlay` (optional floating panel in the top-right corner)
+
+Example (render in right pane instead of overlay):
+
+```lua
+{
+  title = "Plugin Help",
+  target = "queue",
+  items = { { type = "text", text = "Use ↑/↓ and Enter" } }
+}
+```
+
+
+## Plugin manager example (without floating overlay window)
+
+This example renders everything in normal tab panes (left/right lists), not in the top-right floating overlay.
+
+Save as `~/.config/rs-pug/plugins/plugin_manager.lua`:
+
+```lua
+local plugin_list = {
+  {
+    name = "discord_rich_presence.lua",
+    url = "https://raw.githubusercontent.com/JustRoccat/all-rspug/main/plugins/discord_rich_presence.lua",
+  },
+  {
+    name = "hq.lua",
+    url = "https://raw.githubusercontent.com/JustRoccat/all-rspug/main/plugins/hq.lua",
+  },
+}
+
+local selected_idx = 1
+local tab_id = "plugin_manager"
+local install_path = (os.getenv("HOME") or "") .. "/.config/rs-pug/plugins/"
+
+local function install_plugin(plugin)
+  local cmd = string.format("curl -L -s -o '%s%s' '%s'", install_path, plugin.name, plugin.url)
+  os.execute(cmd)
+end
+
+local function build_results_items()
+  local items = {
+    { type = "info", text = "--- RS-PUG PLUGIN MANAGER ---" },
+    { type = "separator" },
+    { type = "text", text = "Available plugins:" },
+    { type = "separator" },
+  }
+
+  for i, p in ipairs(plugin_list) do
+    local label = (i == selected_idx) and ("[▶] " .. p.name) or ("    " .. p.name)
+    table.insert(items, { type = "text", text = label })
+  end
+
+  return items
+end
+
+local function build_queue_items()
+  return {
+    { type = "text", text = "Controls:" },
+    { type = "text", text = "↑/↓ : Select plugin" },
+    { type = "text", text = "ENTER: Install plugin" },
+    { type = "text", text = "6: Open Plugins tab" },
+  }
+end
+
+return {
+  on_tabs = function(state)
+    return {
+      { id = tab_id, title = "Plugins", icon = "🔌" },
+    }
+  end,
+
+  on_key = function(key, state)
+    if key == "char:6" then
+      return {
+        consume = true,
+        ui = { set_tab = tab_id },
+        flash = "Plugin Manager",
+      }
+    end
+
+    if state.active_plugin_tab ~= tab_id then
+      return nil
+    end
+
+    if key == "up" then
+      selected_idx = math.max(1, selected_idx - 1)
+      return { consume = true }
+    elseif key == "down" then
+      selected_idx = math.min(#plugin_list, selected_idx + 1)
+      return { consume = true }
+    elseif key == "enter" then
+      local plugin = plugin_list[selected_idx]
+      install_plugin(plugin)
+      return {
+        consume = true,
+        flash = "Installed " .. plugin.name .. ". Restart app to load it.",
+      }
+    end
+  end,
+
+  on_ui_panels = function(state)
+    if state.active_plugin_tab ~= tab_id then
+      return nil
+    end
+
+    return {
+      {
+        title = "Plugin List",
+        target = "results",
+        items = build_results_items(),
+      },
+      {
+        title = "Help",
+        target = "queue",
+        items = build_queue_items(),
+      },
+    }
+  end,
+}
+```
+
+Important: this example uses `target = "results"` and `target = "queue"`, so it renders in normal tab panes. It does **not** use `target = "overlay"`.

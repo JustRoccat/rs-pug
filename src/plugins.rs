@@ -85,9 +85,20 @@ pub enum PluginPanelItem {
     Separator,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginPanelTarget {
+    Main,
+    Results,
+    Queue,
+    Overlay,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginPanel {
     pub title: String,
+    #[serde(default)]
+    pub target: Option<PluginPanelTarget>,
     #[serde(default)]
     pub lines: Vec<String>,
     #[serde(default)]
@@ -105,6 +116,7 @@ pub struct PluginTab {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginUiState {
     pub active_tab: String,
+    pub active_plugin_tab: Option<String>,
     pub player_state: String,
     pub volume: u8,
     pub muted: bool,
@@ -117,6 +129,7 @@ pub struct PluginUiState {
 impl PluginUiState {
     pub fn from_runtime(
         tab: Tab,
+        active_plugin_tab: Option<String>,
         player_state: &str,
         volume: u8,
         muted: bool,
@@ -134,6 +147,7 @@ impl PluginUiState {
                 Tab::Options => "options",
             }
             .to_owned(),
+            active_plugin_tab,
             player_state: player_state.to_owned(),
             volume,
             muted,
@@ -418,6 +432,7 @@ return plugin
         let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"));
         let state = PluginUiState::from_runtime(
             Tab::Discover,
+            None,
             "playing",
             70,
             false,
@@ -455,6 +470,7 @@ return plugin
         let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"));
         let state = PluginUiState::from_runtime(
             Tab::Discover,
+            None,
             "idle",
             10,
             false,

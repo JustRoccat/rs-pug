@@ -231,6 +231,55 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     frame.render_widget(widget, area);
 }
 
+fn plugin_panel_lines(panel: &crate::plugins::PluginPanel, pal: &Palette) -> Vec<Line<'static>> {
+    use crate::plugins::PluginPanelItem;
+    if !panel.items.is_empty() {
+        panel
+            .items
+            .iter()
+            .map(|item| match item {
+                PluginPanelItem::Text { text } => Line::from(Span::styled(
+                    text.clone(),
+                    Style::default().fg(pal.get_color("text")),
+                )),
+                PluginPanelItem::Info { text } => Line::from(Span::styled(
+                    text.clone(),
+                    Style::default().fg(pal.get_color("info")),
+                )),
+                PluginPanelItem::Option { key, value } => Line::from(vec![
+                    Span::styled(
+                        format!("{}: ", key),
+                        Style::default().fg(pal.get_color("warn")),
+                    ),
+                    Span::styled(value.clone(), Style::default().fg(pal.get_color("text"))),
+                ]),
+                PluginPanelItem::Stat { label, value } => Line::from(vec![
+                    Span::styled(
+                        format!("{} ", label),
+                        Style::default().fg(pal.get_color("muted")),
+                    ),
+                    Span::styled(value.clone(), Style::default().fg(pal.get_color("ok"))),
+                ]),
+                PluginPanelItem::Separator => Line::from(Span::styled(
+                    "─".repeat(24),
+                    Style::default().fg(pal.get_color("dim")),
+                )),
+            })
+            .collect()
+    } else {
+        panel
+            .lines
+            .iter()
+            .map(|line| {
+                Line::from(Span::styled(
+                    line.clone(),
+                    Style::default().fg(pal.get_color("text")),
+                ))
+            })
+            .collect()
+    }
+}
+
 fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let split = if app.active_tab == Tab::Library {
         [Constraint::Percentage(64), Constraint::Percentage(36)]
@@ -246,44 +295,32 @@ fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: 
 fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let focused = app.focus == Focus::Results;
 
-    let items: Vec<ListItem> = if app.active_plugin_tab.is_some() && app.active_tab == Tab::Options
+    let items: Vec<ListItem> = if app.active_tab == Tab::Options && app.active_plugin_tab.is_some()
     {
-        let rows: Vec<(&str, String)> = vec![
-            (
-                "⊞",
-                format!(
-                    "Plugin Tab     {}",
-                    app.active_plugin_tab.clone().unwrap_or_default()
-                ),
-            ),
-            ("⊞", "Custom panel uses on_ui_panels hook".to_string()),
-            ("⊞", "Use plugin keybinds to change options".to_string()),
-        ];
-        rows.into_iter()
-            .enumerate()
-            .map(|(i, (icon, label))| {
-                if i == 0 {
-                    ListItem::new(Line::from(vec![
-                        Span::styled("▶ ", Style::default().fg(anim)),
-                        Span::styled(icon.to_string(), Style::default().fg(anim)),
-                        Span::raw(" "),
-                        Span::styled(
-                            label,
-                            Style::default()
-                                .fg(pal.get_color("text"))
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]))
-                } else {
-                    ListItem::new(Line::from(vec![
-                        Span::styled("  ", Style::default()),
-                        Span::styled(icon.to_string(), Style::default().fg(pal.get_color("dim"))),
-                        Span::raw(" "),
-                        Span::styled(label, Style::default().fg(pal.get_color("muted"))),
-                    ]))
-                }
+        let plugin_items: Vec<ListItem> = app
+            .plugin_panels
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.target,
+                    None | Some(crate::plugins::PluginPanelTarget::Main)
+                        | Some(crate::plugins::PluginPanelTarget::Results)
+                )
             })
-            .collect()
+            .flat_map(|p| {
+                let mut lines = vec![ListItem::new(Line::from(Span::styled(
+                    format!("[{}]", p.title),
+                    Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                )))];
+                lines.extend(plugin_panel_lines(p, pal).into_iter().map(ListItem::new));
+                lines
+            })
+            .collect();
+        if plugin_items.is_empty() {
+            vec![dim_item("Plugin tab active. Provide on_ui_panels().", pal)]
+        } else {
+            plugin_items
+        }
     } else if app.active_tab == Tab::Options {
         let eq_label = if app.eq_enabled {
             format!(
@@ -514,7 +551,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             if let Some(active_id) = &app.active_plugin_tab {
                 if let Some(tab) = app.plugin_tabs.iter().find(|t| &t.id == active_id) {
                     let icon = tab.icon.clone().unwrap_or_else(|| "◌".to_string());
-                    format!(" {}  {} ", icon, tab.title.to_uppercase())
+                    format!(" ⚙  SETTINGS — {} {} ", icon, tab.title.to_uppercase())
                 } else {
                     " ⚙  SETTINGS ".to_owned()
                 }
@@ -827,44 +864,32 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
 
     let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area);
 
-    let items: Vec<ListItem> = if app.active_plugin_tab.is_some() && app.active_tab == Tab::Options
+    let items: Vec<ListItem> = if app.active_tab == Tab::Options && app.active_plugin_tab.is_some()
     {
-        let rows: Vec<(&str, String)> = vec![
-            (
-                "⊞",
-                format!(
-                    "Plugin Tab     {}",
-                    app.active_plugin_tab.clone().unwrap_or_default()
-                ),
-            ),
-            ("⊞", "Custom panel uses on_ui_panels hook".to_string()),
-            ("⊞", "Use plugin keybinds to change options".to_string()),
-        ];
-        rows.into_iter()
-            .enumerate()
-            .map(|(i, (icon, label))| {
-                if i == 0 {
-                    ListItem::new(Line::from(vec![
-                        Span::styled("▶ ", Style::default().fg(anim)),
-                        Span::styled(icon.to_string(), Style::default().fg(anim)),
-                        Span::raw(" "),
-                        Span::styled(
-                            label,
-                            Style::default()
-                                .fg(pal.get_color("text"))
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]))
-                } else {
-                    ListItem::new(Line::from(vec![
-                        Span::styled("  ", Style::default()),
-                        Span::styled(icon.to_string(), Style::default().fg(pal.get_color("dim"))),
-                        Span::raw(" "),
-                        Span::styled(label, Style::default().fg(pal.get_color("muted"))),
-                    ]))
-                }
-            })
-            .collect()
+        {
+            let plugin_items: Vec<ListItem> = app
+                .plugin_panels
+                .iter()
+                .filter(|p| p.target == Some(crate::plugins::PluginPanelTarget::Queue))
+                .flat_map(|p| {
+                    let mut lines = vec![ListItem::new(Line::from(Span::styled(
+                        format!("[{}]", p.title),
+                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                    )))];
+                    lines.extend(plugin_panel_lines(p, pal).into_iter().map(ListItem::new));
+                    lines
+                })
+                .collect();
+            if plugin_items.is_empty() {
+                vec![
+                    dim_item("Plugin tab controls", pal),
+                    dim_item("Use plugin-defined keys", pal),
+                    dim_item("Set panel target='queue' for right pane", pal),
+                ]
+            } else {
+                plugin_items
+            }
+        }
     } else if app.active_tab == Tab::Options {
         if app.options_index == 7 || app.options_index == 8 {
             draw_eq_panel(frame, app, pal, anim, chunks[0]);
@@ -1454,7 +1479,11 @@ fn draw_plugin_panels(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         return;
     }
     let mut y = size.y + 1;
-    for panel in &app.plugin_panels {
+    for panel in app
+        .plugin_panels
+        .iter()
+        .filter(|p| p.target == Some(crate::plugins::PluginPanelTarget::Overlay))
+    {
         let item_lines: Vec<Line> = if panel.items.is_empty() {
             panel
                 .lines

@@ -177,6 +177,9 @@ pub fn handle_key_event(
         return true;
     }
 
+    let is_core_options =
+        |app: &App| app.active_tab == Tab::Options && app.active_plugin_tab.is_none();
+
     match key.code {
         KeyCode::Char(c) if c.is_ascii_digit() => {
             let idx = c.to_digit(10).unwrap_or(0) as usize;
@@ -265,14 +268,14 @@ pub fn handle_key_event(
                 2,
             );
         }
-        KeyCode::Char('f') if app.active_tab == Tab::Options && app.options_index == 8 => {
+        KeyCode::Char('f') if is_core_options(app) && app.options_index == 8 => {
             app.opt_editing = true;
             app.opt_edit_buffer = "New Preset".to_string();
             app.set_flash("Editing EQ Preset Name... (Enter to save)", 3);
         }
         KeyCode::Char('j') | KeyCode::Down => match app.focus {
             Focus::Results => {
-                if app.active_tab == Tab::Options {
+                if is_core_options(app) {
                     app.options_index = (app.options_index + 1).min(ui_helpers::MAX_OPTIONS_INDEX);
                 } else if app.active_tab == Tab::Library {
                     if !app.playlists.is_empty() {
@@ -314,7 +317,7 @@ pub fn handle_key_event(
         },
         KeyCode::Char('k') | KeyCode::Up => match app.focus {
             Focus::Results => {
-                if app.active_tab == Tab::Options {
+                if is_core_options(app) {
                     app.options_index = app.options_index.saturating_sub(1);
                 } else if app.active_tab == Tab::Library {
                     app.selected_playlist = app.selected_playlist.saturating_sub(1);
@@ -347,7 +350,7 @@ pub fn handle_key_event(
             ui_helpers::scroll_selection(app, -10, local_nav_len)
         }
         KeyCode::Tab => {
-            if app.active_tab == Tab::Options {
+            if is_core_options(app) {
                 return true;
             }
             app.focus = match app.focus {
@@ -356,7 +359,7 @@ pub fn handle_key_event(
             };
         }
         KeyCode::Enter => {
-            if app.active_tab == Tab::Options {
+            if is_core_options(app) {
                 if app.options_index == 3 {
                     if app.opt_editing {
                         let new_dir = app.opt_edit_buffer.clone();
@@ -505,13 +508,13 @@ pub fn handle_key_event(
         KeyCode::Char(' ') => {
             let _ = cmd_tx.send(CoreCmd::TogglePause);
         }
-        KeyCode::Left if app.active_tab != Tab::Options => {
+        KeyCode::Left if !is_core_options(app) => {
             let _ = cmd_tx.send(CoreCmd::SeekBy(-10));
         }
-        KeyCode::Right if app.active_tab != Tab::Options => {
+        KeyCode::Right if !is_core_options(app) => {
             let _ = cmd_tx.send(CoreCmd::SeekBy(10));
         }
-        KeyCode::Char('0') if !(app.active_tab == Tab::Options && app.options_index == 5) => {
+        KeyCode::Char('0') if !(is_core_options(app) && app.options_index == 5) => {
             let _ = cmd_tx.send(CoreCmd::VolumeUp);
         }
         KeyCode::Char('9') => {
@@ -578,74 +581,70 @@ pub fn handle_key_event(
         KeyCode::Char('e') if app.active_tab == Tab::Library && app.focus == Focus::Results => {
             playlist::export_selected_playlist_action(app);
         }
-        KeyCode::Char('h') | KeyCode::Left if app.active_tab == Tab::Options => {
-            match app.options_index {
-                0 => {
-                    toggle_search_source(app, cmd_tx);
-                }
-                1 => {
-                    app.opt_search_limit = app.opt_search_limit.saturating_sub(1).max(1);
-                }
-                2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                5 => {
-                    app.opt_theme = ui_helpers::prev_theme(app.opt_theme.clone());
-                }
-                6 => {
-                    app.repeat_mode = ui_helpers::prev_repeat_mode(app.repeat_mode);
-                    app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
-                }
-                7 => {
-                    if app.eq_focus_band > 0 {
-                        app.eq_focus_band -= 1;
-                    }
-                }
-                8 => eq::cycle_eq_preset(app, cmd_tx, -1),
-                9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, -1),
-                10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, -1),
-                ui_helpers::MAX_OPTIONS_INDEX => {
-                    app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, -1)
-                }
-                _ => {}
+        KeyCode::Char('h') | KeyCode::Left if is_core_options(app) => match app.options_index {
+            0 => {
+                toggle_search_source(app, cmd_tx);
             }
-        }
-        KeyCode::Char('l') | KeyCode::Right if app.active_tab == Tab::Options => {
-            match app.options_index {
-                0 => {
-                    toggle_search_source(app, cmd_tx);
-                }
-                1 => app.opt_search_limit = (app.opt_search_limit + 1).min(50),
-                2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
-                5 => {
-                    app.opt_theme = ui_helpers::next_theme(app.opt_theme.clone());
-                }
-                6 => {
-                    app.repeat_mode = app.repeat_mode.next();
-                    app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
-                }
-                7 => {
-                    if app.eq_focus_band < 9 {
-                        app.eq_focus_band += 1;
-                    }
-                }
-                8 => eq::cycle_eq_preset(app, cmd_tx, 1),
-                9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, 1),
-                10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, 1),
-                ui_helpers::MAX_OPTIONS_INDEX => {
-                    app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, 1)
-                }
-                _ => {}
+            1 => {
+                app.opt_search_limit = app.opt_search_limit.saturating_sub(1).max(1);
             }
-        }
-        KeyCode::Char('p') if app.active_tab == Tab::Options => {
+            2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
+            5 => {
+                app.opt_theme = ui_helpers::prev_theme(app.opt_theme.clone());
+            }
+            6 => {
+                app.repeat_mode = ui_helpers::prev_repeat_mode(app.repeat_mode);
+                app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
+            }
+            7 => {
+                if app.eq_focus_band > 0 {
+                    app.eq_focus_band -= 1;
+                }
+            }
+            8 => eq::cycle_eq_preset(app, cmd_tx, -1),
+            9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, -1),
+            10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, -1),
+            ui_helpers::MAX_OPTIONS_INDEX => {
+                app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, -1)
+            }
+            _ => {}
+        },
+        KeyCode::Char('l') | KeyCode::Right if is_core_options(app) => match app.options_index {
+            0 => {
+                toggle_search_source(app, cmd_tx);
+            }
+            1 => app.opt_search_limit = (app.opt_search_limit + 1).min(50),
+            2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
+            5 => {
+                app.opt_theme = ui_helpers::next_theme(app.opt_theme.clone());
+            }
+            6 => {
+                app.repeat_mode = app.repeat_mode.next();
+                app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
+            }
+            7 => {
+                if app.eq_focus_band < 9 {
+                    app.eq_focus_band += 1;
+                }
+            }
+            8 => eq::cycle_eq_preset(app, cmd_tx, 1),
+            9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, 1),
+            10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, 1),
+            ui_helpers::MAX_OPTIONS_INDEX => {
+                app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, 1)
+            }
+            _ => {}
+        },
+        KeyCode::Char('p') if is_core_options(app) => {
             eq::cycle_eq_preset(app, cmd_tx, 1);
         }
-        KeyCode::Char('s') if app.active_tab == Tab::Options => {
+        KeyCode::Char('s') if is_core_options(app) => {
             save_config(&app.build_config());
             app.theme = app.opt_theme.clone();
             app.set_flash("Saved settings to ~/.config/rs-pug/config.toml", 4);
         }
         KeyCode::Char('+') | KeyCode::Char('=')
-            if app.active_tab == Tab::Options && app.options_index == 7 =>
+            if is_core_options(app) && app.options_index == 7 =>
         {
             let b = app.eq_focus_band;
             app.eq_bands[b] = (app.eq_bands[b] + 1.0).min(12.0);
@@ -653,14 +652,14 @@ pub fn handle_key_event(
                 eq::send_eq_update(cmd_tx, app.eq_bands);
             }
         }
-        KeyCode::Char('-') if app.active_tab == Tab::Options && app.options_index == 7 => {
+        KeyCode::Char('-') if is_core_options(app) && app.options_index == 7 => {
             let b = app.eq_focus_band;
             app.eq_bands[b] = (app.eq_bands[b] - 1.0).max(-12.0);
             if app.eq_enabled {
                 eq::send_eq_update(cmd_tx, app.eq_bands);
             }
         }
-        KeyCode::Char('0') if app.active_tab == Tab::Options && app.options_index == 7 => {
+        KeyCode::Char('0') if is_core_options(app) && app.options_index == 7 => {
             app.eq_bands = [0.0f32; 10];
             app.eq_preset_index = 0;
             if app.eq_enabled {

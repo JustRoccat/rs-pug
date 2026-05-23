@@ -94,6 +94,7 @@ async fn main() -> Result<()> {
     while running {
         let ui_state = PluginUiState::from_runtime(
             app.active_tab,
+            app.active_plugin_tab.clone(),
             ui_helpers::player_state_label(app.player_state),
             app.volume,
             app.muted,
