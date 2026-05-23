@@ -386,7 +386,6 @@ return {
 }
 ```
 
-Aby wejść do zakładki pluginowej, z pluginu ustaw:
 to go to the plugin tab, from plugin set:
 
 ```lua
