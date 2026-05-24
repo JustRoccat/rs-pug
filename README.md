@@ -82,7 +82,6 @@ cargo build --release
 | `p` | Previous track |
 | `m` | Mute / Unmute |
 | `r` | Cycle Repeat mode (None, Track, Queue) |
-| `z` | Toggle Shuffle |
 | `[` / `]` | Seek backward / forward |
 
 ### Tab Specific
