@@ -181,6 +181,12 @@ pub fn handle_key_event(
         |app: &App| app.active_tab == Tab::Options && app.active_plugin_tab.is_none();
 
     match key.code {
+        KeyCode::Char('0') if !(is_core_options(app) && (app.options_index == 5 || app.options_index == 7)) => {
+            let _ = cmd_tx.send(CoreCmd::VolumeUp);
+        }
+        KeyCode::Char('9') if !is_core_options(app) => {
+            let _ = cmd_tx.send(CoreCmd::VolumeDown);
+        }
         KeyCode::Char(c) if c.is_ascii_digit() => {
             let idx = c.to_digit(10).unwrap_or(0) as usize;
             match idx {
@@ -513,12 +519,6 @@ pub fn handle_key_event(
         }
         KeyCode::Right if !is_core_options(app) => {
             let _ = cmd_tx.send(CoreCmd::SeekBy(10));
-        }
-        KeyCode::Char('0') if !(is_core_options(app) && app.options_index == 5) => {
-            let _ = cmd_tx.send(CoreCmd::VolumeUp);
-        }
-        KeyCode::Char('9') => {
-            let _ = cmd_tx.send(CoreCmd::VolumeDown);
         }
         KeyCode::Char(c) if c == app.key_next => {
             if app.queue.len() > 1 {
