@@ -161,6 +161,9 @@ Now you can see examples and you can download plugins, themes, eqpresets here: h
 We have a discord server now, i will post there updates about the project and news!
 https://discord.gg/6FcBWwRQBX
 
+## Please read this if you plan to fork this project
+I welcome forks and derivatives. Please link to the original or credit rs-pug. Regardless, please do not misrepresent this as your own work. Even if you don't link the source, never claim you built it from scratch at the very least, retain the original copyright notice. I've already dealt with this, so let’s keep it simple: please don't be an asshole.
+
 ![gif](https://github.com/user-attachments/assets/43e4fc61-cd06-43a3-872c-632059467259)
 
 ## License
