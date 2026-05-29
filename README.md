@@ -82,7 +82,6 @@ cargo build --release
 | `p` | Previous track |
 | `m` | Mute / Unmute |
 | `r` | Cycle Repeat mode (None, Track, Queue) |
-| `[` / `]` | Seek backward / forward |
 
 ### Tab Specific
 
@@ -92,6 +91,7 @@ cargo build --release
   - `e`: Expand / Collapse playlist folders.
 - **Local Tab**:
   - `v`: Toggle view mode (**Flat** vs **Organized**).
+  - `Backspace` / `Esc`: Go back one level in Organized view.
 - **Options Tab**:
   - `f`: While focusing "EQ preset", press to save current EQ as a new preset.
 
@@ -146,9 +146,18 @@ Data is stored in a SQLite database at `~/.config/rs-pug/pug.db`. Legacy JSON fi
 
 Drop Lua scripts into `~/.config/rs-pug/plugins/`. They are loaded automatically and can react to keys, search queries, and playback events. See `docs.md` for the full API reference.
 
+Lua plugins that change the stock UI are opt-in. Add this to `~/.config/rs-pug/config.toml` to enable the new UI hooks (`on_ui_config`, `on_ui_sections`, `on_ui_update`, and `on_ui_inject`):
+
+```toml
+[lua]
+allow-lua-ui-changes = true
+```
+
+The default is `false`, so legacy plugins using `on_key`, `on_event`, `on_tabs`, or `on_ui_panels` continue to work unchanged. When UI customization is enabled, plugin load/hook/layout issues are captured as non-fatal warnings and shown in the statusbar instead of crashing the app.
+
 ## Configuration
 
-Config file path: `~/.config/rs-pug/config.toml`. The app also looks for `rs-pug.toml` or `pug.toml` in the current working directory.
+Config file path: `~/.config/rs-pug/config.toml`.
 
 ## Contributing
 

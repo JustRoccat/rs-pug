@@ -86,6 +86,8 @@ pub struct Config {
     pub mpv: MpvConfig,
     #[serde(default)]
     pub keybinds: KeybindsConfig,
+    #[serde(default)]
+    pub lua: LuaConfig,
 }
 
 impl Default for Config {
@@ -95,6 +97,7 @@ impl Default for Config {
             search: SearchConfig::default(),
             mpv: MpvConfig::default(),
             keybinds: KeybindsConfig::default(),
+            lua: LuaConfig::default(),
         }
     }
 }
@@ -142,6 +145,20 @@ impl Default for GeneralConfig {
             plugins_enabled: true,
             plugins_dir: default_plugins_dir(),
             music_directories: default_music_directories(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LuaConfig {
+    #[serde(default, rename = "allow-lua-ui-changes", alias = "allow_lua_ui_changes")]
+    pub allow_lua_ui_changes: bool,
+}
+
+impl Default for LuaConfig {
+    fn default() -> Self {
+        Self {
+            allow_lua_ui_changes: false,
         }
     }
 }

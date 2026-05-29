@@ -1,6 +1,11 @@
 use crate::core::{CoreCmd, CoreEvent};
-use crate::model::{App, Focus, PlayerState, RepeatMode, Tab};
-use crate::plugins::{PluginCoreAction, PluginDispatch, PluginEvent};
+use crate::model::{
+    default_main_tabs, App, Focus, MainTab, MainTabKind, PlayerState, RepeatMode, Tab,
+};
+use crate::plugins::{
+    PluginCoreAction, PluginDispatch, PluginEvent, PluginLayoutConfig, PluginUiConfig,
+    PluginUiLayoutPatch,
+};
 use crate::ui_helpers;
 use tokio::sync::mpsc;
 
@@ -178,6 +183,15 @@ pub fn apply_plugin_dispatch(
         if let Some(core_tab) = parse_tab_name(&tab) {
             app.active_tab = core_tab;
             app.active_plugin_tab = None;
+            app.active_custom_tab = None;
+        } else if app.allow_lua_ui_changes
+            && app
+                .main_tabs
+                .iter()
+                .any(|t| matches!(&t.kind, MainTabKind::Custom(id) if id == &tab))
+        {
+            app.active_custom_tab = Some(tab);
+            app.active_plugin_tab = None;
         } else if app.plugin_tabs.iter().any(|t| t.id == tab) {
             app.active_tab = Tab::Options;
             app.active_plugin_tab = Some(tab);
@@ -215,6 +229,9 @@ pub fn apply_plugin_dispatch(
     }
     if let Some(index) = dispatch.ui.set_selected_queue {
         app.selected_queue = index.min(app.queue.len().saturating_sub(1));
+    }
+    if app.allow_lua_ui_changes {
+        apply_layout_patch(app, dispatch.ui.layout);
     }
     if let Some(msg) = dispatch.flash {
         app.set_flash(msg, dispatch.flash_seconds.unwrap_or(4));
@@ -268,6 +285,7 @@ pub fn parse_tab_name(raw: &str) -> Option<Tab> {
         "albums" => Some(Tab::Albums),
         "library" => Some(Tab::Library),
         "options" => Some(Tab::Options),
+        "local" => Some(Tab::Local),
         _ => None,
     }
 }
@@ -278,5 +296,277 @@ pub fn parse_focus_name(raw: &str) -> Option<Focus> {
         "results" => Some(Focus::Results),
         "queue" => Some(Focus::Queue),
         _ => None,
+    }
+}
+
+pub fn apply_ui_config(app: &mut App, config: PluginUiConfig) {
+    if !app.allow_lua_ui_changes {
+        return;
+    }
+    let mut tabs = default_main_tabs();
+    for id in &config.tabs.remove {
+        if !tabs.iter().any(|tab| &tab.id == id) {
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: unknown tab in tabs.remove: {id}"
+            ));
+        }
+    }
+    tabs.retain(|tab| !config.tabs.remove.iter().any(|id| id == &tab.id));
+    for (id, rename) in &config.tabs.rename {
+        if !tabs.iter().any(|tab| &tab.id == id) {
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: unknown tab in tabs.rename: {id}"
+            ));
+            continue;
+        }
+        if let Some(tab) = tabs.iter_mut().find(|tab| &tab.id == id) {
+            if let Some(title) = &rename.title {
+                tab.title = title.to_uppercase();
+            }
+            if let Some(icon) = &rename.icon {
+                tab.icon = icon.clone();
+            }
+        }
+    }
+    if !config.tabs.order.is_empty() {
+        let mut ordered = Vec::new();
+        for id in &config.tabs.order {
+            if let Some(pos) = tabs.iter().position(|tab| &tab.id == id) {
+                ordered.push(tabs.remove(pos));
+            } else {
+                app.push_plugin_warning(format!(
+                    "Lua WARN [on_ui_config]: unknown tab in tabs.order: {id}"
+                ));
+            }
+        }
+        ordered.extend(tabs);
+        tabs = ordered;
+    }
+    for custom in config.tabs.custom {
+        if custom.id.trim().is_empty() {
+            app.push_plugin_warning(
+                "Lua WARN [on_ui_config]: custom tab without id ignored".to_owned(),
+            );
+            continue;
+        }
+        if tabs.iter().any(|tab| tab.id == custom.id) {
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: duplicate custom tab id ignored: {}",
+                custom.id
+            ));
+            continue;
+        }
+        let tab = MainTab {
+            id: custom.id.clone(),
+            title: custom.title.to_uppercase(),
+            icon: custom.icon.unwrap_or_else(|| "◌".to_owned()),
+            kind: MainTabKind::Custom(custom.id),
+        };
+        let requested = custom.position.unwrap_or(tabs.len() + 1);
+        let pos = requested.saturating_sub(1).min(tabs.len());
+        if requested == 0 || requested > tabs.len() + 1 {
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: custom tab position clamped: {requested}"
+            ));
+        }
+        tabs.insert(pos, tab);
+    }
+    app.main_tabs = tabs;
+    if app.main_tabs.is_empty() {
+        app.push_plugin_warning(
+            "Lua WARN [on_ui_config]: all stock tabs removed; defaults restored".to_owned(),
+        );
+        app.main_tabs = default_main_tabs();
+    }
+    if !app.main_tabs.iter().any(|tab| match &tab.kind {
+        MainTabKind::Stock(stock) => app.active_custom_tab.is_none() && *stock == app.active_tab,
+        MainTabKind::Custom(id) => app.active_custom_tab.as_ref() == Some(id),
+    }) {
+        activate_main_tab(app, 0);
+    }
+    apply_layout_config(app, config.layout);
+}
+
+pub fn apply_layout_config(app: &mut App, layout: PluginLayoutConfig) {
+    if !app.allow_lua_ui_changes {
+        return;
+    }
+    apply_layout_dimensions(
+        app,
+        layout.queue_width_percent,
+        layout.visualizer_height,
+        layout.tab_bar_position.as_deref(),
+        layout.tabs_width,
+        layout.queue_position.as_deref(),
+        "layout",
+    );
+    if let Some(value) = layout.show_progress_bar {
+        app.ui_layout.show_progress_bar = value;
+    }
+    if let Some(value) = layout.show_volume_bar {
+        app.ui_layout.show_volume_bar = value;
+    }
+    if let Some(value) = layout.show_statusbar {
+        app.ui_layout.show_statusbar = value;
+    }
+    if let Some(value) = layout.show_keybind_hints {
+        app.ui_layout.show_keybind_hints = value;
+    }
+    apply_layout_hide(app, layout.hide);
+    apply_custom_sections(app, layout.custom_sections);
+    update_section_visibility(app, layout.hide_sections, layout.show_sections);
+}
+
+pub fn apply_layout_patch(app: &mut App, patch: PluginUiLayoutPatch) {
+    if !app.allow_lua_ui_changes {
+        return;
+    }
+    apply_layout_dimensions(
+        app,
+        patch.queue_width_percent,
+        patch.visualizer_height,
+        patch.tab_bar_position.as_deref(),
+        patch.tabs_width,
+        patch.queue_position.as_deref(),
+        "ui.layout",
+    );
+    update_section_visibility(app, patch.hide_sections, patch.show_sections);
+}
+
+fn apply_layout_dimensions(
+    app: &mut App,
+    queue_width_percent: Option<u16>,
+    visualizer_height: Option<u16>,
+    tab_bar_position: Option<&str>,
+    tabs_width: Option<u16>,
+    queue_position: Option<&str>,
+    source: &str,
+) {
+    if let Some(value) = queue_width_percent {
+        let clamped = value.clamp(10, 90);
+        if clamped != value {
+            app.push_plugin_warning(format!(
+                "Lua WARN [{source}]: queue_width_percent clamped from {value} to {clamped}"
+            ));
+        }
+        app.ui_layout.queue_width_percent = clamped;
+    }
+    if let Some(value) = visualizer_height {
+        let clamped = value.clamp(0, 10);
+        if clamped != value {
+            app.push_plugin_warning(format!(
+                "Lua WARN [{source}]: visualizer_height clamped from {value} to {clamped}"
+            ));
+        }
+        app.ui_layout.visualizer_height = clamped;
+    }
+    if let Some(value) = tab_bar_position {
+        apply_tab_bar_position(app, value, &format!("{source}.tab_bar_position"));
+    }
+    if let Some(value) = tabs_width {
+        apply_tabs_width(app, value, &format!("{source}.tabs_width"));
+    }
+    if let Some(value) = queue_position {
+        apply_queue_position(app, value, &format!("{source}.queue_position"));
+    }
+}
+
+fn apply_layout_hide(app: &mut App, hidden_items: Vec<String>) {
+    for item in hidden_items {
+        match item.as_str() {
+            "visualizer" => app.ui_layout.visualizer_height = 0,
+            "progress_bar" => app.ui_layout.show_progress_bar = false,
+            "volume_bar" => app.ui_layout.show_volume_bar = false,
+            "statusbar" => app.ui_layout.show_statusbar = false,
+            "keybind_hints" => app.ui_layout.show_keybind_hints = false,
+            _ => app.push_plugin_warning(format!(
+                "Lua WARN [layout.hide]: unknown UI element: {item}"
+            )),
+        }
+    }
+}
+
+fn apply_custom_sections(app: &mut App, sections: Vec<crate::plugins::PluginCustomSection>) {
+    for section in sections {
+        if section.id.trim().is_empty() {
+            app.push_plugin_warning(
+                "Lua WARN [layout.custom_sections]: section without id ignored".to_owned(),
+            );
+            continue;
+        }
+        if !matches!(
+            section.position.as_str(),
+            "above_player" | "below_player" | "left" | "right"
+        ) {
+            app.push_plugin_warning(format!(
+                "Lua WARN [layout.custom_sections]: invalid position for {}: {}",
+                section.id, section.position
+            ));
+            continue;
+        }
+        if !app.custom_sections.iter().any(|s| s.id == section.id) {
+            app.custom_sections.push(section);
+        } else {
+            app.push_plugin_warning(format!(
+                "Lua WARN [layout.custom_sections]: duplicate section id ignored: {}",
+                section.id
+            ));
+        }
+    }
+}
+
+fn apply_tab_bar_position(app: &mut App, raw: &str, source: &str) {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "top" | "bottom" | "left" | "right" => {
+            app.ui_layout.tab_bar_position = raw.trim().to_ascii_lowercase()
+        }
+        other => app.push_plugin_warning(format!(
+            "Lua WARN [{source}]: unknown tab_bar_position: {other}"
+        )),
+    }
+}
+
+fn apply_queue_position(app: &mut App, raw: &str, source: &str) {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "left" | "right" => app.ui_layout.queue_position = raw.trim().to_ascii_lowercase(),
+        other => app.push_plugin_warning(format!(
+            "Lua WARN [{source}]: unknown queue_position: {other}"
+        )),
+    }
+}
+
+fn apply_tabs_width(app: &mut App, value: u16, source: &str) {
+    let clamped = value.clamp(12, 40);
+    if clamped != value {
+        app.push_plugin_warning(format!(
+            "Lua WARN [{source}]: tabs_width clamped from {value} to {clamped}"
+        ));
+    }
+    app.ui_layout.tabs_width = clamped;
+}
+
+pub fn activate_main_tab(app: &mut App, index: usize) {
+    if let Some(tab) = app.main_tabs.get(index) {
+        match &tab.kind {
+            MainTabKind::Stock(stock) => {
+                app.active_tab = *stock;
+                app.active_custom_tab = None;
+            }
+            MainTabKind::Custom(id) => {
+                app.active_custom_tab = Some(id.clone());
+            }
+        }
+        app.active_plugin_tab = None;
+    }
+}
+
+fn update_section_visibility(app: &mut App, hide: Vec<String>, show: Vec<String>) {
+    for id in hide {
+        if !app.hidden_sections.iter().any(|hidden| hidden == &id) {
+            app.hidden_sections.push(id);
+        }
+    }
+    for id in show {
+        app.hidden_sections.retain(|hidden| hidden != &id);
     }
 }

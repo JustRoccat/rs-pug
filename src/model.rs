@@ -3,8 +3,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::config::{Config, GeneralConfig, KeybindsConfig, MpvConfig, SearchConfig, Theme};
-use crate::plugins::{PluginPanel, PluginTab};
+use crate::config::{
+    Config, GeneralConfig, KeybindsConfig, LuaConfig, MpvConfig, SearchConfig, Theme,
+};
+use crate::plugins::{
+    PluginCustomSection, PluginPanel, PluginPanelItem, PluginTab, PluginUiInject,
+    PluginUiLayoutState,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -104,6 +109,84 @@ pub enum Tab {
     Options,
 }
 
+#[derive(Debug, Clone)]
+pub enum MainTabKind {
+    Stock(Tab),
+    Custom(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct MainTab {
+    pub id: String,
+    pub title: String,
+    pub icon: String,
+    pub kind: MainTabKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct UiLayout {
+    pub queue_width_percent: u16,
+    pub visualizer_height: u16,
+    pub show_progress_bar: bool,
+    pub show_volume_bar: bool,
+    pub show_statusbar: bool,
+    pub show_keybind_hints: bool,
+    pub tab_bar_position: String,
+    pub tabs_width: u16,
+    pub queue_position: String,
+}
+
+impl Default for UiLayout {
+    fn default() -> Self {
+        Self {
+            queue_width_percent: 40,
+            visualizer_height: 5,
+            show_progress_bar: true,
+            show_volume_bar: true,
+            show_statusbar: true,
+            show_keybind_hints: true,
+            tab_bar_position: "top".to_owned(),
+            tabs_width: 22,
+            queue_position: "right".to_owned(),
+        }
+    }
+}
+
+pub fn default_main_tabs() -> Vec<MainTab> {
+    vec![
+        MainTab {
+            id: "discover".to_owned(),
+            title: "DISCOVER".to_owned(),
+            icon: "♫".to_owned(),
+            kind: MainTabKind::Stock(Tab::Discover),
+        },
+        MainTab {
+            id: "albums".to_owned(),
+            title: "ALBUMS".to_owned(),
+            icon: "◈".to_owned(),
+            kind: MainTabKind::Stock(Tab::Albums),
+        },
+        MainTab {
+            id: "library".to_owned(),
+            title: "LIBRARY".to_owned(),
+            icon: "◉".to_owned(),
+            kind: MainTabKind::Stock(Tab::Library),
+        },
+        MainTab {
+            id: "local".to_owned(),
+            title: "LOCAL".to_owned(),
+            icon: "🗀".to_owned(),
+            kind: MainTabKind::Stock(Tab::Local),
+        },
+        MainTab {
+            id: "options".to_owned(),
+            title: "OPTIONS".to_owned(),
+            icon: "⚙".to_owned(),
+            kind: MainTabKind::Stock(Tab::Options),
+        },
+    ]
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepeatMode {
     Off,
@@ -195,6 +278,10 @@ pub struct App {
     pub opt_source: crate::config::SearchSource,
     pub opt_socket: String,
     pub opt_theme: Theme,
+    pub opt_mpris_enabled: bool,
+    pub opt_mpris_command: Option<String>,
+    pub opt_plugins_enabled: bool,
+    pub opt_plugins_dir: String,
     pub opt_music_dirs: Vec<String>,
     pub opt_editing: bool,
     pub opt_edit_buffer: String,
@@ -228,6 +315,15 @@ pub struct App {
     pub plugin_panels: Vec<PluginPanel>,
     pub plugin_tabs: Vec<PluginTab>,
     pub active_plugin_tab: Option<String>,
+    pub active_custom_tab: Option<String>,
+    pub plugin_warnings: VecDeque<String>,
+    pub allow_lua_ui_changes: bool,
+    pub main_tabs: Vec<MainTab>,
+    pub ui_layout: UiLayout,
+    pub custom_sections: Vec<PluginCustomSection>,
+    pub hidden_sections: Vec<String>,
+    pub ui_section_items: std::collections::HashMap<String, Vec<PluginPanelItem>>,
+    pub ui_inject: PluginUiInject,
     pub storage: crate::storage::Storage,
 }
 
@@ -267,6 +363,10 @@ impl App {
             opt_source: crate::config::SearchSource::YouTube,
             opt_socket: "/tmp/rs-pug.sock".to_owned(),
             opt_theme: Theme::Dark,
+            opt_mpris_enabled: true,
+            opt_mpris_command: None,
+            opt_plugins_enabled: true,
+            opt_plugins_dir: GeneralConfig::default().plugins_dir,
             opt_music_dirs: Vec::new(),
             opt_editing: false,
             opt_edit_buffer: String::new(),
@@ -300,6 +400,15 @@ impl App {
             plugin_panels: Vec::new(),
             plugin_tabs: Vec::new(),
             active_plugin_tab: None,
+            active_custom_tab: None,
+            plugin_warnings: VecDeque::new(),
+            allow_lua_ui_changes: false,
+            main_tabs: default_main_tabs(),
+            ui_layout: UiLayout::default(),
+            custom_sections: Vec::new(),
+            hidden_sections: Vec::new(),
+            ui_section_items: std::collections::HashMap::new(),
+            ui_inject: PluginUiInject::default(),
             storage,
         }
     }
@@ -307,6 +416,16 @@ impl App {
     pub fn set_flash(&mut self, msg: impl Into<String>, seconds: u64) {
         self.flash_message = msg.into();
         self.flash_until = Instant::now() + Duration::from_secs(seconds);
+    }
+
+    pub fn push_plugin_warning(&mut self, warning: String) {
+        if self.plugin_warnings.back() == Some(&warning) {
+            return;
+        }
+        if self.plugin_warnings.len() >= 20 {
+            self.plugin_warnings.pop_front();
+        }
+        self.plugin_warnings.push_back(warning);
     }
 
     pub fn shown_message(&self) -> &str {
@@ -372,19 +491,24 @@ impl App {
         self.opt_source = cfg.search.source;
         self.opt_socket = cfg.mpv.socket.clone();
         self.opt_theme = cfg.general.theme.clone();
+        self.opt_mpris_enabled = cfg.general.mpris_enabled;
+        self.opt_mpris_command = cfg.general.mpris_command.clone();
+        self.opt_plugins_enabled = cfg.general.plugins_enabled;
+        self.opt_plugins_dir = cfg.general.plugins_dir.clone();
         self.opt_music_dirs = cfg.general.music_directories.clone();
         self.theme = cfg.general.theme.clone();
+        self.allow_lua_ui_changes = cfg.lua.allow_lua_ui_changes;
         self.apply_keybinds(&cfg.keybinds);
     }
 
     pub fn build_config(&self) -> Config {
         Config {
             general: GeneralConfig {
-                mpris_enabled: true,
-                mpris_command: None,
+                mpris_enabled: self.opt_mpris_enabled,
+                mpris_command: self.opt_mpris_command.clone(),
                 theme: self.opt_theme.clone(),
-                plugins_enabled: true,
-                plugins_dir: GeneralConfig::default().plugins_dir,
+                plugins_enabled: self.opt_plugins_enabled,
+                plugins_dir: self.opt_plugins_dir.clone(),
                 music_directories: self.opt_music_dirs.clone(),
             },
             search: SearchConfig {
@@ -403,7 +527,39 @@ impl App {
                 seek_back: self.key_seek_back,
                 seek_forward: self.key_seek_forward,
             },
+            lua: LuaConfig {
+                allow_lua_ui_changes: self.allow_lua_ui_changes,
+            },
         }
+    }
+
+    pub fn current_layout_state(&self) -> PluginUiLayoutState {
+        PluginUiLayoutState {
+            queue_width_percent: self.ui_layout.queue_width_percent,
+            visualizer_height: self.ui_layout.visualizer_height,
+            tab_bar_position: self.ui_layout.tab_bar_position.clone(),
+            tabs_width: self.ui_layout.tabs_width,
+            queue_position: self.ui_layout.queue_position.clone(),
+        }
+    }
+
+    pub fn visible_section_ids(&self) -> Vec<String> {
+        self.custom_sections
+            .iter()
+            .filter(|s| !self.hidden_sections.iter().any(|id| id == &s.id))
+            .map(|s| s.id.clone())
+            .collect()
+    }
+
+    pub fn active_tab_index(&self) -> usize {
+        self.main_tabs
+            .iter()
+            .position(|tab| match &tab.kind {
+                MainTabKind::Stock(t) => self.active_custom_tab.is_none() && *t == self.active_tab,
+                MainTabKind::Custom(id) => self.active_custom_tab.as_ref() == Some(id),
+            })
+            .map(|i| i + 1)
+            .unwrap_or(1)
     }
 
     fn apply_keybinds(&mut self, keybinds: &KeybindsConfig) {

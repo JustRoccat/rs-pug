@@ -181,8 +181,8 @@ ui = { set_tab = "my_settings" }
 
 Keyboard navigation:
 
-- `1..5` = built-in tabs
-- `6,7,8...` = plugin tabs in `on_tabs` order
+- `1..N` = visible tabs in the rendered tab order, up to `8`
+- `9` / `0` stay reserved for volume down/up and are not used for tabs
 
 ## Examples
 
@@ -529,3 +529,264 @@ return {
 ```
 
 Important: this example uses `target = "results"` and `target = "queue"`, so it renders in normal tab panes. It does **not** use `target = "overlay"`.
+
+## Lua UI changes (opt-in)
+
+`rs-pug` keeps the legacy Lua API enabled by default and gates layout-changing hooks behind an explicit config flag:
+
+```toml
+[lua]
+allow-lua-ui-changes = false
+```
+
+Set it to `true` to allow plugins to alter the stock UI. When enabled, startup shows `Lua UI changes enabled`.
+
+### Compatibility table
+
+| Hook / feature | Requires `allow-lua-ui-changes` | Notes |
+| --- | --- | --- |
+| `on_key` | No | Existing dispatch fields keep working. New `ui.layout` fields are ignored when the flag is false. |
+| `on_event` | No | Existing dispatch fields keep working. New `ui.layout` fields are ignored when the flag is false. |
+| `on_tabs` | No | Legacy plugin tabs remain outside the main tab bar; numeric shortcuts are assigned dynamically in visible tab order up to `8`, with `9`/`0` reserved for volume. |
+| `on_ui_panels` | No | Legacy panels, including `target = "overlay"`, remain independent of custom sections. |
+| `on_ui_config` | Yes | Runs once at startup only when enabled. |
+| `on_ui_sections` | Yes | Runs on rerender only when enabled. |
+| `on_ui_update` | Yes | Runs after UI state changes only when enabled. |
+| `on_ui_inject` | Yes | Runs on rerender only when enabled. |
+
+When the flag is false, plugins can still define the new hooks; the runtime silently ignores them without errors.
+
+### Errors and warnings
+
+Lua plugin loading and enabled UI hooks are isolated per plugin. A failing plugin or malformed hook return does not crash the app and does not stop other plugins from running. The runtime records warnings for:
+
+- plugin directory/read/load failures,
+- missing or invalid `plugin` tables,
+- hook values that are not functions,
+- hook call errors,
+- malformed return tables,
+- invalid tab ids, duplicate custom tab ids, invalid section ids/positions, unknown `layout.hide` entries, and clamped layout dimensions.
+
+Warnings are bounded, deduplicated when repeated, and surfaced in the statusbar with a `⚠` marker. When `allow-lua-ui-changes = false`, the new UI hooks and new `ui.layout` dispatch fields are still ignored silently as a compatibility guarantee.
+
+### `PluginUiState` additions
+
+New UI-aware state fields are available to Lua hooks:
+
+- `active_custom_tab`: id of the active `tabs.custom` tab, or `nil`.
+- `active_plugin_tab`: legacy `on_tabs` tab id, unchanged.
+- `active_tab_index`: current main-tab index as an integer.
+- `current_layout`: table with `queue_width_percent`, `visualizer_height`, `tab_bar_position`, `tabs_width`, and `queue_position`.
+- `visible_sections`: ids of currently visible custom sections.
+
+### `on_ui_config`
+
+Runs once at startup when Lua UI changes are enabled. It can patch tabs and layout:
+
+```lua
+function plugin.on_ui_config(state)
+  return {
+    tabs = {
+      remove = { "local" },
+      order = { "discover", "library", "albums", "options" },
+      rename = {
+        discover = { title = "Find", icon = "⌕" }
+      },
+      custom = {
+        { id = "radio", title = "Radio", icon = "◌", position = 2 }
+      }
+    },
+    layout = {
+      queue_width_percent = 35,
+      visualizer_height = 4,
+      show_progress_bar = true,
+      show_volume_bar = true,
+      show_statusbar = true,
+      show_keybind_hints = true,
+      tab_bar_position = "top", -- "top", "bottom", "left", or "right"
+      tabs_width = 22,           -- used by tab_bar_position = "left"/"right"
+      queue_position = "right", -- "left" or "right"
+      hide = { "volume_bar" },
+      custom_sections = {
+        { id = "radio_status", position = "below_player", height = 3, content = "lua" }
+      }
+    }
+  }
+end
+```
+
+Stock tab ids are `discover`, `albums`, `library`, `local`, and `options`. If the active stock tab is removed, the app falls back to the first available main tab. `tabs.custom` tabs live in the main tab bar. Numeric shortcuts are assigned dynamically in visible tab order up to `8`; `9` and `0` remain volume down/up.
+
+Custom section positions are `above_player`, `below_player`, `left`, and `right`. Sections with `content = "lua"` can be filled by `on_ui_sections`; missing data renders an empty section.
+
+Layout fields also support `tab_bar_position = "top"`, `"bottom"`, `"left"`, or `"right"`. Left/right positions render a vertical tab sidebar and use `tabs_width`; top/bottom positions render the horizontal tab bar above or below the app. `queue_position = "left"` places the queue before the results panel. Invalid positions are ignored with a Lua warning; `tabs_width` is clamped to a safe range.
+
+### `on_ui_sections`
+
+Returns a map of custom section ids to item lists:
+
+```lua
+function plugin.on_ui_sections(state)
+  return {
+    radio_status = {
+      { type = "header", text = "Radio" },
+      { type = "text", text = "Ready" },
+      { type = "keybind", key = "r", action = "refresh stations" },
+      { type = "progress", label = "buffer", percent = 80 }
+    }
+  }
+end
+```
+
+Supported item types are `text`, `info`, `option`, `stat`, `separator`, `header`, `keybind`, and `progress`.
+
+### `on_ui_inject`
+
+Returns optional lists inserted into stock panels. Returning `nil` injects nothing.
+
+```lua
+function plugin.on_ui_inject(state)
+  return {
+    results_top = { { type = "info", text = "Plugin result hint" } },
+    results_bottom = {},
+    queue_top = {},
+    queue_bottom = { { type = "text", text = "End of queue" } },
+    statusbar_extra = { { type = "keybind", key = "R", action = "radio" } }
+  }
+end
+```
+
+### `on_ui_update`
+
+Runs after UI state changes and returns additive layout patches. Only supplied fields are overwritten.
+
+```lua
+function plugin.on_ui_update(state)
+  if state.active_custom_tab == "radio" then
+    return {
+      layout = {
+        queue_width_percent = 30,
+        visualizer_height = 3,
+        show_sections = { "radio_status" }
+      }
+    }
+  end
+  return { layout = { hide_sections = { "radio_status" } } }
+end
+```
+
+### `ui.layout` dispatch patches
+
+`on_key` and `on_event` can return live layout patches in `ui.layout` when Lua UI changes are enabled:
+
+```lua
+function plugin.on_key(key, state)
+  if key == "L" then
+    return {
+      consume = true,
+      ui = {
+        layout = {
+          queue_width_percent = 45,
+          visualizer_height = 5,
+          tab_bar_position = "right", -- or "left"/"top"/"bottom"
+          tabs_width = 24,
+          queue_position = "left",
+          hide_sections = { "radio_status" },
+          show_sections = { "other_section" }
+        }
+      }
+    }
+  end
+end
+```
+
+Existing `ui` fields such as `set_tab`, `set_search_query`, `set_focus`, and selection setters are unchanged.
+
+
+### Minimal opt-in example
+
+`~/.config/rs-pug/config.toml`:
+
+```toml
+[lua]
+allow-lua-ui-changes = true
+```
+
+`~/.config/rs-pug/plugins/minimal_ui.lua`:
+
+```lua
+plugin = {}
+
+function plugin.on_ui_config(state)
+  return {
+    layout = {
+      custom_sections = {
+        { id = "hello", position = "below_player", height = 3, content = "lua" }
+      }
+    }
+  }
+end
+
+function plugin.on_ui_sections(state)
+  return {
+    hello = {
+      { type = "header", text = "Hello from Lua" },
+      { type = "text", text = "UI changes are enabled." }
+    }
+  }
+end
+
+return plugin
+```
+
+### Full opt-in example
+
+```lua
+plugin = {}
+
+function plugin.on_ui_config(state)
+  return {
+    tabs = {
+      rename = { discover = { title = "Search", icon = "⌕" } },
+      custom = { { id = "dashboard", title = "Dash", icon = "◆", position = 2 } }
+    },
+    layout = {
+      queue_width_percent = 35,
+      visualizer_height = 4,
+      custom_sections = {
+        { id = "dash_stats", position = "right", width = 34, height = 8, content = "lua" },
+        { id = "dash_keys", position = "below_player", height = 3, content = "lua" }
+      }
+    }
+  }
+end
+
+function plugin.on_ui_sections(state)
+  return {
+    dash_stats = {
+      { type = "header", text = "Dashboard" },
+      { type = "stat", label = "Queue", value = tostring(state.queue_len) },
+      { type = "progress", label = "Volume", percent = state.volume }
+    },
+    dash_keys = {
+      { type = "keybind", key = "1-8", action = "visible tabs" },
+      { type = "keybind", key = "9/0", action = "volume down/up" }
+    }
+  }
+end
+
+function plugin.on_ui_inject(state)
+  return {
+    statusbar_extra = { { type = "text", text = "Lua UI active" } }
+  }
+end
+
+function plugin.on_ui_update(state)
+  if state.active_custom_tab == "dashboard" then
+    return { layout = { show_sections = { "dash_stats", "dash_keys" } } }
+  end
+  return { layout = { hide_sections = { "dash_stats" } } }
+end
+
+return plugin
+```

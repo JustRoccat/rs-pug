@@ -1,6 +1,10 @@
-use std::{fs, path::PathBuf, sync::{Arc, Mutex}};
 use crate::db::DbStorage;
-use crate::model::{Playlist, Song, LocalSong};
+use crate::model::{LocalSong, Playlist, Song};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Clone)]
 pub struct Storage {
@@ -22,20 +26,28 @@ impl Storage {
         let mut db = DbStorage::open(db_path).map_err(|e| e.to_string())?;
 
         Self::migrate_from_json(&mut db)?;
+        Self::migrate_last_scanned_dirs(&mut db);
 
-        Ok(Self { db: Arc::new(Mutex::new(db)) })
+        Ok(Self {
+            db: Arc::new(Mutex::new(db)),
+        })
     }
 
     fn config_dir() -> Result<PathBuf, std::io::Error> {
         if let Ok(home) = std::env::var("HOME") {
             Ok(PathBuf::from(home).join(".config/rs-pug"))
         } else {
-            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "HOME not set",
+            ))
         }
     }
 
     fn json_path(filename: &str) -> PathBuf {
-        Self::config_dir().unwrap_or_else(|_| PathBuf::from(".")).join(filename)
+        Self::config_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(filename)
     }
 
     fn migrate_from_json(db: &mut DbStorage) -> Result<(), String> {
@@ -65,7 +77,8 @@ impl Storage {
         }
 
         if !local_library.is_empty() || !playlists.is_empty() || !recently_played.is_empty() {
-            db.migrate_from_json(local_library, playlists, recently_played).map_err(|e| e.to_string())?;
+            db.migrate_from_json(local_library, playlists, recently_played)
+                .map_err(|e| e.to_string())?;
 
             // Delete legacy JSON files to prevent re-migration on every startup
             let _ = fs::remove_file(Self::json_path("local_library.json"));
@@ -77,10 +90,18 @@ impl Storage {
     }
 
     pub fn load_local_library(&self) -> Result<Vec<LocalSong>, String> {
-        self.db.lock().unwrap().load_local_songs().map_err(|e| e.to_string())
+        self.db
+            .lock()
+            .unwrap()
+            .load_local_songs()
+            .map_err(|e| e.to_string())
     }
 
-    pub fn fetch_local_songs_window(&self, target_index: usize, window_size: usize) -> Result<(Vec<LocalSong>, usize, usize), String> {
+    pub fn fetch_local_songs_window(
+        &self,
+        target_index: usize,
+        window_size: usize,
+    ) -> Result<(Vec<LocalSong>, usize, usize), String> {
         let db = self.db.lock().unwrap();
         let total = db.get_local_songs_count().map_err(|e| e.to_string())?;
 
@@ -89,46 +110,73 @@ impl Storage {
             .saturating_sub(window_size / 2)
             .min(total.saturating_sub(window_size));
 
-        let songs = db.load_local_songs_paginated(window_size, offset).map_err(|e| e.to_string())?;
+        let songs = db
+            .load_local_songs_paginated(window_size, offset)
+            .map_err(|e| e.to_string())?;
 
         Ok((songs, offset, total))
     }
 
     pub fn save_local_library(&self, songs: &[LocalSong]) -> Result<(), String> {
-        self.db.lock().unwrap().save_local_songs_bulk(songs).map_err(|e| e.to_string())
+        self.db
+            .lock()
+            .unwrap()
+            .save_local_songs_bulk(songs)
+            .map_err(|e| e.to_string())
     }
 
     pub fn load_playlists(&self) -> Result<Vec<Playlist>, String> {
-        self.db.lock().unwrap().load_playlists().map_err(|e| e.to_string())
+        self.db
+            .lock()
+            .unwrap()
+            .load_playlists()
+            .map_err(|e| e.to_string())
     }
 
     pub fn save_playlists(&self, playlists: &[Playlist]) -> Result<(), String> {
-        self.db.lock().unwrap().save_playlists(playlists).map_err(|e| e.to_string())
+        self.db
+            .lock()
+            .unwrap()
+            .save_playlists(playlists)
+            .map_err(|e| e.to_string())
     }
 
     pub fn load_recently_played(&self) -> Result<Vec<Song>, String> {
-        self.db.lock().unwrap().load_recently_played().map_err(|e| e.to_string())
+        self.db
+            .lock()
+            .unwrap()
+            .load_recently_played()
+            .map_err(|e| e.to_string())
     }
 
     pub fn save_recently_played(&self, songs: &[Song]) -> Result<(), String> {
-        self.db.lock().unwrap().save_recently_played(songs).map_err(|e| e.to_string())
+        self.db
+            .lock()
+            .unwrap()
+            .save_recently_played(songs)
+            .map_err(|e| e.to_string())
+    }
+
+    fn migrate_last_scanned_dirs(db: &mut DbStorage) {
+        let path = Self::json_path("last_scanned_dirs.json");
+        if let Ok(raw) = fs::read_to_string(&path) {
+            if let Ok(data) = serde_json::from_str::<Vec<String>>(&raw) {
+                let _ = db.save_last_scanned_dirs(&data);
+                let _ = fs::remove_file(path);
+            }
+        }
     }
 
     pub fn load_last_scanned_dirs(&self) -> Vec<String> {
-        let path = Self::json_path("last_scanned_dirs.json");
-        if let Ok(raw) = fs::read_to_string(path) {
-            if let Ok(data) = serde_json::from_str::<Vec<String>>(&raw) {
-                return data;
-            }
-        }
-        Vec::new()
+        self.db
+            .lock()
+            .unwrap()
+            .load_last_scanned_dirs()
+            .unwrap_or_default()
     }
 
     pub fn save_last_scanned_dirs(&self, dirs: &[String]) {
-        let path = Self::json_path("last_scanned_dirs.json");
-        if let Ok(raw) = serde_json::to_string_pretty(dirs) {
-            let _ = fs::write(path, raw);
-        }
+        let _ = self.db.lock().unwrap().save_last_scanned_dirs(dirs);
     }
 
     pub fn import_playlist_from_default(&self) -> Result<crate::model::Playlist, String> {
@@ -145,7 +193,10 @@ impl Storage {
         serde_json::from_str(&raw).map_err(|e| e.to_string())
     }
 
-    pub fn export_playlist_to_default(&self, playlist: &crate::model::Playlist) -> Result<std::path::PathBuf, String> {
+    pub fn export_playlist_to_default(
+        &self,
+        playlist: &crate::model::Playlist,
+    ) -> Result<std::path::PathBuf, String> {
         let config_dir = Self::config_dir().map_err(|e| e.to_string())?;
         let exports_dir = config_dir.join("exports");
         fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;

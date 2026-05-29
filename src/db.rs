@@ -26,11 +26,16 @@ impl DbStorage {
              PRAGMA foreign_keys = ON;",
         )?;
 
-        let user_version: i32 = self.conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let user_version: i32 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
         if user_version == 0 {
             self.create_schema()?;
-            self.conn.execute("PRAGMA user_version = 1", [])?;
+            self.conn.execute("PRAGMA user_version = 2", [])?;
+        } else if user_version < 2 {
+            self.create_app_settings_schema()?;
+            self.conn.execute("PRAGMA user_version = 2", [])?;
         }
 
         Ok(())
@@ -73,8 +78,23 @@ impl DbStorage {
                 song_type TEXT CHECK (song_type IN ('local', 'network')),
                 played_at INTEGER NOT NULL
             );
-            CREATE INDEX idx_recent_time ON recently_played(played_at);",
+            CREATE INDEX idx_recent_time ON recently_played(played_at);
+            CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );",
         )
+    }
+
+    fn create_app_settings_schema(&self) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+        Ok(())
     }
 
     pub fn migrate_from_json(
@@ -88,7 +108,14 @@ impl DbStorage {
         {
             let mut stmt = tx.prepare("INSERT OR IGNORE INTO local_songs (path, title, artist, album, duration, mtime) VALUES (?, ?, ?, ?, ?, ?)")?;
             for song in local_library {
-                stmt.execute((song.path, song.title, song.artist, song.album, song.duration, song.mtime))?;
+                stmt.execute((
+                    song.path,
+                    song.title,
+                    song.artist,
+                    song.album,
+                    song.duration,
+                    song.mtime,
+                ))?;
             }
         }
 
@@ -96,8 +123,15 @@ impl DbStorage {
             let mut stmt_song = tx.prepare("INSERT OR IGNORE INTO playlist_songs (playlist_id, song_id, song_type, position) VALUES (?, ?, ?, ?)")?;
 
             for (_pos, playlist) in playlists.iter().enumerate() {
-                tx.execute("INSERT OR IGNORE INTO playlists (name) VALUES (?)", [&playlist.name])?;
-                let playlist_id: i64 = tx.query_row("SELECT id FROM playlists WHERE name = ?", [&playlist.name], |row| row.get(0))?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO playlists (name) VALUES (?)",
+                    [&playlist.name],
+                )?;
+                let playlist_id: i64 = tx.query_row(
+                    "SELECT id FROM playlists WHERE name = ?",
+                    [&playlist.name],
+                    |row| row.get(0),
+                )?;
 
                 for (song_pos, song) in playlist.songs.iter().enumerate() {
                     let song_type = if song.id.contains('/') || song.id.contains('\\') {
@@ -116,7 +150,9 @@ impl DbStorage {
                 .unwrap()
                 .as_secs() as i64;
 
-            let mut stmt = tx.prepare("INSERT INTO recently_played (song_id, song_type, played_at) VALUES (?, ?, ?)")?;
+            let mut stmt = tx.prepare(
+                "INSERT INTO recently_played (song_id, song_type, played_at) VALUES (?, ?, ?)",
+            )?;
             for song in recently_played {
                 let song_type = if song.id.contains('/') || song.id.contains('\\') {
                     "local"
@@ -132,7 +168,9 @@ impl DbStorage {
     }
 
     pub fn load_local_songs(&self) -> Result<Vec<crate::model::LocalSong>> {
-        let mut stmt = self.conn.prepare("SELECT path, title, artist, album, duration, mtime FROM local_songs")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, title, artist, album, duration, mtime FROM local_songs")?;
         let rows = stmt.query_map([], |row| {
             Ok(crate::model::LocalSong {
                 path: row.get(0)?,
@@ -149,7 +187,9 @@ impl DbStorage {
 
     /// Returns the total number of local songs in the database.
     pub fn get_local_songs_count(&self) -> Result<usize> {
-        let count: usize = self.conn.query_row("SELECT COUNT(*) FROM local_songs", [], |row| row.get(0))?;
+        let count: usize = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM local_songs", [], |row| row.get(0))?;
         Ok(count)
     }
 
@@ -158,7 +198,11 @@ impl DbStorage {
     /// # Arguments
     /// * `limit` - The maximum number of songs to return.
     /// * `offset` - The number of songs to skip before starting to return results.
-    pub fn load_local_songs_paginated(&self, limit: usize, offset: usize) -> Result<Vec<crate::model::LocalSong>> {
+    pub fn load_local_songs_paginated(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::model::LocalSong>> {
         let mut stmt = self.conn.prepare("SELECT path, title, artist, album, duration, mtime FROM local_songs ORDER BY path LIMIT ? OFFSET ?")?;
         let rows = stmt.query_map([limit as i64, offset as i64], |row| {
             Ok(crate::model::LocalSong {
@@ -283,7 +327,13 @@ impl DbStorage {
                             webpage_url = excluded.webpage_url,
                             uploader = excluded.uploader,
                             duration = excluded.duration",
-                        (&song.id, &song.title, &song.webpage_url, &song.uploader, song.duration),
+                        (
+                            &song.id,
+                            &song.title,
+                            &song.webpage_url,
+                            &song.uploader,
+                            song.duration,
+                        ),
                     )?;
                 }
 
@@ -295,7 +345,9 @@ impl DbStorage {
     }
 
     pub fn load_recently_played(&self) -> Result<Vec<crate::model::Song>> {
-        let mut stmt = self.conn.prepare("SELECT song_id, song_type FROM recently_played ORDER BY played_at DESC")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT song_id, song_type FROM recently_played ORDER BY played_at DESC")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -340,6 +392,29 @@ impl DbStorage {
         Ok(songs)
     }
 
+    pub fn load_last_scanned_dirs(&self) -> Result<Vec<String>> {
+        let raw: Result<String> = self.conn.query_row(
+            "SELECT value FROM app_settings WHERE key = 'last_scanned_dirs'",
+            [],
+            |row| row.get(0),
+        );
+        match raw {
+            Ok(raw) => Ok(serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn save_last_scanned_dirs(&mut self, dirs: &[String]) -> Result<()> {
+        let raw = serde_json::to_string(dirs).unwrap_or_else(|_| "[]".to_owned());
+        self.conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('last_scanned_dirs', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [raw],
+        )?;
+        Ok(())
+    }
+
     pub fn save_recently_played(&mut self, songs: &[crate::model::Song]) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM recently_played", [])?;
@@ -350,7 +425,9 @@ impl DbStorage {
             .as_secs() as i64;
 
         {
-            let mut stmt = tx.prepare("INSERT INTO recently_played (song_id, song_type, played_at) VALUES (?, ?, ?)")?;
+            let mut stmt = tx.prepare(
+                "INSERT INTO recently_played (song_id, song_type, played_at) VALUES (?, ?, ?)",
+            )?;
             for song in songs {
                 let s_type = if song.id.contains('/') || song.id.contains('\\') {
                     "local"
@@ -363,8 +440,6 @@ impl DbStorage {
         tx.commit()?;
         Ok(())
     }
-
-
 }
 
 #[cfg(test)]
@@ -384,11 +459,46 @@ mod tests {
         let (db, _file) = setup_db();
 
         let songs = vec![
-            LocalSong { path: "/1".to_string(), title: "T1".to_string(), artist: "A1".to_string(), album: "Al1".to_string(), duration: 100.0, mtime: 1 },
-            LocalSong { path: "/2".to_string(), title: "T2".to_string(), artist: "A2".to_string(), album: "Al2".to_string(), duration: 200.0, mtime: 2 },
-            LocalSong { path: "/3".to_string(), title: "T3".to_string(), artist: "A3".to_string(), album: "Al3".to_string(), duration: 300.0, mtime: 3 },
-            LocalSong { path: "/4".to_string(), title: "T4".to_string(), artist: "A4".to_string(), album: "Al4".to_string(), duration: 400.0, mtime: 4 },
-            LocalSong { path: "/5".to_string(), title: "T5".to_string(), artist: "A5".to_string(), album: "Al5".to_string(), duration: 500.0, mtime: 5 },
+            LocalSong {
+                path: "/1".to_string(),
+                title: "T1".to_string(),
+                artist: "A1".to_string(),
+                album: "Al1".to_string(),
+                duration: 100.0,
+                mtime: 1,
+            },
+            LocalSong {
+                path: "/2".to_string(),
+                title: "T2".to_string(),
+                artist: "A2".to_string(),
+                album: "Al2".to_string(),
+                duration: 200.0,
+                mtime: 2,
+            },
+            LocalSong {
+                path: "/3".to_string(),
+                title: "T3".to_string(),
+                artist: "A3".to_string(),
+                album: "Al3".to_string(),
+                duration: 300.0,
+                mtime: 3,
+            },
+            LocalSong {
+                path: "/4".to_string(),
+                title: "T4".to_string(),
+                artist: "A4".to_string(),
+                album: "Al4".to_string(),
+                duration: 400.0,
+                mtime: 4,
+            },
+            LocalSong {
+                path: "/5".to_string(),
+                title: "T5".to_string(),
+                artist: "A5".to_string(),
+                album: "Al5".to_string(),
+                duration: 500.0,
+                mtime: 5,
+            },
         ];
 
         let mut db = db;
@@ -416,6 +526,20 @@ mod tests {
         // Page 4: limit 2, offset 6
         let page4 = db.load_local_songs_paginated(2, 6).unwrap();
         assert_eq!(page4.len(), 0);
+    }
+
+    #[test]
+    fn test_last_scanned_dirs_roundtrip() {
+        let (mut db, _file) = setup_db();
+
+        assert!(db.load_last_scanned_dirs().unwrap().is_empty());
+
+        let dirs = vec!["/music/a".to_string(), "/music/b".to_string()];
+        db.save_last_scanned_dirs(&dirs).unwrap();
+        assert_eq!(db.load_last_scanned_dirs().unwrap(), dirs);
+
+        db.save_last_scanned_dirs(&[]).unwrap();
+        assert!(db.load_last_scanned_dirs().unwrap().is_empty());
     }
 
     #[test]

@@ -1,5 +1,10 @@
-use std::{collections::{VecDeque, HashSet}, process::Stdio, time::Duration};
 use std::os::unix::fs::MetadataExt;
+use std::{
+    collections::{HashSet, VecDeque},
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -12,7 +17,11 @@ use tokio::{
     time,
 };
 
-use crate::{config::Config, model::{Song, LocalSong}, plugins::PluginManager};
+use crate::{
+    config::Config,
+    model::{LocalSong, Song},
+    plugins::PluginManager,
+};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
 
@@ -63,11 +72,11 @@ pub struct Core {
     volume: u8,
     muted: bool,
     was_playing: bool,
-    plugins: PluginManager,
+    plugins: Arc<Mutex<PluginManager>>,
 }
 
 impl Core {
-    pub async fn new(config: Config) -> Result<Self> {
+    pub async fn new(config: Config, plugins: Arc<Mutex<PluginManager>>) -> Result<Self> {
         let mpv_child = Command::new("mpv")
             .arg("--idle")
             .arg("--no-video")
@@ -81,13 +90,10 @@ impl Core {
             .spawn()
             .map_err(|err| anyhow::anyhow!("failed to start mpv (is `mpv` installed?): {err}"))?;
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        wait_for_mpv_socket(config.mpv.socket.as_str()).await?;
 
         let mut core = Self {
-            plugins: PluginManager::load(
-                config.general.plugins_enabled,
-                config.general.plugins_dir.as_str(),
-            ),
+            plugins,
             config,
             mpv_child,
             mpris_child: None,
@@ -96,7 +102,6 @@ impl Core {
             muted: false,
             was_playing: false,
         };
-        let _ = core.plugins.plugin_count();
         core.try_start_mpris();
         Ok(core)
     }
@@ -123,7 +128,7 @@ impl Core {
                     let res = match cmd {
                         CoreCmd::Search(query) => {
                             let limit = self.config.search.limit.max(1);
-                            let query = self.plugins.transform_search_query(query);
+                            let query = self.transform_search_query(query);
                             let source = self.config.search.source;
                             let cmd_tx = cmd_tx.clone();
                             let tx = tx.clone();
@@ -141,7 +146,7 @@ impl Core {
                         }
                         CoreCmd::SearchAlbums(query) => {
                             let limit = self.config.search.limit.max(1);
-                            let query = self.plugins.transform_search_query(query);
+                            let query = self.transform_search_query(query);
                             let source = self.config.search.source;
                             let cmd_tx = cmd_tx.clone();
                             let tx = tx.clone();
@@ -195,7 +200,7 @@ impl Core {
                             Ok(())
                         }
                         CoreCmd::HandleSearchDone(songs) => {
-                            let songs = self.plugins.transform_search_results(songs);
+                            let songs = self.transform_search_results(songs);
                             let _ = tx.send(CoreEvent::SearchDone(songs));
                             Ok(())
                         }
@@ -217,8 +222,29 @@ impl Core {
         let _ = self.mpv_child.kill().await;
     }
 
+    fn transform_search_query(&self, query: String) -> String {
+        self.plugins
+            .lock()
+            .map(|plugins| plugins.transform_search_query(query.clone()))
+            .unwrap_or(query)
+    }
+
+    fn transform_search_results(&self, songs: Vec<Song>) -> Vec<Song> {
+        self.plugins
+            .lock()
+            .map(|plugins| plugins.transform_search_results(songs.clone()))
+            .unwrap_or(songs)
+    }
+
+    fn transform_song_start(&self, song: Song) -> Song {
+        self.plugins
+            .lock()
+            .map(|plugins| plugins.transform_song_start(song.clone()))
+            .unwrap_or(song)
+    }
+
     async fn play(&mut self, song: Song, tx: &mpsc::UnboundedSender<CoreEvent>) -> Result<()> {
-        let song = self.plugins.transform_song_start(song);
+        let song = self.transform_song_start(song);
         self.send_mpv(json!({"command": ["loadfile", song.webpage_url, "replace"]}))
             .await?;
         self.history.push_front(song.clone());
@@ -375,7 +401,6 @@ impl Core {
     }
 }
 
-
 fn parse_command(raw: &str) -> (String, Vec<String>) {
     let mut parts = raw.split_whitespace();
     let bin = parts.next().unwrap_or("mpv-mpris").to_owned();
@@ -443,6 +468,24 @@ struct FlatEntry {
     uploader: Option<String>,
 }
 
+async fn wait_for_mpv_socket(socket: &str) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match UnixStream::connect(socket).await {
+            Ok(_) => return Ok(()),
+            Err(err) if tokio::time::Instant::now() < deadline => {
+                let _ = err;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "mpv ipc socket did not become ready at {socket}: {err}"
+                ));
+            }
+        }
+    }
+}
+
 async fn perform_smart_queue(
     current: Song,
     source: crate::config::SearchSource,
@@ -466,7 +509,11 @@ async fn perform_smart_queue(
     }
 }
 
-async fn search_songs(limit: u8, query: String, source: crate::config::SearchSource) -> Result<Vec<Song>> {
+async fn search_songs(
+    limit: u8,
+    query: String,
+    source: crate::config::SearchSource,
+) -> Result<Vec<Song>> {
     let needle = match source {
         crate::config::SearchSource::YouTube => format!("ytsearch{limit}:{query}"),
         crate::config::SearchSource::SoundCloud => format!("scsearch{limit}:{query}"),
@@ -495,8 +542,12 @@ async fn search_songs(limit: u8, query: String, source: crate::config::SearchSou
         .into_iter()
         .map(|e| {
             let webpage_url = match source {
-                crate::config::SearchSource::YouTube => format!("https://www.youtube.com/watch?v={}", e.id),
-                crate::config::SearchSource::SoundCloud => e.webpage_url.clone().unwrap_or_else(|| e.url.clone()),
+                crate::config::SearchSource::YouTube => {
+                    format!("https://www.youtube.com/watch?v={}", e.id)
+                }
+                crate::config::SearchSource::SoundCloud => {
+                    e.webpage_url.clone().unwrap_or_else(|| e.url.clone())
+                }
             };
             Song {
                 id: e.id.clone(),
@@ -511,7 +562,11 @@ async fn search_songs(limit: u8, query: String, source: crate::config::SearchSou
     Ok(songs)
 }
 
-async fn search_albums(limit: u8, query: String, source: crate::config::SearchSource) -> Result<Vec<crate::model::Album>> {
+async fn search_albums(
+    limit: u8,
+    query: String,
+    source: crate::config::SearchSource,
+) -> Result<Vec<crate::model::Album>> {
     let needle = match source {
         crate::config::SearchSource::YouTube => format!("ytsearch{limit}:{query} full album"),
         crate::config::SearchSource::SoundCloud => format!("scsearch{limit}:{query} full album"),
@@ -534,11 +589,19 @@ async fn search_albums(limit: u8, query: String, source: crate::config::SearchSo
     let mut albums = Vec::new();
     for entry in parsed.entries {
         let title_lower = entry.title.to_lowercase();
-        if title_lower.contains("full album") || title_lower.contains("complete album") || title_lower.contains("full album") {
-            let artist = entry.uploader.clone().unwrap_or_else(|| "Unknown Artist".to_string());
+        if title_lower.contains("full album") || title_lower.contains("complete album") {
+            let artist = entry
+                .uploader
+                .clone()
+                .unwrap_or_else(|| "Unknown Artist".to_string());
             let webpage_url = match source {
-                crate::config::SearchSource::YouTube => format!("https://www.youtube.com/watch?v={}", entry.id),
-                crate::config::SearchSource::SoundCloud => entry.webpage_url.clone().unwrap_or_else(|| entry.url.clone()),
+                crate::config::SearchSource::YouTube => {
+                    format!("https://www.youtube.com/watch?v={}", entry.id)
+                }
+                crate::config::SearchSource::SoundCloud => entry
+                    .webpage_url
+                    .clone()
+                    .unwrap_or_else(|| entry.url.clone()),
             };
             let song = Song {
                 id: entry.id.clone(),
@@ -579,7 +642,11 @@ pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
             continue;
         }
 
-        for entry in walkdir::WalkDir::new(path).follow_links(true).into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir::WalkDir::new(path)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if entry.file_type().is_file() {
                 let p = entry.path();
                 if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
@@ -602,23 +669,37 @@ pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
 
 fn extract_metadata(path: &std::path::Path) -> LocalSong {
     let path_str = path.to_string_lossy().to_string();
-    let filename = path.file_stem()
+    let filename = path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Unknown")
         .to_string();
 
     let mtime = std::fs::metadata(path)
         .and_then(|m| m.modified())
-        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+        .map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        })
         .unwrap_or(0);
 
     if let Ok(tagged_file) = lofty::read_from_path(path) {
         let properties = tagged_file.properties();
         let tag = tagged_file.primary_tag();
 
-        let title = tag.and_then(|t| t.title()).map(|s| s.to_string()).unwrap_or_else(|| filename.clone());
-        let artist = tag.and_then(|t| t.artist()).map(|s| s.to_string()).unwrap_or_else(|| "Unknown".to_string());
-        let album = tag.and_then(|t| t.album()).map(|s| s.to_string()).unwrap_or_else(|| "Unknown".to_string());
+        let title = tag
+            .and_then(|t| t.title())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| filename.clone());
+        let artist = tag
+            .and_then(|t| t.artist())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let album = tag
+            .and_then(|t| t.album())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
         let duration = properties.duration().as_secs() as f64;
 
         LocalSong {
@@ -643,11 +724,16 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
 
 pub fn refresh_library(config: &Config, storage: &crate::storage::Storage) -> Vec<LocalSong> {
     let songs = scan_local_library(config);
-    storage.save_local_library(&songs).expect("Failed to save local library");
+    storage
+        .save_local_library(&songs)
+        .expect("Failed to save local library");
     songs
 }
 
-pub fn check_and_refresh_library(config: &Config, storage: &crate::storage::Storage) -> Option<Vec<LocalSong>> {
+pub fn check_and_refresh_library(
+    config: &Config,
+    storage: &crate::storage::Storage,
+) -> Option<Vec<LocalSong>> {
     let current_lib = storage.load_local_library().unwrap_or_default();
     let last_dirs = storage.load_last_scanned_dirs();
     if last_dirs != config.general.music_directories || current_lib.is_empty() {
@@ -662,9 +748,9 @@ pub fn check_and_refresh_library(config: &Config, storage: &crate::storage::Stor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use std::fs;
     use std::os::unix::fs::symlink;
-    use crate::config::Config;
 
     #[test]
     fn test_scan_local_library_follows_symlinks() {
@@ -692,7 +778,11 @@ mod tests {
         let result = !songs.is_empty();
         let _ = fs::remove_dir_all(&tmp_dir);
 
-        assert!(result, "Should have found songs in symlinked directory. Found: {}", songs.len());
+        assert!(
+            result,
+            "Should have found songs in symlinked directory. Found: {}",
+            songs.len()
+        );
     }
 
     #[test]
@@ -724,7 +814,11 @@ mod tests {
 
         let _ = fs::remove_dir_all(&tmp_dir);
 
-        assert_eq!(songs.len(), 1, "Should have deduplicated symlinks to the same file. Found: {}", songs.len());
+        assert_eq!(
+            songs.len(),
+            1,
+            "Should have deduplicated symlinks to the same file. Found: {}",
+            songs.len()
+        );
     }
 }
-

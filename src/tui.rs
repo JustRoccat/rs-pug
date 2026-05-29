@@ -84,34 +84,111 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let anim2 = pal.get_color("accent2");
     let size = frame.size();
 
-    let vertical = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Min(8),
-        Constraint::Length(5),
-        Constraint::Length(3),
-        Constraint::Length(3),
-    ])
-    .split(size);
+    let tab_position = app.ui_layout.tab_bar_position.as_str();
+    let tabs_width = app
+        .ui_layout
+        .tabs_width
+        .min(size.width.saturating_sub(20))
+        .max(1)
+        .min(size.width);
+    let (main_area, tab_area, vertical_tabs) = match tab_position {
+        "left" => {
+            let cols = Layout::horizontal([Constraint::Length(tabs_width), Constraint::Min(20)])
+                .split(size);
+            (cols[1], cols[0], true)
+        }
+        "right" => {
+            let cols = Layout::horizontal([Constraint::Min(20), Constraint::Length(tabs_width)])
+                .split(size);
+            (cols[0], cols[1], true)
+        }
+        "bottom" => {
+            let rows = Layout::vertical([Constraint::Min(8), Constraint::Length(3)]).split(size);
+            (rows[0], rows[1], false)
+        }
+        _ => {
+            let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(8)]).split(size);
+            (rows[1], rows[0], false)
+        }
+    };
 
-    draw_tabs(frame, app, &pal, anim, anim2, vertical[0]);
-    draw_search(frame, app, &pal, vertical[1]);
-    draw_content(frame, app, &pal, anim, vertical[2]);
-    draw_now_playing(frame, app, &pal, anim, vertical[3]);
-    draw_progress(frame, app, &pal, anim, vertical[4]);
-    draw_help(frame, &pal, vertical[5]);
+    if vertical_tabs {
+        draw_tabs_vertical(frame, app, &pal, anim, tab_area);
+    } else {
+        draw_tabs(frame, app, &pal, anim, anim2, tab_area);
+    }
+
+    let above_height = custom_sections_height(app, "above_player");
+    let below_height = custom_sections_height(app, "below_player");
+    let mut constraints = Vec::new();
+    constraints.push(Constraint::Length(3));
+    if above_height > 0 {
+        constraints.push(Constraint::Length(above_height));
+    }
+    constraints.push(Constraint::Min(8));
+    if app.ui_layout.visualizer_height > 0 {
+        constraints.push(Constraint::Length(app.ui_layout.visualizer_height.max(3)));
+    }
+    if below_height > 0 {
+        constraints.push(Constraint::Length(below_height));
+    }
+    if app.ui_layout.show_progress_bar {
+        constraints.push(Constraint::Length(3));
+    }
+    if app.ui_layout.show_statusbar || app.ui_layout.show_keybind_hints {
+        constraints.push(Constraint::Length(3));
+    }
+    let vertical = Layout::vertical(constraints).split(main_area);
+    let mut row = 0;
+
+    draw_search(frame, app, &pal, vertical[row]);
+    row += 1;
+    if above_height > 0 {
+        draw_custom_sections(frame, app, &pal, anim, "above_player", vertical[row]);
+        row += 1;
+    }
+    draw_content(frame, app, &pal, anim, vertical[row]);
+    draw_custom_sections(frame, app, &pal, anim, "left", vertical[row]);
+    draw_custom_sections(frame, app, &pal, anim, "right", vertical[row]);
+    row += 1;
+    if app.ui_layout.visualizer_height > 0 {
+        draw_now_playing(frame, app, &pal, anim, vertical[row]);
+        row += 1;
+    }
+    if below_height > 0 {
+        draw_custom_sections(frame, app, &pal, anim, "below_player", vertical[row]);
+        row += 1;
+    }
+    if app.ui_layout.show_progress_bar {
+        draw_progress(frame, app, &pal, anim, vertical[row]);
+        row += 1;
+    }
+    if app.ui_layout.show_statusbar || app.ui_layout.show_keybind_hints {
+        draw_help(frame, app, &pal, vertical[row]);
+    }
     draw_overlays(frame, app, &pal, anim, size);
 }
 
-fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: Color, area: Rect) {
-    let base_defs: Vec<(String, String)> = vec![
-        ("♫".to_string(), "DISCOVER".to_string()),
-        ("◈".to_string(), "ALBUMS".to_string()),
-        ("◉".to_string(), "LIBRARY".to_string()),
-        ("🗀".to_string(), "LOCAL".to_string()),
-        ("⚙".to_string(), "OPTIONS".to_string()),
-    ];
-    let mut defs = base_defs;
+fn custom_sections_height(app: &App, position: &str) -> u16 {
+    if !app.allow_lua_ui_changes {
+        return 0;
+    }
+    app.custom_sections
+        .iter()
+        .filter(|section| {
+            section.position == position && !app.hidden_sections.iter().any(|id| id == &section.id)
+        })
+        .map(|section| section.height.unwrap_or(3))
+        .max()
+        .unwrap_or(0)
+}
+
+fn tab_defs_and_active(app: &App) -> (Vec<(String, String)>, usize) {
+    let mut defs: Vec<(String, String)> = app
+        .main_tabs
+        .iter()
+        .map(|tab| (tab.icon.clone(), tab.title.clone()))
+        .collect();
     for t in &app.plugin_tabs {
         defs.push((
             t.icon.clone().unwrap_or_else(|| "◌".to_string()),
@@ -122,17 +199,16 @@ fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: C
         app.plugin_tabs
             .iter()
             .position(|t| &t.id == active_id)
-            .map(|i| i + 5)
-            .unwrap_or(4)
+            .map(|i| i + app.main_tabs.len())
+            .unwrap_or_else(|| app.active_tab_index().saturating_sub(1))
     } else {
-        match app.active_tab {
-            Tab::Discover => 0,
-            Tab::Albums => 1,
-            Tab::Library => 2,
-            Tab::Local => 3,
-            Tab::Options => 4,
-        }
+        app.active_tab_index().saturating_sub(1)
     };
+    (defs, active)
+}
+
+fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: Color, area: Rect) {
+    let (defs, active) = tab_defs_and_active(app);
 
     let tab_lines: Vec<Line> = defs
         .iter()
@@ -179,6 +255,59 @@ fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: C
         .divider(Span::styled("│", Style::default().fg(pal.get_color("dim"))));
 
     frame.render_widget(tabs, area);
+}
+
+fn draw_tabs_vertical(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
+    let (defs, active) = tab_defs_and_active(app);
+    let items: Vec<ListItem> = defs
+        .iter()
+        .enumerate()
+        .map(|(i, (icon, label))| {
+            let number = i + 1;
+            let shortcut = if number <= 8 {
+                format!("{number:>2} ")
+            } else {
+                " · ".to_owned()
+            };
+            if i == active {
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        shortcut.clone(),
+                        Style::default()
+                            .fg(pal.get_color("warn"))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        icon.clone(),
+                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        label.clone(),
+                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+            } else {
+                ListItem::new(Line::from(vec![
+                    Span::styled(shortcut, Style::default().fg(pal.get_color("dim"))),
+                    Span::styled(icon.clone(), Style::default().fg(pal.get_color("dim"))),
+                    Span::raw(" "),
+                    Span::styled(label.clone(), Style::default().fg(pal.get_color("muted"))),
+                ]))
+            }
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .title(Span::styled(
+                " ♪  TABS ",
+                Style::default().fg(anim).add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(anim)),
+    );
+    frame.render_widget(list, area);
 }
 
 fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
@@ -231,40 +360,76 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     frame.render_widget(widget, area);
 }
 
+fn panel_item_line(item: &PluginPanelItem, pal: &Palette) -> Line<'static> {
+    match item {
+        PluginPanelItem::Text { text } => Line::from(Span::styled(
+            text.clone(),
+            Style::default().fg(pal.get_color("text")),
+        )),
+        PluginPanelItem::Info { text } => Line::from(Span::styled(
+            text.clone(),
+            Style::default().fg(pal.get_color("info")),
+        )),
+        PluginPanelItem::Option { key, value } => Line::from(vec![
+            Span::styled(
+                format!("{}: ", key),
+                Style::default().fg(pal.get_color("warn")),
+            ),
+            Span::styled(value.clone(), Style::default().fg(pal.get_color("text"))),
+        ]),
+        PluginPanelItem::Stat { label, value } => Line::from(vec![
+            Span::styled(
+                format!("{} ", label),
+                Style::default().fg(pal.get_color("muted")),
+            ),
+            Span::styled(value.clone(), Style::default().fg(pal.get_color("ok"))),
+        ]),
+        PluginPanelItem::Separator => Line::from(Span::styled(
+            "─".repeat(24),
+            Style::default().fg(pal.get_color("dim")),
+        )),
+        PluginPanelItem::Header { text } => Line::from(Span::styled(
+            text.clone(),
+            Style::default()
+                .fg(pal.get_color("accent2"))
+                .add_modifier(Modifier::BOLD),
+        )),
+        PluginPanelItem::Keybind { key, action } => Line::from(vec![
+            Span::styled(
+                key.clone(),
+                Style::default()
+                    .fg(pal.get_color("warn"))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" → ", Style::default().fg(pal.get_color("dim"))),
+            Span::styled(action.clone(), Style::default().fg(pal.get_color("text"))),
+        ]),
+        PluginPanelItem::Progress { label, percent } => {
+            let pct = percent.clamp(0.0, 100.0).round() as usize;
+            let filled = pct / 10;
+            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(10 - filled));
+            Line::from(vec![
+                Span::styled(
+                    label.clone().unwrap_or_else(|| "progress".to_owned()),
+                    Style::default().fg(pal.get_color("muted")),
+                ),
+                Span::raw(" "),
+                Span::styled(bar, Style::default().fg(pal.get_color("ok"))),
+                Span::styled(
+                    format!(" {pct}%"),
+                    Style::default().fg(pal.get_color("text")),
+                ),
+            ])
+        }
+    }
+}
+
 fn plugin_panel_lines(panel: &crate::plugins::PluginPanel, pal: &Palette) -> Vec<Line<'static>> {
-    use crate::plugins::PluginPanelItem;
     if !panel.items.is_empty() {
         panel
             .items
             .iter()
-            .map(|item| match item {
-                PluginPanelItem::Text { text } => Line::from(Span::styled(
-                    text.clone(),
-                    Style::default().fg(pal.get_color("text")),
-                )),
-                PluginPanelItem::Info { text } => Line::from(Span::styled(
-                    text.clone(),
-                    Style::default().fg(pal.get_color("info")),
-                )),
-                PluginPanelItem::Option { key, value } => Line::from(vec![
-                    Span::styled(
-                        format!("{}: ", key),
-                        Style::default().fg(pal.get_color("warn")),
-                    ),
-                    Span::styled(value.clone(), Style::default().fg(pal.get_color("text"))),
-                ]),
-                PluginPanelItem::Stat { label, value } => Line::from(vec![
-                    Span::styled(
-                        format!("{} ", label),
-                        Style::default().fg(pal.get_color("muted")),
-                    ),
-                    Span::styled(value.clone(), Style::default().fg(pal.get_color("ok"))),
-                ]),
-                PluginPanelItem::Separator => Line::from(Span::styled(
-                    "─".repeat(24),
-                    Style::default().fg(pal.get_color("dim")),
-                )),
-            })
+            .map(|item| panel_item_line(item, pal))
             .collect()
     } else {
         panel
@@ -281,21 +446,38 @@ fn plugin_panel_lines(panel: &crate::plugins::PluginPanel, pal: &Palette) -> Vec
 }
 
 fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
-    let split = if app.active_tab == Tab::Library {
-        [Constraint::Percentage(64), Constraint::Percentage(36)]
+    let queue = if app.active_tab == Tab::Library {
+        36
     } else {
-        [Constraint::Percentage(60), Constraint::Percentage(40)]
+        app.ui_layout.queue_width_percent.clamp(10, 90)
+    };
+    let split = if app.ui_layout.queue_position == "left" {
+        [
+            Constraint::Percentage(queue),
+            Constraint::Percentage(100 - queue),
+        ]
+    } else {
+        [
+            Constraint::Percentage(100 - queue),
+            Constraint::Percentage(queue),
+        ]
     };
     let cols = Layout::horizontal(split).split(area);
 
-    draw_results_panel(frame, app, pal, anim, cols[0]);
-    draw_queue_panel(frame, app, pal, anim, cols[1]);
+    if app.ui_layout.queue_position == "left" {
+        draw_queue_panel(frame, app, pal, anim, cols[0]);
+        draw_results_panel(frame, app, pal, anim, cols[1]);
+    } else {
+        draw_results_panel(frame, app, pal, anim, cols[0]);
+        draw_queue_panel(frame, app, pal, anim, cols[1]);
+    }
 }
 
 fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let focused = app.focus == Focus::Results;
 
-    let items: Vec<ListItem> = if app.active_tab == Tab::Options && app.active_plugin_tab.is_some()
+    let mut items: Vec<ListItem> = if app.active_plugin_tab.is_some()
+        || app.active_custom_tab.is_some()
     {
         let plugin_items: Vec<ListItem> = app
             .plugin_panels
@@ -317,7 +499,10 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             })
             .collect();
         if plugin_items.is_empty() {
-            vec![dim_item("Plugin tab active. Provide on_ui_panels().", pal)]
+            vec![dim_item(
+                "Plugin/custom tab active. Provide on_ui_panels().",
+                pal,
+            )]
         } else {
             plugin_items
         }
@@ -543,42 +728,74 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         build_song_list(&app.search_results, app.selected_result, focused, pal, anim)
     };
 
-    let title = match app.active_tab {
-        Tab::Discover => " ♫  RESULTS ".to_owned(),
-        Tab::Albums => " ◈  ALBUM RESULTS ".to_owned(),
-        Tab::Library => " ◉  PLAYLISTS ".to_owned(),
-        Tab::Options => {
-            if let Some(active_id) = &app.active_plugin_tab {
-                if let Some(tab) = app.plugin_tabs.iter().find(|t| &t.id == active_id) {
-                    let icon = tab.icon.clone().unwrap_or_else(|| "◌".to_string());
-                    format!(" ⚙  SETTINGS — {} {} ", icon, tab.title.to_uppercase())
+    if app.allow_lua_ui_changes {
+        let mut top: Vec<ListItem> = app
+            .ui_inject
+            .results_top
+            .iter()
+            .map(|item| ListItem::new(panel_item_line(item, pal)))
+            .collect();
+        if !top.is_empty() {
+            top.extend(items);
+            items = top;
+        }
+        items.extend(
+            app.ui_inject
+                .results_bottom
+                .iter()
+                .map(|item| ListItem::new(panel_item_line(item, pal))),
+        );
+    }
+
+    let custom_title = app.active_custom_tab.as_ref().and_then(|id| {
+        app.main_tabs
+            .iter()
+            .find(|tab| &tab.id == id)
+            .map(|tab| format!(" ✦  {} {} ", tab.icon, tab.title))
+    });
+    let title = if let Some(title) = custom_title {
+        title
+    } else {
+        match app.active_tab {
+            Tab::Discover => " ♫  RESULTS ".to_owned(),
+            Tab::Albums => " ◈  ALBUM RESULTS ".to_owned(),
+            Tab::Library => " ◉  PLAYLISTS ".to_owned(),
+            Tab::Options => {
+                if let Some(active_id) = &app.active_plugin_tab {
+                    if let Some(tab) = app.plugin_tabs.iter().find(|t| &t.id == active_id) {
+                        let icon = tab.icon.clone().unwrap_or_else(|| "◌".to_string());
+                        format!(" ⚙  SETTINGS — {} {} ", icon, tab.title.to_uppercase())
+                    } else {
+                        " ⚙  SETTINGS ".to_owned()
+                    }
                 } else {
                     " ⚙  SETTINGS ".to_owned()
                 }
-            } else {
-                " ⚙  SETTINGS ".to_owned()
             }
-        }
-        Tab::Local => {
-            let mut t = " 🗀  LOCAL LIBRARY ".to_owned();
-            if app.local_view_mode == crate::model::LocalViewMode::Organized {
-                match app.local_nav_level {
-                    crate::model::LocalNavLevel::Artists => t.push_str(" ❯ Artists"),
-                    crate::model::LocalNavLevel::Albums => {
-                        if let Some(artist) = &app.local_nav_artist {
-                            t = format!(" 🗀  LOCAL LIBRARY ❯ {} ❯ Albums", artist);
+            Tab::Local => {
+                let mut t = " 🗀  LOCAL LIBRARY ".to_owned();
+                if app.local_view_mode == crate::model::LocalViewMode::Organized {
+                    match app.local_nav_level {
+                        crate::model::LocalNavLevel::Artists => t.push_str(" ❯ Artists"),
+                        crate::model::LocalNavLevel::Albums => {
+                            if let Some(artist) = &app.local_nav_artist {
+                                t = format!(" 🗀  LOCAL LIBRARY ❯ {} ❯ Albums", artist);
+                            }
                         }
-                    }
-                    crate::model::LocalNavLevel::Songs => {
-                        if let Some(artist) = &app.local_nav_artist {
-                            if let Some(album) = &app.local_nav_album {
-                                t = format!(" 🗀  LOCAL LIBRARY ❯ {} ❯ {} ❯ Songs", artist, album);
+                        crate::model::LocalNavLevel::Songs => {
+                            if let Some(artist) = &app.local_nav_artist {
+                                if let Some(album) = &app.local_nav_album {
+                                    t = format!(
+                                        " 🗀  LOCAL LIBRARY ❯ {} ❯ {} ❯ Songs",
+                                        artist, album
+                                    );
+                                }
                             }
                         }
                     }
                 }
+                t
             }
-            t
         }
     };
     let border_color = match app.active_tab {
@@ -862,165 +1079,192 @@ fn build_organized_local_list<'a>(
 fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let focused = app.focus == Focus::Queue;
 
-    let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area);
-
-    let items: Vec<ListItem> = if app.active_tab == Tab::Options && app.active_plugin_tab.is_some()
-    {
-        {
-            let plugin_items: Vec<ListItem> = app
-                .plugin_panels
-                .iter()
-                .filter(|p| p.target == Some(crate::plugins::PluginPanelTarget::Queue))
-                .flat_map(|p| {
-                    let mut lines = vec![ListItem::new(Line::from(Span::styled(
-                        format!("[{}]", p.title),
-                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
-                    )))];
-                    lines.extend(plugin_panel_lines(p, pal).into_iter().map(ListItem::new));
-                    lines
-                })
-                .collect();
-            if plugin_items.is_empty() {
-                vec![
-                    dim_item("Plugin tab controls", pal),
-                    dim_item("Use plugin-defined keys", pal),
-                    dim_item("Set panel target='queue' for right pane", pal),
-                ]
-            } else {
-                plugin_items
-            }
-        }
-    } else if app.active_tab == Tab::Options {
-        if app.options_index == 7 || app.options_index == 8 {
-            draw_eq_panel(frame, app, pal, anim, chunks[0]);
-
-            let vol_ratio = (app.volume as f64 / 100.0).min(1.0);
-            let vol_label = if app.muted {
-                format!(" MUTED  ({}%) ", app.volume)
-            } else {
-                format!(" VOL  {}% ", app.volume)
-            };
-            let vol_color = if app.muted {
-                pal.get_color("muted")
-            } else {
-                pal.get_color("ok")
-            };
-            let gauge = Gauge::default()
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(pal.get_color("dim"))),
-                )
-                .gauge_style(Style::default().fg(vol_color))
-                .ratio(vol_ratio)
-                .label(Span::styled(
-                    vol_label,
-                    Style::default()
-                        .fg(pal.get_color("text"))
-                        .add_modifier(Modifier::BOLD),
-                ));
-            frame.render_widget(gauge, chunks[1]);
-            return;
-        }
-        vec![
-            dim_item("j / k     navigate options", pal),
-            dim_item("h / l     change value", pal),
-            dim_item("Enter     run action", pal),
-            dim_item("On key rows: h/l cycle key", pal),
-            dim_item("s         save config", pal),
-            dim_item("r         toggle repeat", pal),
-            dim_item("", pal),
-            dim_item("Restart after socket changes.", pal),
-        ]
-    } else if app.active_tab == Tab::Library {
-        let mut items: Vec<ListItem> = app
-            .playlists
-            .get(app.selected_playlist)
-            .map(|p| {
-                p.songs
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, song)| {
-                        let is_sel = idx == app.selected_playlist_song && focused;
-                        if is_sel {
-                            ListItem::new(Line::from(vec![
-                                Span::styled("▶ ", Style::default().fg(anim)),
-                                Span::styled(
-                                    song.title.clone(),
-                                    Style::default().fg(anim).add_modifier(Modifier::BOLD),
-                                ),
-                            ]))
-                        } else {
-                            ListItem::new(Line::from(vec![
-                                Span::styled(
-                                    "  ♪ ".to_string(),
-                                    Style::default().fg(pal.get_color("dim")),
-                                ),
-                                Span::styled(
-                                    song.title.clone(),
-                                    Style::default().fg(pal.get_color("text")),
-                                ),
-                            ]))
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        items.push(dim_item("", pal));
-        items.push(dim_item("Enter play  d delete  c menu", pal));
-        if !app.recently_played.is_empty() {
-            items.push(dim_item("", pal));
-            items.push(ListItem::new(Span::styled(
-                "Recently played:",
-                Style::default()
-                    .fg(pal.get_color("accent3"))
-                    .add_modifier(Modifier::BOLD),
-            )));
-            items.extend(app.recently_played.iter().take(5).map(|song| {
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        "  ↺ ".to_string(),
-                        Style::default().fg(pal.get_color("dim")),
-                    ),
-                    Span::styled(
-                        song.title.clone(),
-                        Style::default().fg(pal.get_color("muted")),
-                    ),
-                ]))
-            }));
-        }
-        items
+    let chunks = if app.ui_layout.show_volume_bar {
+        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area)
     } else {
-        app.queue
-            .iter()
-            .enumerate()
-            .map(|(idx, song)| {
-                let is_sel = idx == app.selected_queue && focused;
-                let num = format!("{:>2}.", idx + 1);
-                if is_sel {
-                    ListItem::new(Line::from(vec![
-                        Span::styled("▶ ", Style::default().fg(anim)),
-                        Span::styled(num, Style::default().fg(pal.get_color("dim"))),
-                        Span::raw(" "),
-                        Span::styled(
-                            song.title.clone(),
+        Layout::vertical([Constraint::Min(3)]).split(area)
+    };
+
+    let mut items: Vec<ListItem> =
+        if app.active_plugin_tab.is_some() || app.active_custom_tab.is_some() {
+            {
+                let plugin_items: Vec<ListItem> = app
+                    .plugin_panels
+                    .iter()
+                    .filter(|p| p.target == Some(crate::plugins::PluginPanelTarget::Queue))
+                    .flat_map(|p| {
+                        let mut lines = vec![ListItem::new(Line::from(Span::styled(
+                            format!("[{}]", p.title),
                             Style::default().fg(anim).add_modifier(Modifier::BOLD),
-                        ),
-                    ]))
+                        )))];
+                        lines.extend(plugin_panel_lines(p, pal).into_iter().map(ListItem::new));
+                        lines
+                    })
+                    .collect();
+                if plugin_items.is_empty() {
+                    vec![
+                        dim_item("Plugin/custom tab controls", pal),
+                        dim_item("Use plugin-defined keys", pal),
+                        dim_item("Set panel target='queue' for side pane", pal),
+                    ]
                 } else {
+                    plugin_items
+                }
+            }
+        } else if app.active_tab == Tab::Options {
+            if app.options_index == 7 || app.options_index == 8 {
+                draw_eq_panel(frame, app, pal, anim, chunks[0]);
+
+                if !app.ui_layout.show_volume_bar {
+                    return;
+                }
+
+                let vol_ratio = (app.volume as f64 / 100.0).min(1.0);
+                let vol_label = if app.muted {
+                    format!(" MUTED  ({}%) ", app.volume)
+                } else {
+                    format!(" VOL  {}% ", app.volume)
+                };
+                let vol_color = if app.muted {
+                    pal.get_color("muted")
+                } else {
+                    pal.get_color("ok")
+                };
+                let gauge = Gauge::default()
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(pal.get_color("dim"))),
+                    )
+                    .gauge_style(Style::default().fg(vol_color))
+                    .ratio(vol_ratio)
+                    .label(Span::styled(
+                        vol_label,
+                        Style::default()
+                            .fg(pal.get_color("text"))
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                frame.render_widget(gauge, chunks[1]);
+                return;
+            }
+            vec![
+                dim_item("j / k     navigate options", pal),
+                dim_item("h / l     change value", pal),
+                dim_item("Enter     run action", pal),
+                dim_item("On key rows: h/l cycle key", pal),
+                dim_item("s         save config", pal),
+                dim_item("r         toggle repeat", pal),
+                dim_item("", pal),
+                dim_item("Restart after socket changes.", pal),
+            ]
+        } else if app.active_tab == Tab::Library {
+            let mut items: Vec<ListItem> = app
+                .playlists
+                .get(app.selected_playlist)
+                .map(|p| {
+                    p.songs
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, song)| {
+                            let is_sel = idx == app.selected_playlist_song && focused;
+                            if is_sel {
+                                ListItem::new(Line::from(vec![
+                                    Span::styled("▶ ", Style::default().fg(anim)),
+                                    Span::styled(
+                                        song.title.clone(),
+                                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                                    ),
+                                ]))
+                            } else {
+                                ListItem::new(Line::from(vec![
+                                    Span::styled(
+                                        "  ♪ ".to_string(),
+                                        Style::default().fg(pal.get_color("dim")),
+                                    ),
+                                    Span::styled(
+                                        song.title.clone(),
+                                        Style::default().fg(pal.get_color("text")),
+                                    ),
+                                ]))
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            items.push(dim_item("", pal));
+            items.push(dim_item("Enter play  d delete  c menu", pal));
+            if !app.recently_played.is_empty() {
+                items.push(dim_item("", pal));
+                items.push(ListItem::new(Span::styled(
+                    "Recently played:",
+                    Style::default()
+                        .fg(pal.get_color("accent3"))
+                        .add_modifier(Modifier::BOLD),
+                )));
+                items.extend(app.recently_played.iter().take(5).map(|song| {
                     ListItem::new(Line::from(vec![
-                        Span::styled("   ", Style::default()),
-                        Span::styled(num, Style::default().fg(pal.get_color("dim"))),
-                        Span::raw(" "),
+                        Span::styled(
+                            "  ↺ ".to_string(),
+                            Style::default().fg(pal.get_color("dim")),
+                        ),
                         Span::styled(
                             song.title.clone(),
                             Style::default().fg(pal.get_color("muted")),
                         ),
                     ]))
-                }
-            })
-            .collect()
-    };
+                }));
+            }
+            items
+        } else {
+            app.queue
+                .iter()
+                .enumerate()
+                .map(|(idx, song)| {
+                    let is_sel = idx == app.selected_queue && focused;
+                    let num = format!("{:>2}.", idx + 1);
+                    if is_sel {
+                        ListItem::new(Line::from(vec![
+                            Span::styled("▶ ", Style::default().fg(anim)),
+                            Span::styled(num, Style::default().fg(pal.get_color("dim"))),
+                            Span::raw(" "),
+                            Span::styled(
+                                song.title.clone(),
+                                Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                            ),
+                        ]))
+                    } else {
+                        ListItem::new(Line::from(vec![
+                            Span::styled("   ", Style::default()),
+                            Span::styled(num, Style::default().fg(pal.get_color("dim"))),
+                            Span::raw(" "),
+                            Span::styled(
+                                song.title.clone(),
+                                Style::default().fg(pal.get_color("muted")),
+                            ),
+                        ]))
+                    }
+                })
+                .collect()
+        };
+
+    if app.allow_lua_ui_changes {
+        let mut top: Vec<ListItem> = app
+            .ui_inject
+            .queue_top
+            .iter()
+            .map(|item| ListItem::new(panel_item_line(item, pal)))
+            .collect();
+        if !top.is_empty() {
+            top.extend(items);
+            items = top;
+        }
+        items.extend(
+            app.ui_inject
+                .queue_bottom
+                .iter()
+                .map(|item| ListItem::new(panel_item_line(item, pal))),
+        );
+    }
 
     let queue_title = match app.active_tab {
         Tab::Library => " PLAYLIST SONGS ",
@@ -1053,6 +1297,9 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
             .border_style(Style::default().fg(border_color)),
     );
     frame.render_stateful_widget(list, chunks[0], &mut state);
+    if !app.ui_layout.show_volume_bar {
+        return;
+    }
 
     let vol_ratio = (app.volume as f64 / 100.0).min(1.0);
     let vol_label = if app.muted {
@@ -1215,68 +1462,102 @@ fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
     frame.render_widget(gauge, area);
 }
 
-fn draw_help(frame: &mut Frame, pal: &Palette, area: Rect) {
-    let key = |k: &'static str| -> Span<'static> {
-        Span::styled(
-            k,
-            Style::default()
-                .fg(pal.get_color("warn"))
-                .add_modifier(Modifier::BOLD),
-        )
-    };
+fn tab_key_hint(app: &App) -> String {
+    let count = (app.main_tabs.len() + app.plugin_tabs.len()).clamp(1, 8);
+    format!("1-{count}")
+}
+
+fn key_span(text: impl Into<String>, pal: &Palette) -> Span<'static> {
+    Span::styled(
+        text.into(),
+        Style::default()
+            .fg(pal.get_color("warn"))
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
+    macro_rules! key {
+        ($text:expr) => {
+            key_span($text, pal)
+        };
+    }
     let sep = || -> Span<'static> { Span::styled(":", Style::default().fg(pal.get_color("dim"))) };
     let act = |a: &'static str| -> Span<'static> {
         Span::styled(a, Style::default().fg(pal.get_color("muted")))
     };
     let gap = || -> Span<'static> { Span::raw("  ") };
 
-    let line = Line::from(vec![
-        key("1-4"),
-        sep(),
-        act("tabs"),
-        gap(),
-        key("/"),
-        sep(),
-        act("search"),
-        gap(),
-        key("Tab"),
-        sep(),
-        act("focus"),
-        gap(),
-        key("Enter"),
-        sep(),
-        act("play"),
-        gap(),
-        key("Space"),
-        sep(),
-        act("pause"),
-        gap(),
-        key("n"),
-        sep(),
-        act("next"),
-        gap(),
-        key("d"),
-        sep(),
-        act("remove"),
-        gap(),
-        key("9/0"),
-        sep(),
-        act("vol"),
-        gap(),
-        key("c"),
-        sep(),
-        act("menu"),
-        gap(),
-        key("a/x"),
-        sep(),
-        act("playlists"),
-        gap(),
-        key("q"),
-        sep(),
-        act("quit"),
-    ]);
-
-    let widget = Paragraph::new(line).block(
+    let mut spans = if app.ui_layout.show_keybind_hints {
+        vec![
+            key!(tab_key_hint(app)),
+            sep(),
+            act("tabs"),
+            gap(),
+            key!("/"),
+            sep(),
+            act("search"),
+            gap(),
+            key!("Tab"),
+            sep(),
+            act("focus"),
+            gap(),
+            key!("Enter"),
+            sep(),
+            act("play"),
+            gap(),
+            key!("Space"),
+            sep(),
+            act("pause"),
+            gap(),
+            key!("n"),
+            sep(),
+            act("next"),
+            gap(),
+            key!("d"),
+            sep(),
+            act("remove"),
+            gap(),
+            key!("9/0"),
+            sep(),
+            act("vol"),
+            gap(),
+            key!("c"),
+            sep(),
+            act("menu"),
+            gap(),
+            key!("a/x"),
+            sep(),
+            act("playlists"),
+            gap(),
+            key!("q"),
+            sep(),
+            act("quit"),
+        ]
+    } else {
+        Vec::new()
+    };
+    if app.ui_layout.show_statusbar {
+        if let Some(warning) = app.plugin_warnings.back() {
+            spans.push(gap());
+            spans.push(Span::styled(
+                "⚠",
+                Style::default()
+                    .fg(pal.get_color("warn"))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                warning.clone(),
+                Style::default().fg(pal.get_color("warn")),
+            ));
+        }
+        for item in &app.ui_inject.statusbar_extra {
+            spans.push(gap());
+            spans.extend(panel_item_line(item, pal).spans);
+        }
+    }
+    let widget = Paragraph::new(Line::from(spans)).block(
         Block::default()
             .title(Span::styled(
                 " KEYBINDS ",
@@ -1286,6 +1567,85 @@ fn draw_help(frame: &mut Frame, pal: &Palette, area: Rect) {
             .border_style(Style::default().fg(pal.get_color("dim"))),
     );
     frame.render_widget(widget, area);
+}
+
+fn draw_custom_sections(
+    frame: &mut Frame,
+    app: &App,
+    pal: &Palette,
+    anim: Color,
+    position: &str,
+    area: Rect,
+) {
+    if !app.allow_lua_ui_changes {
+        return;
+    }
+    let sections: Vec<_> = app
+        .custom_sections
+        .iter()
+        .filter(|section| {
+            section.position == position && !app.hidden_sections.iter().any(|id| id == &section.id)
+        })
+        .collect();
+    if sections.is_empty() {
+        return;
+    }
+    let height = sections
+        .iter()
+        .map(|section| section.height.unwrap_or(3))
+        .max()
+        .unwrap_or(3)
+        .min(area.height);
+    if height == 0 {
+        return;
+    }
+    let y = match position {
+        "above_player" => area.y,
+        "below_player" => area.y + area.height.saturating_sub(height),
+        _ => area.y,
+    };
+    let count = sections.len() as u16;
+    let each_width = (area.width / count.max(1)).max(1);
+    for (idx, section) in sections.iter().enumerate() {
+        let width = section.width.unwrap_or(each_width).min(area.width);
+        let x = match position {
+            "right" => area.x + area.width.saturating_sub(width),
+            "left" => area.x,
+            _ => area.x + (idx as u16).saturating_mul(each_width),
+        };
+        let section_area = Rect::new(
+            x,
+            y,
+            width.min(area.width.saturating_sub(x.saturating_sub(area.x))),
+            height,
+        );
+        if section_area.width == 0 || section_area.height == 0 {
+            continue;
+        }
+        let rows: Vec<Line> = app
+            .ui_section_items
+            .get(&section.id)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| panel_item_line(item, pal))
+                    .collect()
+            })
+            .unwrap_or_else(Vec::new);
+        frame.render_widget(Clear, section_area);
+        frame.render_widget(
+            Paragraph::new(rows).block(
+                Block::default()
+                    .title(Span::styled(
+                        format!(" {} ", section.id),
+                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(anim)),
+            ),
+            section_area,
+        );
+    }
 }
 
 fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
@@ -1499,41 +1859,7 @@ fn draw_plugin_panels(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             panel
                 .items
                 .iter()
-                .map(|item| match item {
-                    PluginPanelItem::Text { text } => Line::from(Span::styled(
-                        text.clone(),
-                        Style::default().fg(pal.get_color("text")),
-                    )),
-                    PluginPanelItem::Info { text } => Line::from(Span::styled(
-                        text.clone(),
-                        Style::default().fg(pal.get_color("info")),
-                    )),
-                    PluginPanelItem::Option { key, value } => Line::from(vec![
-                        Span::styled(
-                            format!("{}: ", key),
-                            Style::default()
-                                .fg(pal.get_color("warn"))
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(value.clone(), Style::default().fg(pal.get_color("text"))),
-                    ]),
-                    PluginPanelItem::Stat { label, value } => Line::from(vec![
-                        Span::styled(
-                            format!("{} ", label),
-                            Style::default().fg(pal.get_color("muted")),
-                        ),
-                        Span::styled(
-                            value.clone(),
-                            Style::default()
-                                .fg(pal.get_color("ok"))
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    PluginPanelItem::Separator => Line::from(Span::styled(
-                        "─".repeat(24),
-                        Style::default().fg(pal.get_color("dim")),
-                    )),
-                })
+                .map(|item| panel_item_line(item, pal))
                 .collect()
         };
         let lines = item_lines.len().clamp(1, 10) as u16;
