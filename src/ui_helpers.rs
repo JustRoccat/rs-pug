@@ -1,6 +1,6 @@
 use crate::config;
 use crate::model::{App, Focus, LocalNavLevel, LocalViewMode, PlayerState, RepeatMode, Tab};
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 
 pub enum LocalNavItems<'a> {
     Artists(Vec<String>),
@@ -59,9 +59,16 @@ pub fn player_state_label(state: PlayerState) -> &'static str {
     }
 }
 
-pub fn describe_key_event(code: &KeyCode) -> String {
+pub fn describe_key_event_with_modifiers(code: &KeyCode, modifiers: KeyModifiers) -> String {
     match code {
-        KeyCode::Char(c) => format!("char:{c}"),
+        KeyCode::Char(c) => {
+            let c = if modifiers.contains(KeyModifiers::SHIFT) {
+                c.to_ascii_uppercase()
+            } else {
+                *c
+            };
+            format!("char:{c}")
+        }
         KeyCode::Enter => "enter".to_owned(),
         KeyCode::Esc => "esc".to_owned(),
         KeyCode::Tab => "tab".to_owned(),
@@ -75,6 +82,34 @@ pub fn describe_key_event(code: &KeyCode) -> String {
         KeyCode::F(n) => format!("f{n}"),
         _ => "other".to_owned(),
     }
+}
+
+pub fn describe_key_event_labels(code: &KeyCode, modifiers: KeyModifiers) -> Vec<String> {
+    let primary = describe_key_event_with_modifiers(code, modifiers);
+    let Some(alias) = toggled_ascii_char_label(code, primary.as_str()) else {
+        return vec![primary];
+    };
+    if alias == primary {
+        vec![primary]
+    } else {
+        vec![primary, alias]
+    }
+}
+
+fn toggled_ascii_char_label(code: &KeyCode, primary: &str) -> Option<String> {
+    let KeyCode::Char(c) = code else {
+        return None;
+    };
+    if !c.is_ascii_alphabetic() {
+        return None;
+    }
+    let current = primary.strip_prefix("char:")?.chars().next()?;
+    let toggled = if current.is_ascii_uppercase() {
+        current.to_ascii_lowercase()
+    } else {
+        current.to_ascii_uppercase()
+    };
+    Some(format!("char:{toggled}"))
 }
 
 pub fn scroll_selection(app: &mut App, delta: isize, local_nav_len: usize) {
@@ -251,4 +286,21 @@ pub fn cycle_keybind_char(current: char, delta: isize) -> char {
         .unwrap_or(0) as isize;
     let next = (pos + delta).rem_euclid(POOL.len() as isize) as usize;
     POOL[next] as char
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_labels_include_case_alias_for_letters() {
+        assert_eq!(
+            describe_key_event_labels(&KeyCode::Char('z'), KeyModifiers::empty()),
+            vec!["char:z".to_owned(), "char:Z".to_owned()]
+        );
+        assert_eq!(
+            describe_key_event_labels(&KeyCode::Char('z'), KeyModifiers::SHIFT),
+            vec!["char:Z".to_owned(), "char:z".to_owned()]
+        );
+    }
 }

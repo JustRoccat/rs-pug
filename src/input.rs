@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 pub enum KeyPluginAction {
     Handled(bool),
-    Dispatch { label: String },
+    Dispatch { labels: Vec<String> },
 }
 
 pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
@@ -149,7 +149,7 @@ pub fn handle_key_event_pre_plugin(
     }
 
     KeyPluginAction::Dispatch {
-        label: ui_helpers::describe_key_event(&key.code),
+        labels: ui_helpers::describe_key_event_labels(&key.code, key.modifiers),
     }
 }
 

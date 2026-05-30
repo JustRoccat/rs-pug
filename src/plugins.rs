@@ -1095,6 +1095,54 @@ return plugin
     }
 
     #[test]
+    fn key_dispatch_deserializes_ui_layout_patch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("layout_key.lua"),
+            r#"
+plugin = {}
+function plugin.on_key(key, state)
+  if key == "char:Z" then
+    return {
+      consume = true,
+      flash = "layout patch",
+      ui = {
+        layout = {
+          queue_width_percent = 65,
+          queue_position = "left",
+          visualizer_height = 4,
+          tab_bar_position = "top"
+        }
+      }
+    }
+  end
+end
+return plugin
+"#,
+        )
+        .expect("write plugin");
+        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), true);
+        let state = PluginUiState::from_runtime(
+            Tab::Discover,
+            None,
+            "idle",
+            10,
+            false,
+            RepeatMode::Off,
+            String::new(),
+            String::new(),
+            0,
+        );
+        let dispatch = manager.dispatch_key("char:Z", &state);
+        assert!(dispatch.consume);
+        assert_eq!(dispatch.flash.as_deref(), Some("layout patch"));
+        assert_eq!(dispatch.ui.layout.queue_width_percent, Some(65));
+        assert_eq!(dispatch.ui.layout.queue_position.as_deref(), Some("left"));
+        assert_eq!(dispatch.ui.layout.visualizer_height, Some(4));
+        assert_eq!(dispatch.ui.layout.tab_bar_position.as_deref(), Some("top"));
+    }
+
+    #[test]
     fn ui_update_accepts_layout_and_full_config_shapes() {
         let dir = tempfile::tempdir().expect("tempdir");
         fs::write(

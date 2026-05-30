@@ -57,7 +57,7 @@ enum PluginTaskResult {
 
 struct PendingPluginKey {
     key: KeyEvent,
-    label: String,
+    labels: Vec<String>,
     state: PluginUiState,
 }
 
@@ -134,6 +134,7 @@ async fn main() -> Result<()> {
 
     let tick_rate = Duration::from_millis(20);
     let mut startup_ui_config_scheduled = false;
+    let mut startup_ui_config_done = !app.allow_lua_ui_changes;
     let mut ui_update_pending = false;
     let mut ui_surface_pending = false;
     let mut key_hook_pending = false;
@@ -153,10 +154,15 @@ async fn main() -> Result<()> {
             match result {
                 PluginTaskResult::UiConfig(config) => {
                     events::apply_ui_config(&mut app, config);
+                    startup_ui_config_done = true;
+                    last_ui_state = None;
+                    last_ui_surface_state = None;
                 }
                 PluginTaskResult::UiUpdate { state, layout } => {
-                    events::apply_layout_config(&mut app, layout);
-                    last_ui_state = Some(state);
+                    if state == PluginUiState::from_app(&app) {
+                        events::apply_layout_config(&mut app, layout);
+                        last_ui_state = Some(state);
+                    }
                     ui_update_pending = false;
                 }
                 PluginTaskResult::UiSurface {
@@ -166,28 +172,34 @@ async fn main() -> Result<()> {
                     sections,
                     inject,
                 } => {
-                    app.plugin_tabs = tabs;
-                    if let Some(active) = app.active_plugin_tab.clone() {
-                        if !app.plugin_tabs.iter().any(|t| t.id == active) {
-                            app.active_plugin_tab = None;
+                    if state == PluginUiState::from_app(&app) {
+                        app.plugin_tabs = tabs;
+                        if let Some(active) = app.active_plugin_tab.clone() {
+                            if !app.plugin_tabs.iter().any(|t| t.id == active) {
+                                app.active_plugin_tab = None;
+                            }
                         }
+                        app.plugin_panels = panels;
+                        if app.allow_lua_ui_changes {
+                            app.ui_section_items = sections;
+                            app.ui_inject = inject;
+                        }
+                        last_ui_surface_state = Some(state);
                     }
-                    app.plugin_panels = panels;
-                    if app.allow_lua_ui_changes {
-                        app.ui_section_items = sections;
-                        app.ui_inject = inject;
-                    }
-                    last_ui_surface_state = Some(state);
                     ui_surface_pending = false;
                 }
                 PluginTaskResult::EventDispatch(dispatch) => {
                     let _ = events::apply_plugin_dispatch(&mut app, &cmd_tx, dispatch);
+                    last_ui_state = None;
+                    last_ui_surface_state = None;
                 }
                 PluginTaskResult::KeyDispatch { key, dispatch } => {
                     key_hook_pending = false;
                     if !events::apply_plugin_dispatch(&mut app, &cmd_tx, dispatch) {
                         keep_running = input::handle_native_key_event(&mut app, key, &cmd_tx);
                     }
+                    last_ui_state = None;
+                    last_ui_surface_state = None;
                     if keep_running {
                         start_next_plugin_key(
                             &plugin_manager,
@@ -212,14 +224,18 @@ async fn main() -> Result<()> {
             startup_ui_config_scheduled = true;
         }
         let ui_state = PluginUiState::from_app(&app);
-        if app.allow_lua_ui_changes
+        if startup_ui_config_done
+            && app.allow_lua_ui_changes
             && !ui_update_pending
             && last_ui_state.as_ref() != Some(&ui_state)
         {
             spawn_ui_update_task(&plugin_manager, &plugin_tx, ui_state.clone());
             ui_update_pending = true;
         }
-        if !ui_surface_pending && last_ui_surface_state.as_ref() != Some(&ui_state) {
+        if startup_ui_config_done
+            && !ui_surface_pending
+            && last_ui_surface_state.as_ref() != Some(&ui_state)
+        {
             spawn_ui_surface_task(
                 &plugin_manager,
                 &plugin_tx,
@@ -253,10 +269,10 @@ async fn main() -> Result<()> {
                                 break;
                             }
                         }
-                        KeyPluginAction::Dispatch { label } => {
+                        KeyPluginAction::Dispatch { labels } => {
                             let request = PendingPluginKey {
                                 key,
-                                label,
+                                labels,
                                 state: PluginUiState::from_app(&app),
                             };
                             queued_plugin_keys.push_back(request);
@@ -386,13 +402,53 @@ fn start_next_plugin_key(
     tokio::task::spawn_blocking(move || {
         let dispatch = plugins
             .lock()
-            .map(|plugins| plugins.dispatch_key(request.label.as_str(), &request.state))
+            .map(|plugins| dispatch_key_with_aliases(&plugins, &request.labels, &request.state))
             .unwrap_or_default();
         let _ = tx.send(PluginTaskResult::KeyDispatch {
             key: request.key,
             dispatch,
         });
     });
+}
+
+fn dispatch_key_with_aliases(
+    plugins: &PluginManager,
+    labels: &[String],
+    state: &PluginUiState,
+) -> PluginDispatch {
+    for label in labels {
+        let dispatch = plugins.dispatch_key(label.as_str(), state);
+        if plugin_dispatch_has_effect(&dispatch) {
+            return dispatch;
+        }
+    }
+    PluginDispatch::default()
+}
+
+fn plugin_dispatch_has_effect(dispatch: &PluginDispatch) -> bool {
+    dispatch.consume
+        || dispatch.flash.is_some()
+        || dispatch.flash_seconds.is_some()
+        || !dispatch.core_actions.is_empty()
+        || dispatch.ui.set_tab.is_some()
+        || dispatch.ui.set_search_query.is_some()
+        || dispatch.ui.set_album_search_query.is_some()
+        || dispatch.ui.set_focus.is_some()
+        || dispatch.ui.set_search_mode.is_some()
+        || dispatch.ui.set_selected_result.is_some()
+        || dispatch.ui.set_selected_album_result.is_some()
+        || dispatch.ui.set_selected_queue.is_some()
+        || layout_patch_has_effect(&dispatch.ui.layout)
+}
+
+fn layout_patch_has_effect(layout: &plugins::PluginUiLayoutPatch) -> bool {
+    layout.queue_width_percent.is_some()
+        || layout.visualizer_height.is_some()
+        || layout.tab_bar_position.is_some()
+        || layout.tabs_width.is_some()
+        || layout.queue_position.is_some()
+        || !layout.hide_sections.is_empty()
+        || !layout.show_sections.is_empty()
 }
 
 /* todo:

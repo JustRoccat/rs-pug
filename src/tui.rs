@@ -127,7 +127,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     constraints.push(Constraint::Min(8));
     if app.ui_layout.visualizer_height > 0 {
-        constraints.push(Constraint::Length(app.ui_layout.visualizer_height.max(3)));
+        constraints.push(Constraint::Length(app.ui_layout.visualizer_height));
     }
     if below_height > 0 {
         constraints.push(Constraint::Length(below_height));
@@ -446,21 +446,13 @@ fn plugin_panel_lines(panel: &crate::plugins::PluginPanel, pal: &Palette) -> Vec
 }
 
 fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
-    let queue = if app.active_tab == Tab::Library {
-        36
-    } else {
-        app.ui_layout.queue_width_percent.clamp(10, 90)
-    };
+    let queue = app.ui_layout.queue_width_percent.clamp(10, 90);
+    let queue_width = Constraint::Ratio(queue as u32, 100);
+    let results_width = Constraint::Ratio((100 - queue) as u32, 100);
     let split = if app.ui_layout.queue_position == "left" {
-        [
-            Constraint::Percentage(queue),
-            Constraint::Percentage(100 - queue),
-        ]
+        [queue_width, results_width]
     } else {
-        [
-            Constraint::Percentage(100 - queue),
-            Constraint::Percentage(queue),
-        ]
+        [results_width, queue_width]
     };
     let cols = Layout::horizontal(split).split(area);
 
@@ -1395,13 +1387,17 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
 
     let playing = app.player_state == PlayerState::Playing;
     let spec_w = inner_w.saturating_sub(3);
-    let mut spec = vec![Span::styled("  ".to_string(), Style::default())];
-    spec.extend(spectrum_spans(app, spec_w));
-    let line3 = Line::from(spec);
+    let spectrum_rows = area.height.saturating_sub(4).max(1) as usize;
+    let mut rows = vec![line1, line2];
+    rows.extend((0..spectrum_rows).map(|_| {
+        let mut spec = vec![Span::styled("  ".to_string(), Style::default())];
+        spec.extend(spectrum_spans(app, spec_w));
+        Line::from(spec)
+    }));
 
     let border_color = if playing { anim } else { pal.get_color("dim") };
 
-    let widget = Paragraph::new(vec![line1, line2, line3]).block(
+    let widget = Paragraph::new(rows).block(
         Block::default()
             .title(Span::styled(
                 " ♫  NOW PLAYING ",
