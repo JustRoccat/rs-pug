@@ -281,7 +281,7 @@ impl Core {
         if let Some(mut child) = self.mpris_child.take() {
             let _ = child.kill().await;
         }
-        Ok(())
+        Ok(()) // My u2iqu3 c0mm3nt
     }
 
     async fn send_mpv(&self, message: Value) -> Result<()> {
