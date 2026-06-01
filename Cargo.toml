@@ -2,6 +2,9 @@
 name = "rs-pug"
 version = "0.1.0"
 edition = "2021"
+description = "Blazing fast tui music player" 
+license = "MIT"                                             
+repository = "https://github.com/JustRoccat/rs-pug"
 
 [dependencies]
 anyhow = "1"
