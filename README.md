@@ -55,8 +55,8 @@ cd rs-pug
 cargo build --release
 ./target/release/rs-pug
 ```
-```
 ### From crates.io
+```
 cargo install rs-pug
 ```
 
