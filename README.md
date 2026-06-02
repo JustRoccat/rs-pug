@@ -63,6 +63,71 @@ Optional:
 
 Lua plugin PRs especially welcome — API reference in [`docs.md`](./docs.md).
 
+## Mouse Support
+
+- **Scroll Wheel**: Scroll through search results, playlists, and the queue.
+- **Left Click**: Click on tab icons at the top to switch between views.
+
+## Smart Queue
+
+In the **Options** tab, you can trigger the **Smart Queue**. This feature analyzes the currently playing song and automatically finds similar tracks from the same uploader or with similar titles to keep the music flowing.
+
+## Customization
+
+### Themes
+
+`rs-pug` comes with several built-in themes: `dark` (default), `light`, `nord`, `gruvbox`, and `mono`.
+
+You can add your own themes by creating `.json` files in `~/.config/rs-pug/themes/`.
+
+Example `mytheme.json`:
+```json
+{
+  "text": [255, 255, 255],
+  "dim": [100, 100, 100],
+  "muted": [150, 150, 150],
+  "info": [0, 255, 255],
+  "warn": [255, 255, 0],
+  "ok": [0, 255, 0],
+  "primary": [255, 0, 255],
+  "accent2": [200, 0, 200],
+  "accent3": [100, 0, 100]
+}
+```
+
+### EQ Presets
+
+Your custom EQ presets are stored as `.json` files in `~/.config/rs-pug/eqpresets/`.
+
+## Local Music
+
+By default, `rs-pug` scans `~/.config/rs-pug/music-local/`. You can change this or add more directories in the **Options** tab. The app supports natural sorting and metadata extraction.
+
+## Playlists & Storage
+
+Data is stored in a SQLite database at `~/.config/rs-pug/pug.db`. Legacy JSON files are automatically migrated on first run.
+
+- **Import path**: `~/.config/rs-pug/import_playlist.json`
+- **Export path**: `~/.config/rs-pug/exports/<playlist_name>.json`
+
+## Plugins (Lua)
+
+Drop Lua scripts into `~/.config/rs-pug/plugins/`. They are loaded automatically and can react to keys, search queries, and playback events. See `docs.md` for the full API reference.
+
+Lua plugins that change the stock UI are opt-in. Add this to `~/.config/rs-pug/config.toml` to enable the new UI hooks (`on_ui_config`, `on_ui_sections`, `on_ui_update`, and `on_ui_inject`):
+
+```toml
+[lua]
+allow-lua-ui-changes = true
+```
+
+The default is `false`, so legacy plugins using `on_key`, `on_event`, `on_tabs`, or `on_ui_panels` continue to work unchanged. When UI customization is enabled, plugin load/hook/layout issues are captured as non-fatal warnings and shown in the statusbar instead of crashing the app.
+
+## Configuration
+
+Config file path: `~/.config/rs-pug/config.toml`.
+
+
 ## License
 
 MIT
