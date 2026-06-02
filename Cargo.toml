@@ -1,6 +1,6 @@
 [package]
 name = "rs-pug"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "Blazing fast tui music player" 
 license = "MIT"                                             
@@ -13,7 +13,7 @@ lofty = "0.21"
 ratatui = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util"] }
 toml = "0.8"
 walkdir = "2.5"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
