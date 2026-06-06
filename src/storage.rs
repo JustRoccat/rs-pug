@@ -167,14 +167,6 @@ impl Storage {
         }
     }
 
-    pub fn load_last_scanned_dirs(&self) -> Vec<String> {
-        self.db
-            .lock()
-            .unwrap()
-            .load_last_scanned_dirs()
-            .unwrap_or_default()
-    }
-
     pub fn save_last_scanned_dirs(&self, dirs: &[String]) {
         let _ = self.db.lock().unwrap().save_last_scanned_dirs(dirs);
     }

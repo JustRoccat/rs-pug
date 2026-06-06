@@ -119,7 +119,7 @@ pub fn handle_key_event_pre_plugin(
                 } else {
                     app.search_query.trim().to_owned()
                 };
-                if !q.is_empty() {
+                if !q.is_empty() && app.active_tab != Tab::Local {
                     app.player_state = PlayerState::Searching;
                     let _ = if app.active_tab == Tab::Albums {
                         cmd_tx.send(CoreCmd::SearchAlbums(q))
@@ -128,6 +128,13 @@ pub fn handle_key_event_pre_plugin(
                     };
                 }
                 app.search_mode = false;
+                if app.active_tab == Tab::Local {
+                    if let Ok((window, offset, total)) = app.storage.fetch_local_songs_window(app.selected_local_song, 200) {
+                        app.local_library_window = window;
+                        app.local_library_offset = offset;
+                        app.local_library_total = total;
+                    }
+                }
             }
             KeyCode::Backspace => {
                 if app.active_tab == Tab::Albums {
@@ -135,12 +142,34 @@ pub fn handle_key_event_pre_plugin(
                 } else {
                     app.search_query.pop();
                 }
+                if app.active_tab == Tab::Local {
+                    let q = app.search_query.to_lowercase();
+                    let filtered: Vec<_> = app.storage.load_local_library().unwrap_or_default()
+                        .into_iter()
+                        .filter(|s| s.title.to_lowercase().contains(&q) || s.artist.to_lowercase().contains(&q) || s.album.to_lowercase().contains(&q))
+                        .collect();
+                    app.local_library_total = filtered.len();
+                    app.local_library_window = filtered;
+                    app.local_library_offset = 0;
+                    app.selected_local_song = 0;
+                }
             }
             KeyCode::Char(c) => {
                 if app.active_tab == Tab::Albums {
                     app.album_search_query.push(c);
                 } else {
                     app.search_query.push(c);
+                }
+                if app.active_tab == Tab::Local {
+                    let q = app.search_query.to_lowercase();
+                    let filtered: Vec<_> = app.storage.load_local_library().unwrap_or_default()
+                        .into_iter()
+                        .filter(|s| s.title.to_lowercase().contains(&q) || s.artist.to_lowercase().contains(&q) || s.album.to_lowercase().contains(&q))
+                        .collect();
+                    app.local_library_total = filtered.len();
+                    app.local_library_window = filtered;
+                    app.local_library_offset = 0;
+                    app.selected_local_song = 0;
                 }
             }
             _ => {}
@@ -203,7 +232,7 @@ pub fn handle_native_key_event(
             }
         }
         KeyCode::Char('/') => {
-            if !matches!(app.active_tab, Tab::Discover | Tab::Albums) {
+            if !matches!(app.active_tab, Tab::Discover | Tab::Albums | Tab::Local) {
                 return true;
             }
             app.search_mode = true;

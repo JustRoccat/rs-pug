@@ -220,6 +220,7 @@ impl DbStorage {
 
     pub fn save_local_songs_bulk(&mut self, songs: &[crate::model::LocalSong]) -> Result<()> {
         let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM local_songs", [])?;
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO local_songs (path, title, artist, album, duration, mtime)
@@ -392,19 +393,6 @@ impl DbStorage {
         Ok(songs)
     }
 
-    pub fn load_last_scanned_dirs(&self) -> Result<Vec<String>> {
-        let raw: Result<String> = self.conn.query_row(
-            "SELECT value FROM app_settings WHERE key = 'last_scanned_dirs'",
-            [],
-            |row| row.get(0),
-        );
-        match raw {
-            Ok(raw) => Ok(serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Vec::new()),
-            Err(err) => Err(err),
-        }
-    }
-
     pub fn save_last_scanned_dirs(&mut self, dirs: &[String]) -> Result<()> {
         let raw = serde_json::to_string(dirs).unwrap_or_else(|_| "[]".to_owned());
         self.conn.execute(
@@ -526,20 +514,6 @@ mod tests {
         // Page 4: limit 2, offset 6
         let page4 = db.load_local_songs_paginated(2, 6).unwrap();
         assert_eq!(page4.len(), 0);
-    }
-
-    #[test]
-    fn test_last_scanned_dirs_roundtrip() {
-        let (mut db, _file) = setup_db();
-
-        assert!(db.load_last_scanned_dirs().unwrap().is_empty());
-
-        let dirs = vec!["/music/a".to_string(), "/music/b".to_string()];
-        db.save_last_scanned_dirs(&dirs).unwrap();
-        assert_eq!(db.load_last_scanned_dirs().unwrap(), dirs);
-
-        db.save_last_scanned_dirs(&[]).unwrap();
-        assert!(db.load_last_scanned_dirs().unwrap().is_empty());
     }
 
     #[test]

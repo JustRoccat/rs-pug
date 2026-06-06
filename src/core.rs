@@ -734,15 +734,9 @@ pub fn check_and_refresh_library(
     config: &Config,
     storage: &crate::storage::Storage,
 ) -> Option<Vec<LocalSong>> {
-    let current_lib = storage.load_local_library().unwrap_or_default();
-    let last_dirs = storage.load_last_scanned_dirs();
-    if last_dirs != config.general.music_directories || current_lib.is_empty() {
-        let songs = refresh_library(config, storage);
-        storage.save_last_scanned_dirs(&config.general.music_directories);
-        Some(songs)
-    } else {
-        None
-    }
+    let songs = refresh_library(config, storage);
+    storage.save_last_scanned_dirs(&config.general.music_directories);
+    Some(songs)
 }
 
 #[cfg(test)]

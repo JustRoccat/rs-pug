@@ -323,12 +323,17 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
             " ⌨  SEARCHING — type and press Enter ",
         )
     } else {
-        (pal.get_color("dim"), " ⌕  SEARCH — press / to start ")
+        (pal.get_color("dim"), if app.active_tab == Tab::Local { " ⌕  SEARCH LOCAL — press / to start " } else { " ⌕  SEARCH — press / to start " })
     };
 
     let content = if active_query.is_empty() && !app.search_mode {
+        let prompt = if app.active_tab == Tab::Local {
+            "search local files...".to_string()
+        } else {
+            format!("search {}...", search_source_label(&app.opt_source))
+        };
         Line::from(Span::styled(
-            format!("  search {}...", search_source_label(&app.opt_source)),
+            prompt,
             Style::default()
                 .fg(pal.get_color("dim"))
                 .add_modifier(Modifier::ITALIC),
