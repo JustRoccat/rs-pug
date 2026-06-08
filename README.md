@@ -123,6 +123,10 @@ allow-lua-ui-changes = true
 
 The default is `false`, so legacy plugins using `on_key`, `on_event`, `on_tabs`, or `on_ui_panels` continue to work unchanged. When UI customization is enabled, plugin load/hook/layout issues are captured as non-fatal warnings and shown in the statusbar instead of crashing the app.
 
+
+## Downloading music
+You can now download music using context menu
+
 ## Configuration
 
 Config file path: `~/.config/rs-pug/config.toml`.
