@@ -1,4 +1,6 @@
+use crate::core::CoreCmd;
 use crate::model::{App, Playlist, Tab, Focus, Song};
+use tokio::sync::mpsc;
 
 pub fn create_empty_playlist(app: &mut App, name: &str) {
     app.playlists.push(Playlist {
@@ -70,7 +72,7 @@ pub fn export_selected_playlist_action(app: &mut App) {
     }
 }
 
-pub fn execute_context_action(app: &mut App, index: usize) {
+pub fn execute_context_action(app: &mut App, index: usize, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) {
     if app.active_tab == Tab::Library && app.focus == Focus::Results {
         match index {
             0 => import_playlist_action(app),
@@ -81,15 +83,38 @@ pub fn execute_context_action(app: &mut App, index: usize) {
     }
 
     if let Some(song) = app.selected_song_for_context() {
-        match index {
-            0 => add_to_selected_playlist(app, song),
-            1 => {
-                let name = format!("Playlist {}", app.playlists.len() + 1);
-                add_to_named_playlist(app, song, &name);
+        if app.active_tab == Tab::Local {
+            match index {
+                0 => add_to_selected_playlist(app, song),
+                1 => {
+                    let name = format!("Playlist {}", app.playlists.len() + 1);
+                    add_to_named_playlist(app, song, &name);
+                }
+                2 => remove_selected_queue_song(app),
+                _ => {}
             }
-            2 => remove_selected_queue_song(app),
-            3 => remove_selected_playlist_song(app),
-            _ => {}
+        } else {
+            match index {
+                0 => add_to_selected_playlist(app, song),
+                1 => {
+                    let name = format!("Playlist {}", app.playlists.len() + 1);
+                    add_to_named_playlist(app, song, &name);
+                }
+                2 => {
+                    if let Some(dir) = app.opt_music_dirs.first() {
+                        let _ = cmd_tx.send(CoreCmd::DownloadSong {
+                            song: song.clone(),
+                            path: dir.clone(),
+                        });
+                        app.set_flash(format!("Downloading {}...", song.title), 3);
+                    } else {
+                        app.set_flash("Please set a music directory in settings!", 3);
+                    }
+                }
+                3 => remove_selected_queue_song(app),
+                4 => remove_selected_playlist_song(app),
+                _ => {}
+            }
         }
         app.storage.save_playlists(&app.playlists).expect("Failed to save playlists");
     }

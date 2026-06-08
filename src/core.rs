@@ -42,6 +42,7 @@ pub enum CoreCmd {
     Next,
     Prev,
     UpdateSearchSource(crate::config::SearchSource),
+    DownloadSong { song: Song, path: String },
     Quit,
     HandleSearchDone(Vec<Song>),
     HandleAlbumSearchDone(Vec<crate::model::Album>),
@@ -62,6 +63,7 @@ pub enum CoreEvent {
     MuteChanged(bool),
     Error(String),
     LibraryRefreshDone,
+    DownloadFinished(Result<String, String>),
 }
 
 pub struct Core {
@@ -195,6 +197,34 @@ impl Core {
                         CoreCmd::ToggleMute => self.toggle_mute(&tx).await,
                         CoreCmd::Next => self.next(&tx).await,
                         CoreCmd::Prev => self.prev(&tx).await,
+                        CoreCmd::DownloadSong { song, path } => {
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                let output_template = format!("{}/%(title)s.%(ext)s", path);
+                                let result = Command::new("yt-dlp")
+                                    .arg("-x")
+                                    .arg("--audio-format")
+                                    .arg("mp3")
+                                    .arg("-o")
+                                    .arg(output_template)
+                                    .arg(&song.webpage_url)
+                                    .output()
+                                    .await;
+
+                                let res = match result {
+                                    Ok(output) if output.status.success() => {
+                                        Ok(format!("Downloaded: {}", song.title))
+                                    }
+                                    Ok(output) => {
+                                        let stderr = String::from_utf8_lossy(&output.stderr);
+                                        Err(format!("yt-dlp failed: {}", stderr.trim()))
+                                    }
+                                    Err(err) => Err(format!("failed to run yt-dlp: {err}")),
+                                };
+                                let _ = tx.send(CoreEvent::DownloadFinished(res));
+                            });
+                            Ok(())
+                        }
                         CoreCmd::UpdateSearchSource(source) => {
                             self.config.search.source = source;
                             Ok(())

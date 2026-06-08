@@ -522,7 +522,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             ("⊞", format!("MPV socket     {}", app.opt_socket)),
             (
                 "⊞",
-                if app.opt_editing && app.options_index == 2 {
+                if app.opt_editing && app.options_index == 3 {
                     format!("Music Dir      {}", app.opt_edit_buffer)
                 } else {
                     format!(
@@ -543,7 +543,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             ("⊞", eq_label),
             (
                 "⊞",
-                if app.opt_editing && app.options_index == 7 {
+                if app.opt_editing && app.options_index == 8 {
                     format!("EQ preset      {}", app.opt_edit_buffer)
                 } else {
                     format!(
@@ -1947,6 +1947,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             &[
                 "◈  Add to selected playlist",
                 "✦  Create new playlist",
+                "⇩  Download Song",
                 "✕  Remove from queue",
                 "✕  Remove from playlist",
             ]

@@ -74,7 +74,7 @@ pub fn handle_key_event_pre_plugin(
             }
             KeyCode::Enter => {
                 let idx = app.context_index;
-                playlist::execute_context_action(app, idx);
+                playlist::execute_context_action(app, idx, cmd_tx);
                 playlist::ensure_playlist_state(app);
                 app.context_open = false;
             }
@@ -823,6 +823,6 @@ fn context_menu_len(app: &App) -> usize {
     if app.active_tab == Tab::Library && app.focus == Focus::Results {
         2
     } else {
-        4
+        5
     }
 }

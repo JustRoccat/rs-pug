@@ -150,6 +150,13 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
             app.set_flash("Library refreshed", 3);
             None
         }
+        CoreEvent::DownloadFinished(result) => {
+            match result {
+                Ok(msg) => app.set_flash(msg, 5),
+                Err(err) => app.set_flash(format!("Download failed: {err}"), 5),
+            }
+            None
+        }
     };
     if app.active_tab == Tab::Local {
         ui_helpers::update_local_library_window(app);
