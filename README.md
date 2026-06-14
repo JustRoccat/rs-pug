@@ -4,6 +4,8 @@
 
 I'm no longer going to maintain this package on the AUR and I am looking for a new maintainer. If you're interested, please create an issue here.
 
+Edit: This doesn't apply to crates.io, i will still maintain crates io
+
 # rs-pug
 
 No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files — all from your terminal.
