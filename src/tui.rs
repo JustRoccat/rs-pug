@@ -323,7 +323,14 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
             " ⌨  SEARCHING — type and press Enter ",
         )
     } else {
-        (pal.get_color("dim"), if app.active_tab == Tab::Local { " ⌕  SEARCH LOCAL — press / to start " } else { " ⌕  SEARCH — press / to start " })
+        (
+            pal.get_color("dim"),
+            if app.active_tab == Tab::Local {
+                " ⌕  SEARCH LOCAL — press / to start "
+            } else {
+                " ⌕  SEARCH — press / to start "
+            },
+        )
     };
 
     let content = if active_query.is_empty() && !app.search_mode {
@@ -770,7 +777,24 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 }
             }
             Tab::Local => {
-                let mut t = " 🗀  LOCAL LIBRARY ".to_owned();
+                let mut t = format!(" 🗀  LOCAL LIBRARY — sort: {} ", app.local_sort_mode.label());
+                let filters: Vec<String> = [
+                    app.local_filter_genre
+                        .as_ref()
+                        .map(|v| format!("genre={v}")),
+                    app.local_filter_artist
+                        .as_ref()
+                        .map(|v| format!("artist={v}")),
+                    app.local_filter_album
+                        .as_ref()
+                        .map(|v| format!("album={v}")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                if !filters.is_empty() {
+                    t.push_str(&format!(" — filters: {}", filters.join(", ")));
+                }
                 if app.local_view_mode == crate::model::LocalViewMode::Organized {
                     match app.local_nav_level {
                         crate::model::LocalNavLevel::Artists => t.push_str(" ❯ Artists"),
@@ -920,9 +944,13 @@ fn build_local_song_list<'a>(
                 pal.get_color("muted")
             };
             let subtitle = format!(
-                "{} • {} • {}",
+                "{} • {} • {} • {} • {}",
                 song.artist,
                 song.album,
+                song.genre,
+                song.year
+                    .map(|y| y.to_string())
+                    .unwrap_or_else(|| "----".to_owned()),
                 format_time(song.duration)
             );
             let sub_line = Line::from(vec![
@@ -1920,6 +1948,59 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
                 )
                 .style(Style::default().fg(pal.get_color("ok")))
                 .alignment(Alignment::Center),
+            area,
+        );
+    }
+
+    if app.local_tag_editor_open {
+        let area = centered_rect(70, 32, size);
+        frame.render_widget(Clear, area);
+        let song = app.local_tag_editor_song.as_ref();
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("Field: ", Style::default().fg(pal.get_color("muted"))),
+                Span::styled(
+                    app.local_tag_editor_field.label(),
+                    Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(anim)),
+                Span::styled(
+                    app.local_tag_edit_buffer.clone(),
+                    Style::default().fg(pal.get_color("text")),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(
+                song.map(|s| {
+                    format!(
+                        "{} • {} • {} • {} • {}",
+                        s.title,
+                        s.artist,
+                        s.album,
+                        s.genre,
+                        s.year
+                            .map(|y| y.to_string())
+                            .unwrap_or_else(|| "----".to_owned())
+                    )
+                })
+                .unwrap_or_default(),
+            ),
+            Line::from(""),
+            Line::from("Tab: next field  Enter: write tags  Esc: cancel"),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .title(Span::styled(
+                        " ID3 TAG EDITOR ",
+                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(anim)),
+            ),
             area,
         );
     }

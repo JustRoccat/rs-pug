@@ -32,12 +32,44 @@ impl DbStorage {
 
         if user_version == 0 {
             self.create_schema()?;
-            self.conn.execute("PRAGMA user_version = 2", [])?;
+            self.conn.execute("PRAGMA user_version = 3", [])?;
         } else if user_version < 2 {
             self.create_app_settings_schema()?;
-            self.conn.execute("PRAGMA user_version = 2", [])?;
+            self.migrate_local_metadata_columns()?;
+            self.conn.execute("PRAGMA user_version = 3", [])?;
+        } else if user_version < 3 {
+            self.migrate_local_metadata_columns()?;
+            self.conn.execute("PRAGMA user_version = 3", [])?;
         }
 
+        Ok(())
+    }
+
+    fn migrate_local_metadata_columns(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(local_songs)")?;
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>>>()?;
+        if !cols.iter().any(|c| c == "genre") {
+            self.conn.execute(
+                "ALTER TABLE local_songs ADD COLUMN genre TEXT DEFAULT 'Unknown'",
+                [],
+            )?;
+        }
+        if !cols.iter().any(|c| c == "year") {
+            self.conn
+                .execute("ALTER TABLE local_songs ADD COLUMN year INTEGER", [])?;
+        }
+        if !cols.iter().any(|c| c == "added_at") {
+            self.conn.execute(
+                "ALTER TABLE local_songs ADD COLUMN added_at INTEGER DEFAULT 0",
+                [],
+            )?;
+            self.conn.execute(
+                "UPDATE local_songs SET added_at = COALESCE(mtime, 0) WHERE added_at = 0",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -48,8 +80,11 @@ impl DbStorage {
                 title TEXT NOT NULL,
                 artist TEXT,
                 album TEXT,
+                genre TEXT DEFAULT 'Unknown',
+                year INTEGER,
                 duration REAL,
-                mtime INTEGER
+                mtime INTEGER,
+                added_at INTEGER
             );
             CREATE INDEX idx_local_artist ON local_songs(artist);
             CREATE INDEX idx_local_album ON local_songs(album);
@@ -106,15 +141,18 @@ impl DbStorage {
         let tx = self.conn.transaction()?;
 
         {
-            let mut stmt = tx.prepare("INSERT OR IGNORE INTO local_songs (path, title, artist, album, duration, mtime) VALUES (?, ?, ?, ?, ?, ?)")?;
+            let mut stmt = tx.prepare("INSERT OR IGNORE INTO local_songs (path, title, artist, album, genre, year, duration, mtime, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")?;
             for song in local_library {
                 stmt.execute((
                     song.path,
                     song.title,
                     song.artist,
                     song.album,
+                    song.genre,
+                    song.year,
                     song.duration,
                     song.mtime,
+                    song.added_at,
                 ))?;
             }
         }
@@ -170,15 +208,18 @@ impl DbStorage {
     pub fn load_local_songs(&self) -> Result<Vec<crate::model::LocalSong>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT path, title, artist, album, duration, mtime FROM local_songs")?;
+            .prepare("SELECT path, title, artist, album, COALESCE(genre, 'Unknown'), year, duration, mtime, COALESCE(added_at, mtime) FROM local_songs")?;
         let rows = stmt.query_map([], |row| {
             Ok(crate::model::LocalSong {
                 path: row.get(0)?,
                 title: row.get(1)?,
                 artist: row.get(2)?,
                 album: row.get(3)?,
-                duration: row.get(4)?,
-                mtime: row.get(5)?,
+                genre: row.get(4)?,
+                year: row.get(5)?,
+                duration: row.get(6)?,
+                mtime: row.get(7)?,
+                added_at: row.get(8)?,
             })
         })?;
 
@@ -203,19 +244,40 @@ impl DbStorage {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<crate::model::LocalSong>> {
-        let mut stmt = self.conn.prepare("SELECT path, title, artist, album, duration, mtime FROM local_songs ORDER BY path LIMIT ? OFFSET ?")?;
+        let mut stmt = self.conn.prepare("SELECT path, title, artist, album, COALESCE(genre, 'Unknown'), year, duration, mtime, COALESCE(added_at, mtime) FROM local_songs ORDER BY path LIMIT ? OFFSET ?")?;
         let rows = stmt.query_map([limit as i64, offset as i64], |row| {
             Ok(crate::model::LocalSong {
                 path: row.get(0)?,
                 title: row.get(1)?,
                 artist: row.get(2)?,
                 album: row.get(3)?,
-                duration: row.get(4)?,
-                mtime: row.get(5)?,
+                genre: row.get(4)?,
+                year: row.get(5)?,
+                duration: row.get(6)?,
+                mtime: row.get(7)?,
+                added_at: row.get(8)?,
             })
         })?;
 
         rows.collect()
+    }
+
+    pub fn update_local_song(&mut self, song: &crate::model::LocalSong) -> Result<()> {
+        self.conn.execute(
+            "UPDATE local_songs SET title = ?2, artist = ?3, album = ?4, genre = ?5, year = ?6, duration = ?7, mtime = ?8, added_at = ?9 WHERE path = ?1",
+            (
+                &song.path,
+                &song.title,
+                &song.artist,
+                &song.album,
+                &song.genre,
+                song.year,
+                song.duration,
+                song.mtime,
+                song.added_at,
+            ),
+        )?;
+        Ok(())
     }
 
     pub fn save_local_songs_bulk(&mut self, songs: &[crate::model::LocalSong]) -> Result<()> {
@@ -223,17 +285,23 @@ impl DbStorage {
         tx.execute("DELETE FROM local_songs", [])?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO local_songs (path, title, artist, album, duration, mtime)
-                 VALUES (?, ?, ?, ?, ?, ?)
+                "INSERT INTO local_songs (path, title, artist, album, genre, year, duration, mtime, added_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(path) DO UPDATE SET
                     title = excluded.title,
                     artist = excluded.artist,
                     album = excluded.album,
+                    genre = excluded.genre,
+                    year = excluded.year,
                     duration = excluded.duration,
-                    mtime = excluded.mtime",
+                    mtime = excluded.mtime,
+                    added_at = CASE WHEN local_songs.added_at IS NULL OR local_songs.added_at = 0 THEN excluded.added_at ELSE local_songs.added_at END",
             )?;
             for s in songs {
-                stmt.execute((&s.path, &s.title, &s.artist, &s.album, s.duration, s.mtime))?;
+                stmt.execute((
+                    &s.path, &s.title, &s.artist, &s.album, &s.genre, s.year, s.duration, s.mtime,
+                    s.added_at,
+                ))?;
             }
         }
         tx.commit()?;
@@ -452,40 +520,55 @@ mod tests {
                 title: "T1".to_string(),
                 artist: "A1".to_string(),
                 album: "Al1".to_string(),
+                genre: "G1".to_string(),
+                year: Some(2001),
                 duration: 100.0,
                 mtime: 1,
+                added_at: 1,
             },
             LocalSong {
                 path: "/2".to_string(),
                 title: "T2".to_string(),
                 artist: "A2".to_string(),
                 album: "Al2".to_string(),
+                genre: "G2".to_string(),
+                year: Some(2002),
                 duration: 200.0,
                 mtime: 2,
+                added_at: 2,
             },
             LocalSong {
                 path: "/3".to_string(),
                 title: "T3".to_string(),
                 artist: "A3".to_string(),
                 album: "Al3".to_string(),
+                genre: "G3".to_string(),
+                year: Some(2003),
                 duration: 300.0,
                 mtime: 3,
+                added_at: 3,
             },
             LocalSong {
                 path: "/4".to_string(),
                 title: "T4".to_string(),
                 artist: "A4".to_string(),
                 album: "Al4".to_string(),
+                genre: "G4".to_string(),
+                year: Some(2004),
                 duration: 400.0,
                 mtime: 4,
+                added_at: 4,
             },
             LocalSong {
                 path: "/5".to_string(),
                 title: "T5".to_string(),
                 artist: "A5".to_string(),
                 album: "Al5".to_string(),
+                genre: "G5".to_string(),
+                year: Some(2005),
                 duration: 500.0,
                 mtime: 5,
+                added_at: 5,
             },
         ];
 

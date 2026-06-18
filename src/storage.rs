@@ -117,6 +117,14 @@ impl Storage {
         Ok((songs, offset, total))
     }
 
+    pub fn update_local_song(&self, song: &LocalSong) -> Result<(), String> {
+        self.db
+            .lock()
+            .unwrap()
+            .update_local_song(song)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn save_local_library(&self, songs: &[LocalSong]) -> Result<(), String> {
         self.db
             .lock()

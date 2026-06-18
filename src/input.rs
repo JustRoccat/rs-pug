@@ -2,7 +2,9 @@ use crate::config::{save_config, EqPreset, SearchSource};
 use crate::core::CoreCmd;
 use crate::eq;
 use crate::events;
-use crate::model::{App, Focus, LocalNavLevel, LocalViewMode, PlayerState, Song, Tab};
+use crate::model::{
+    App, Focus, LocalNavLevel, LocalTagField, LocalViewMode, PlayerState, Song, Tab,
+};
 use crate::playlist;
 use crate::ui_helpers;
 use crossterm::{
@@ -48,6 +50,23 @@ pub fn handle_key_event_pre_plugin(
 
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return KeyPluginAction::Handled(false);
+    }
+
+    if app.local_tag_editor_open {
+        match key.code {
+            KeyCode::Esc => {
+                app.local_tag_editor_open = false;
+                app.local_tag_editor_song = None;
+            }
+            KeyCode::Tab => cycle_tag_field(app),
+            KeyCode::Backspace => {
+                app.local_tag_edit_buffer.pop();
+            }
+            KeyCode::Enter => save_tag_field_or_close(app),
+            KeyCode::Char(c) => app.local_tag_edit_buffer.push(c),
+            _ => {}
+        }
+        return KeyPluginAction::Handled(true);
     }
 
     if app.opt_editing {
@@ -129,7 +148,10 @@ pub fn handle_key_event_pre_plugin(
                 }
                 app.search_mode = false;
                 if app.active_tab == Tab::Local {
-                    if let Ok((window, offset, total)) = app.storage.fetch_local_songs_window(app.selected_local_song, 200) {
+                    if let Ok((window, offset, total)) = app
+                        .storage
+                        .fetch_local_songs_window(app.selected_local_song, 200)
+                    {
                         app.local_library_window = window;
                         app.local_library_offset = offset;
                         app.local_library_total = total;
@@ -144,14 +166,8 @@ pub fn handle_key_event_pre_plugin(
                 }
                 if app.active_tab == Tab::Local {
                     let q = app.search_query.to_lowercase();
-                    let filtered: Vec<_> = app.storage.load_local_library().unwrap_or_default()
-                        .into_iter()
-                        .filter(|s| s.title.to_lowercase().contains(&q) || s.artist.to_lowercase().contains(&q) || s.album.to_lowercase().contains(&q))
-                        .collect();
-                    app.local_library_total = filtered.len();
-                    app.local_library_window = filtered;
-                    app.local_library_offset = 0;
-                    app.selected_local_song = 0;
+                    let _ = q;
+                    ui_helpers::refresh_local_visible_window(app);
                 }
             }
             KeyCode::Char(c) => {
@@ -162,14 +178,8 @@ pub fn handle_key_event_pre_plugin(
                 }
                 if app.active_tab == Tab::Local {
                     let q = app.search_query.to_lowercase();
-                    let filtered: Vec<_> = app.storage.load_local_library().unwrap_or_default()
-                        .into_iter()
-                        .filter(|s| s.title.to_lowercase().contains(&q) || s.artist.to_lowercase().contains(&q) || s.album.to_lowercase().contains(&q))
-                        .collect();
-                    app.local_library_total = filtered.len();
-                    app.local_library_window = filtered;
-                    app.local_library_offset = 0;
-                    app.selected_local_song = 0;
+                    let _ = q;
+                    ui_helpers::refresh_local_visible_window(app);
                 }
             }
             _ => {}
@@ -260,6 +270,28 @@ pub fn handle_native_key_event(
                 ),
                 2,
             );
+        }
+
+        KeyCode::Char('s') if app.active_tab == Tab::Local => {
+            app.local_sort_mode = app.local_sort_mode.next();
+            ui_helpers::refresh_local_visible_window(app);
+            app.set_flash(format!("Local sort: {}", app.local_sort_mode.label()), 2);
+        }
+        KeyCode::Char('f')
+            if app.active_tab == Tab::Local && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            clear_local_filters(app);
+        }
+        KeyCode::Char('F') if app.active_tab == Tab::Local => {
+            clear_local_filters(app);
+        }
+        KeyCode::Char('g') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'g'),
+        KeyCode::Char('a') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'a'),
+        KeyCode::Char('b') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'b'),
+        KeyCode::Char('e')
+            if app.active_tab == Tab::Local && app.local_view_mode == LocalViewMode::Flat =>
+        {
+            open_tag_editor(app)
         }
         KeyCode::Char('f') if is_core_options(app) && app.options_index == 8 => {
             app.opt_editing = true;
@@ -824,5 +856,163 @@ fn context_menu_len(app: &App) -> usize {
         2
     } else {
         5
+    }
+}
+
+fn selected_local_song_clone(app: &App) -> Option<crate::model::LocalSong> {
+    app.local_library_window
+        .get(
+            app.selected_local_song
+                .saturating_sub(app.local_library_offset),
+        )
+        .cloned()
+}
+
+fn tag_value(song: &crate::model::LocalSong, field: LocalTagField) -> String {
+    match field {
+        LocalTagField::Title => song.title.clone(),
+        LocalTagField::Artist => song.artist.clone(),
+        LocalTagField::Album => song.album.clone(),
+        LocalTagField::Genre => song.genre.clone(),
+        LocalTagField::Year => song.year.map(|y| y.to_string()).unwrap_or_default(),
+    }
+}
+
+fn apply_tag_value(
+    song: &mut crate::model::LocalSong,
+    field: LocalTagField,
+    value: String,
+) -> Result<(), String> {
+    match field {
+        LocalTagField::Title => song.title = value,
+        LocalTagField::Artist => song.artist = value,
+        LocalTagField::Album => song.album = value,
+        LocalTagField::Genre => song.genre = value,
+        LocalTagField::Year => {
+            song.year = if value.trim().is_empty() {
+                None
+            } else {
+                Some(
+                    value
+                        .trim()
+                        .parse::<u32>()
+                        .map_err(|_| "year must be a number".to_string())?,
+                )
+            };
+        }
+    }
+    Ok(())
+}
+
+fn open_tag_editor(app: &mut App) {
+    if let Some(song) = selected_local_song_clone(app) {
+        app.local_tag_editor_field = LocalTagField::Title;
+        app.local_tag_edit_buffer = tag_value(&song, app.local_tag_editor_field);
+        app.local_tag_editor_song = Some(song);
+        app.local_tag_editor_open = true;
+        app.set_flash(
+            "Editing local tags: Tab switches field, Enter saves field, Esc cancels",
+            3,
+        );
+    }
+}
+
+fn cycle_tag_field(app: &mut App) {
+    if let Some(mut song) = app.local_tag_editor_song.take() {
+        if let Err(err) = apply_tag_value(
+            &mut song,
+            app.local_tag_editor_field,
+            app.local_tag_edit_buffer.clone(),
+        ) {
+            app.set_flash(err, 3);
+        }
+        app.local_tag_editor_field = app.local_tag_editor_field.next();
+        app.local_tag_edit_buffer = tag_value(&song, app.local_tag_editor_field);
+        app.local_tag_editor_song = Some(song);
+    }
+}
+
+fn save_tag_field_or_close(app: &mut App) {
+    let Some(mut song) = app.local_tag_editor_song.take() else {
+        return;
+    };
+    if let Err(err) = apply_tag_value(
+        &mut song,
+        app.local_tag_editor_field,
+        app.local_tag_edit_buffer.clone(),
+    ) {
+        app.set_flash(err, 3);
+        app.local_tag_editor_song = Some(song);
+        return;
+    }
+    match crate::core::write_local_tags(&song)
+        .map_err(|e| format!("{e:#}"))
+        .and_then(|_| app.storage.update_local_song(&song))
+    {
+        Ok(()) => {
+            app.local_tag_editor_open = false;
+            app.set_flash("Local tags saved", 3);
+            ui_helpers::refresh_local_visible_window(app);
+        }
+        Err(err) => {
+            app.set_flash(format!("Tag save failed: {err}"), 5);
+            app.local_tag_editor_song = Some(song);
+        }
+    }
+}
+
+fn clear_local_filters(app: &mut App) {
+    app.local_filter_genre = None;
+    app.local_filter_artist = None;
+    app.local_filter_album = None;
+    ui_helpers::refresh_local_visible_window(app);
+    app.set_flash("Local filters cleared", 2);
+}
+
+fn selected_local_filter_value(app: &App, kind: char) -> Option<String> {
+    if app.local_view_mode == LocalViewMode::Flat {
+        let song = selected_local_song_clone(app)?;
+        return match kind {
+            'g' => Some(song.genre),
+            'a' => Some(song.artist),
+            'b' => Some(song.album),
+            _ => None,
+        };
+    }
+
+    match ui_helpers::get_local_nav_items(app) {
+        ui_helpers::LocalNavItems::Artists(artists) => match kind {
+            'a' => artists.get(app.selected_local_nav_idx).cloned(),
+            _ => None,
+        },
+        ui_helpers::LocalNavItems::Albums(albums) => match kind {
+            'a' => app.local_nav_artist.clone(),
+            'b' => albums.get(app.selected_local_nav_idx).cloned(),
+            _ => None,
+        },
+        ui_helpers::LocalNavItems::Songs(songs) => {
+            let song = songs.get(app.selected_local_nav_idx)?;
+            match kind {
+                'g' => Some(song.genre.clone()),
+                'a' => Some(song.artist.clone()),
+                'b' => Some(song.album.clone()),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn set_filter_from_selected(app: &mut App, kind: char) {
+    if let Some(value) = selected_local_filter_value(app, kind) {
+        match kind {
+            'g' => app.local_filter_genre = Some(value),
+            'a' => app.local_filter_artist = Some(value),
+            'b' => app.local_filter_album = Some(value),
+            _ => {}
+        }
+        ui_helpers::refresh_local_visible_window(app);
+        app.set_flash("Local filter applied (Ctrl+F or Shift+F clears)", 2);
+    } else {
+        app.set_flash("No matching selected field to filter", 2);
     }
 }

@@ -52,7 +52,12 @@ Optional:
 | `r` | Cycle repeat mode |
 | `c` | Context menu |
 | `v` | Toggle flat/organized view (Local tab) |
+| `e` | Edit ID3 tags for selected local file (Local tab) |
+| `s` | Cycle local sort mode: title, artist, album, year, date added (Local tab) |
+| `g` / `a` / `b` | Filter local library by selected genre / artist / album |
+| `F` | Clear local library filters |
 | `q` | Quit |
+
 
 ## Contri-pug-ting
 

@@ -42,14 +42,82 @@ pub struct LocalSong {
     pub title: String,
     pub artist: String,
     pub album: String,
+    #[serde(default)]
+    pub genre: String,
+    #[serde(default)]
+    pub year: Option<u32>,
     pub duration: f64,
     pub mtime: u64,
+    #[serde(default)]
+    pub added_at: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub enum LocalViewMode {
     Flat,
     Organized,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalSortMode {
+    Title,
+    Artist,
+    Album,
+    Year,
+    DateAdded,
+}
+
+impl LocalSortMode {
+    pub fn next(self) -> Self {
+        match self {
+            LocalSortMode::Title => LocalSortMode::Artist,
+            LocalSortMode::Artist => LocalSortMode::Album,
+            LocalSortMode::Album => LocalSortMode::Year,
+            LocalSortMode::Year => LocalSortMode::DateAdded,
+            LocalSortMode::DateAdded => LocalSortMode::Title,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LocalSortMode::Title => "title",
+            LocalSortMode::Artist => "artist",
+            LocalSortMode::Album => "album",
+            LocalSortMode::Year => "year",
+            LocalSortMode::DateAdded => "date added",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalTagField {
+    Title,
+    Artist,
+    Album,
+    Genre,
+    Year,
+}
+
+impl LocalTagField {
+    pub fn next(self) -> Self {
+        match self {
+            LocalTagField::Title => LocalTagField::Artist,
+            LocalTagField::Artist => LocalTagField::Album,
+            LocalTagField::Album => LocalTagField::Genre,
+            LocalTagField::Genre => LocalTagField::Year,
+            LocalTagField::Year => LocalTagField::Title,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LocalTagField::Title => "title",
+            LocalTagField::Artist => "artist",
+            LocalTagField::Album => "album",
+            LocalTagField::Genre => "genre",
+            LocalTagField::Year => "year",
+        }
+    }
 }
 
 impl From<&LocalSong> for Song {
@@ -306,6 +374,14 @@ pub struct App {
     pub local_library_offset: usize,
     pub local_library_total: usize,
     pub local_view_mode: LocalViewMode,
+    pub local_sort_mode: LocalSortMode,
+    pub local_filter_genre: Option<String>,
+    pub local_filter_artist: Option<String>,
+    pub local_filter_album: Option<String>,
+    pub local_tag_editor_open: bool,
+    pub local_tag_editor_field: LocalTagField,
+    pub local_tag_editor_song: Option<LocalSong>,
+    pub local_tag_edit_buffer: String,
     pub selected_local_song: usize,
     pub local_nav_level: LocalNavLevel,
     pub local_nav_artist: Option<String>,
@@ -391,6 +467,14 @@ impl App {
             local_library_offset: 0,
             local_library_total: 0,
             local_view_mode: LocalViewMode::Flat,
+            local_sort_mode: LocalSortMode::Title,
+            local_filter_genre: None,
+            local_filter_artist: None,
+            local_filter_album: None,
+            local_tag_editor_open: false,
+            local_tag_editor_field: LocalTagField::Title,
+            local_tag_editor_song: None,
+            local_tag_edit_buffer: String::new(),
             selected_local_song: 0,
             local_nav_level: LocalNavLevel::Artists,
             local_nav_artist: None,

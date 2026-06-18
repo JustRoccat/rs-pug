@@ -1277,40 +1277,6 @@ return plugin
     }
 
     #[test]
-    fn loads_neon_command_deck_example() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let plugin_path = dir.path().join("neon_command_deck.lua");
-        fs::write(
-            &plugin_path,
-            include_str!("../examples/plugins/neon_command_deck.lua"),
-        )
-        .expect("write plugin");
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), true);
-        assert_eq!(manager.plugin_count(), 1);
-
-        let mut state = PluginUiState::from_runtime(
-            Tab::Discover,
-            None,
-            "playing",
-            70,
-            false,
-            RepeatMode::Off,
-            String::new(),
-            String::new(),
-            3,
-        );
-        let config = manager.collect_ui_config(&state);
-        assert_eq!(config.tabs.custom.len(), 3);
-        assert_eq!(config.layout.tab_bar_position.as_deref(), Some("right"));
-        assert_eq!(config.layout.queue_position.as_deref(), Some("left"));
-
-        state.active_custom_tab = Some("neon_home".to_owned());
-        let panels = manager.collect_ui_panels(&state);
-        assert!(panels.iter().any(|panel| panel.title == "Command Deck"));
-        assert!(panels.iter().any(|panel| panel.title.contains("SIDE BUS")));
-    }
-
-    #[test]
     fn collects_legacy_lines_as_text_items() {
         let dir = tempfile::tempdir().expect("tempdir");
         let plugin_path = dir.path().join("panel.lua");

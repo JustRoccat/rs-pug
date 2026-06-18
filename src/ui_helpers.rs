@@ -1,6 +1,67 @@
 use crate::config;
-use crate::model::{App, Focus, LocalNavLevel, LocalViewMode, PlayerState, RepeatMode, Tab};
+use crate::model::{
+    App, Focus, LocalNavLevel, LocalSortMode, LocalViewMode, PlayerState, RepeatMode, Tab,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
+
+pub fn local_visible_songs(app: &App) -> Vec<crate::model::LocalSong> {
+    let mut songs = app.storage.load_local_library().unwrap_or_default();
+    let q = app.search_query.to_lowercase();
+    songs.retain(|s| {
+        (q.is_empty()
+            || s.title.to_lowercase().contains(&q)
+            || s.artist.to_lowercase().contains(&q)
+            || s.album.to_lowercase().contains(&q)
+            || s.genre.to_lowercase().contains(&q)
+            || s.year.map(|y| y.to_string().contains(&q)).unwrap_or(false))
+            && app
+                .local_filter_genre
+                .as_ref()
+                .map(|v| &s.genre == v)
+                .unwrap_or(true)
+            && app
+                .local_filter_artist
+                .as_ref()
+                .map(|v| &s.artist == v)
+                .unwrap_or(true)
+            && app
+                .local_filter_album
+                .as_ref()
+                .map(|v| &s.album == v)
+                .unwrap_or(true)
+    });
+    match app.local_sort_mode {
+        LocalSortMode::Title => {
+            songs.sort_by(|a, b| crate::utils::natural_compare(&a.title, &b.title))
+        }
+        LocalSortMode::Artist => songs.sort_by(|a, b| {
+            crate::utils::natural_compare(&a.artist, &b.artist)
+                .then_with(|| crate::utils::natural_compare(&a.title, &b.title))
+        }),
+        LocalSortMode::Album => songs.sort_by(|a, b| {
+            crate::utils::natural_compare(&a.album, &b.album)
+                .then_with(|| crate::utils::natural_compare(&a.title, &b.title))
+        }),
+        LocalSortMode::Year => songs.sort_by_key(|s| (s.year.unwrap_or(0), s.title.clone())),
+        LocalSortMode::DateAdded => songs.sort_by(|a, b| {
+            b.added_at
+                .cmp(&a.added_at)
+                .then_with(|| crate::utils::natural_compare(&a.title, &b.title))
+        }),
+    }
+    songs
+}
+
+pub fn refresh_local_visible_window(app: &mut App) {
+    let songs = local_visible_songs(app);
+    app.local_library_total = songs.len();
+    app.local_library_offset = 0;
+    app.local_library_window = songs;
+    app.selected_local_song = app
+        .selected_local_song
+        .min(app.local_library_total.saturating_sub(1));
+    app.selected_local_nav_idx = 0;
+}
 
 pub enum LocalNavItems<'a> {
     Artists(Vec<String>),
@@ -23,14 +84,20 @@ impl<'a> LocalNavItems<'a> {
 pub fn get_local_nav_items(app: &App) -> LocalNavItems<'_> {
     match app.local_nav_level {
         LocalNavLevel::Artists => {
-            let mut artists: Vec<String> = app.local_library_window.iter().map(|s| s.artist.clone()).collect();
+            let mut artists: Vec<String> = app
+                .local_library_window
+                .iter()
+                .map(|s| s.artist.clone())
+                .collect();
             artists.sort_by(|a, b| crate::utils::natural_compare(a, b));
             artists.dedup();
             LocalNavItems::Artists(artists)
         }
         LocalNavLevel::Albums => {
             let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
-            let mut albums: Vec<String> = app.local_library_window.iter()
+            let mut albums: Vec<String> = app
+                .local_library_window
+                .iter()
                 .filter(|s| s.artist == artist)
                 .map(|s| s.album.clone())
                 .collect();
@@ -41,7 +108,9 @@ pub fn get_local_nav_items(app: &App) -> LocalNavItems<'_> {
         LocalNavLevel::Songs => {
             let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
             let album = app.local_nav_album.as_deref().unwrap_or("Unknown");
-            let mut songs: Vec<&crate::model::LocalSong> = app.local_library_window.iter()
+            let mut songs: Vec<&crate::model::LocalSong> = app
+                .local_library_window
+                .iter()
                 .filter(|s| s.artist == artist && s.album == album)
                 .collect();
             songs.sort_by(|a, b| crate::utils::natural_compare(&a.title, &b.title));
@@ -134,9 +203,18 @@ pub fn scroll_selection(app: &mut App, delta: isize, local_nav_len: usize) {
         },
         Tab::Albums => match app.focus {
             Focus::Results => {
-                let total_items: usize = app.album_results.iter().enumerate().map(|(i, a)| {
-                    1 + if app.album_expanded.get(i).copied().unwrap_or(false) { a.songs.len() } else { 0 }
-                }).sum();
+                let total_items: usize = app
+                    .album_results
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        1 + if app.album_expanded.get(i).copied().unwrap_or(false) {
+                            a.songs.len()
+                        } else {
+                            0
+                        }
+                    })
+                    .sum();
                 if total_items > 0 {
                     app.selected_album_result = ((app.selected_album_result as isize + delta)
                         .clamp(0, total_items as isize - 1))
@@ -202,7 +280,8 @@ pub fn scroll_selection(app: &mut App, delta: isize, local_nav_len: usize) {
             Focus::Search => {}
         },
         Tab::Options => {
-            app.options_index = ((app.options_index as isize + delta).clamp(0, MAX_OPTIONS_INDEX as isize)) as usize;
+            app.options_index = ((app.options_index as isize + delta)
+                .clamp(0, MAX_OPTIONS_INDEX as isize)) as usize;
         }
     }
     if app.active_tab == Tab::Local {
@@ -214,9 +293,21 @@ pub fn update_local_library_window(app: &mut App) {
     let start = app.local_library_offset;
     let end = start + app.local_library_window.len();
     if app.selected_local_song < start || app.selected_local_song >= end {
-        if let Ok((window, offset, _total)) = app.storage.fetch_local_songs_window(app.selected_local_song, 200) {
-            app.local_library_window = window;
-            app.local_library_offset = offset;
+        if app.search_query.is_empty()
+            && app.local_filter_genre.is_none()
+            && app.local_filter_artist.is_none()
+            && app.local_filter_album.is_none()
+            && app.local_sort_mode == LocalSortMode::Title
+        {
+            if let Ok((window, offset, _total)) = app
+                .storage
+                .fetch_local_songs_window(app.selected_local_song, 200)
+            {
+                app.local_library_window = window;
+                app.local_library_offset = offset;
+            }
+        } else {
+            refresh_local_visible_window(app);
         }
     }
 }
@@ -224,7 +315,10 @@ pub fn update_local_library_window(app: &mut App) {
 pub fn next_theme(theme: config::Theme) -> config::Theme {
     let available = config::get_available_themes();
     let current_str = config::theme_to_str(&theme);
-    let pos = available.iter().position(|s| s == &current_str).unwrap_or(0);
+    let pos = available
+        .iter()
+        .position(|s| s == &current_str)
+        .unwrap_or(0);
     let next_pos = (pos + 1) % available.len();
     config::theme_from_str(&available[next_pos])
 }
@@ -232,7 +326,10 @@ pub fn next_theme(theme: config::Theme) -> config::Theme {
 pub fn prev_theme(theme: config::Theme) -> config::Theme {
     let available = config::get_available_themes();
     let current_str = config::theme_to_str(&theme);
-    let pos = available.iter().position(|s| s == &current_str).unwrap_or(0);
+    let pos = available
+        .iter()
+        .position(|s| s == &current_str)
+        .unwrap_or(0);
     let prev_pos = (pos + available.len() - 1) % available.len();
     config::theme_from_str(&available[prev_pos])
 }

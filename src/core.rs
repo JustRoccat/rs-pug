@@ -22,8 +22,9 @@ use crate::{
     model::{LocalSong, Song},
     plugins::PluginManager,
 };
+use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, TaggedFileExt};
-use lofty::tag::Accessor;
+use lofty::tag::{Accessor, Tag};
 
 #[derive(Debug)]
 pub enum CoreCmd {
@@ -730,6 +731,11 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
             .and_then(|t| t.album())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "Unknown".to_string());
+        let genre = tag
+            .and_then(|t| t.genre())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let year = tag.and_then(|t| t.year());
         let duration = properties.duration().as_secs() as f64;
 
         LocalSong {
@@ -737,8 +743,11 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
             title,
             artist,
             album,
+            genre,
+            year,
             duration,
             mtime,
+            added_at: mtime,
         }
     } else {
         LocalSong {
@@ -746,8 +755,11 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
             title: filename,
             artist: "Unknown".to_string(),
             album: "Unknown".to_string(),
+            genre: "Unknown".to_string(),
+            year: None,
             duration: 0.0,
             mtime,
+            added_at: mtime,
         }
     }
 }
@@ -845,4 +857,29 @@ mod tests {
             songs.len()
         );
     }
+}
+
+pub fn write_local_tags(song: &LocalSong) -> Result<()> {
+    let path = std::path::Path::new(&song.path);
+    let mut tagged_file = lofty::read_from_path(path)
+        .with_context(|| format!("failed to read tags from {}", song.path))?;
+    let tag_type = tagged_file.primary_tag_type();
+    if tagged_file.primary_tag_mut().is_none() {
+        tagged_file.insert_tag(Tag::new(tag_type));
+    }
+    let tag = tagged_file
+        .primary_tag_mut()
+        .ok_or_else(|| anyhow::anyhow!("failed to create tag for {}", song.path))?;
+    tag.set_title(song.title.clone());
+    tag.set_artist(song.artist.clone());
+    tag.set_album(song.album.clone());
+    tag.set_genre(song.genre.clone());
+    if let Some(year) = song.year {
+        tag.set_year(year);
+    } else {
+        tag.remove_year();
+    }
+    tagged_file
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("failed to write tags to {}", song.path))
 }
