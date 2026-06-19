@@ -1,3 +1,11 @@
+
+
+# Read
+
+Im not gonna maintain aur anymore, if you want to be an aur maintainer please create a issue.
+
+This does not apply to crates.io, im gonna still maintain crates.io
+
 [![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
 
 # rs-pug
