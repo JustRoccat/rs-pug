@@ -16,7 +16,6 @@ Built in Rust with `mpv`, `yt-dlp`, and `ratatui`. Requires `mpv` and `yt-dlp` i
 
 Plugins, themes and EQ presets from the community: [all-rspug](https://github.com/JustRoccat/all-rspug/) · [Discord](https://discord.gg/6FcBWwRQBX)
 
-![img](https://github.com/user-attachments/assets/f2934a10-1187-4ebf-9152-021b2c804fc0)
 ![img](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 
 ## Installation
