@@ -135,6 +135,9 @@ allow-lua-ui-changes = true
 
 The default is `false`, so legacy plugins using `on_key`, `on_event`, `on_tabs`, or `on_ui_panels` continue to work unchanged. When UI customization is enabled, plugin load/hook/layout issues are captured as non-fatal warnings and shown in the statusbar instead of crashing the app.
 
+## Hot Reload
+
+so yeah theres hot reload now and it works automaticly so you dont have to do anything, have a good day
 ## Configuration
 
 Config file path: `~/.config/rs-pug/config.toml`.
