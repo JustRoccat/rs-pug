@@ -280,7 +280,7 @@ pub fn save_config(config: &Config) {
     }
 }
 
-fn config_paths() -> Vec<PathBuf> {
+pub fn config_paths() -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from("rs-pug.toml"), PathBuf::from("pug.toml")];
     paths.push(user_config_path());
     paths

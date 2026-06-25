@@ -1,7 +1,9 @@
 use std::{
     collections::VecDeque,
+    fs,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use anyhow::Result;
@@ -133,6 +135,9 @@ async fn main() -> Result<()> {
     });
 
     let tick_rate = Duration::from_millis(20);
+    let (hr_result_tx, mut hr_result_rx) = mpsc::unbounded_channel::<HotReloadResult>();
+    let (hr_paths_tx, hr_paths_rx) = mpsc::unbounded_channel::<HotReloadPaths>();
+    spawn_hot_reload_task(config.clone(), hr_result_tx, hr_paths_rx);
     let mut startup_ui_config_scheduled = false;
     let mut startup_ui_config_done = !app.allow_lua_ui_changes;
     let mut ui_update_pending = false;
@@ -143,6 +148,63 @@ async fn main() -> Result<()> {
     let mut last_ui_surface_state: Option<PluginUiState> = None;
 
     loop {
+        while let Ok(hr) = hr_result_rx.try_recv() {
+            let mut should_reload_plugins = hr.plugins_changed;
+
+            if hr.config_changed {
+                let old = config.clone();
+                let prev_opt_theme = app.opt_theme.clone();
+                config = load_config();
+                app.apply_config(&config);
+                app.opt_theme = prev_opt_theme;
+                let _ = hr_paths_tx.send(HotReloadPaths {
+                    plugins_dir: config.general.plugins_dir.clone(),
+                    music_dirs: config.general.music_directories.clone(),
+                });
+                if config.general.plugins_enabled != old.general.plugins_enabled
+                    || config.general.plugins_dir != old.general.plugins_dir
+                    || config.lua.allow_lua_ui_changes != old.lua.allow_lua_ui_changes
+                {
+                    should_reload_plugins = true;
+                }
+            }
+            if hr.eq_changed {
+                app.custom_eq_presets = config::load_eq_presets();
+            }
+            if should_reload_plugins {
+                if let Ok(mut plugins) = plugin_manager.lock() {
+                    plugins.reload(
+                        config.general.plugins_enabled,
+                        &config.general.plugins_dir,
+                        config.lua.allow_lua_ui_changes,
+                    );
+                }
+                startup_ui_config_scheduled = false;
+                startup_ui_config_done = !app.allow_lua_ui_changes;
+                ui_update_pending = false;
+                ui_surface_pending = false;
+                last_ui_state = None;
+                last_ui_surface_state = None;
+                app.plugin_tabs.clear();
+                app.plugin_panels.clear();
+                app.ui_section_items.clear();
+                app.ui_inject = PluginUiInject::default();
+            }
+            if hr.music_changed && !app.scanning {
+                app.scanning = true;
+                let storage_clone = app.storage.clone();
+                let config_clone = config.clone();
+                let evt_tx_clone = evt_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        core::check_and_refresh_library(&config_clone, &storage_clone)
+                    })
+                    .await;
+                    let _ = evt_tx_clone.send(CoreEvent::LibraryRefreshDone);
+                });
+            }
+        }
+
         if let Ok(plugins) = plugin_manager.try_lock() {
             for warning in plugins.drain_warnings() {
                 app.push_plugin_warning(warning.label());
@@ -453,3 +515,239 @@ fn layout_patch_has_effect(layout: &plugins::PluginUiLayoutPatch) -> bool {
 
 /* todo:
  * add update reminder*/
+
+struct HotReloadResult {
+    config_changed: bool,
+    eq_changed: bool,
+    #[allow(dead_code)]
+    theme_changed: bool,
+    plugins_changed: bool,
+    music_changed: bool,
+}
+
+struct HotReloadPaths {
+    plugins_dir: String,
+    music_dirs: Vec<String>,
+}
+
+struct HotReloadState {
+    config_snapshot: PathsSnapshot,
+    theme_snapshot: DirSnapshot,
+    eq_snapshot: DirSnapshot,
+    plugin_snapshot: DirSnapshot,
+    music_dirs_snapshot: MusicDirsSnapshot,
+}
+
+impl HotReloadState {
+    fn new(config: &config::Config) -> Self {
+        Self {
+            config_snapshot: PathsSnapshot::capture(config::config_paths()),
+            theme_snapshot: DirSnapshot::capture(config_resource_dir("themes"), "json"),
+            eq_snapshot: DirSnapshot::capture(config_resource_dir("eqpresets"), "json"),
+            plugin_snapshot: DirSnapshot::capture(&config.general.plugins_dir, "lua"),
+            music_dirs_snapshot: MusicDirsSnapshot::capture(&config.general.music_directories),
+        }
+    }
+
+    fn refresh_all(&mut self) -> HotReloadResult {
+        HotReloadResult {
+            config_changed: self.config_snapshot.refresh(),
+            theme_changed: self.theme_snapshot.refresh(),
+            eq_changed: self.eq_snapshot.refresh(),
+            plugins_changed: self.plugin_snapshot.refresh(),
+            music_changed: self.music_dirs_snapshot.refresh(),
+        }
+    }
+
+    fn update_paths(&mut self, paths: HotReloadPaths) {
+        self.plugin_snapshot = DirSnapshot::capture(&paths.plugins_dir, "lua");
+        self.music_dirs_snapshot = MusicDirsSnapshot::capture(&paths.music_dirs);
+    }
+}
+
+fn spawn_hot_reload_task(
+    config: config::Config,
+    result_tx: mpsc::UnboundedSender<HotReloadResult>,
+    mut paths_rx: mpsc::UnboundedReceiver<HotReloadPaths>,
+) {
+    tokio::spawn(async move {
+        let mut state = tokio::task::spawn_blocking(move || HotReloadState::new(&config))
+            .await
+            .expect("hot reload init failed");
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+
+            let mut latest_paths: Option<HotReloadPaths> = None;
+            while let Ok(p) = paths_rx.try_recv() {
+                latest_paths = Some(p);
+            }
+
+            let result = tokio::task::spawn_blocking(move || {
+                if let Some(paths) = latest_paths {
+                    state.update_paths(paths);
+                }
+                let result = state.refresh_all();
+                (state, result)
+            })
+            .await
+            .expect("hot reload check failed");
+
+            state = result.0;
+            if result_tx.send(result.1).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileFingerprint {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: Option<u64>,
+}
+
+impl FileFingerprint {
+    fn capture(path: PathBuf) -> Self {
+        let metadata = fs::metadata(&path).ok();
+        Self {
+            path,
+            modified: metadata.as_ref().and_then(|m| m.modified().ok()),
+            len: metadata.as_ref().map(|m| m.len()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PathsSnapshot {
+    files: Vec<FileFingerprint>,
+}
+
+impl PathsSnapshot {
+    fn capture(mut paths: Vec<PathBuf>) -> Self {
+        paths.sort();
+        paths.dedup();
+        Self {
+            files: paths.into_iter().map(FileFingerprint::capture).collect(),
+        }
+    }
+
+    fn refresh(&mut self) -> bool {
+        let next = Self::capture(self.files.iter().map(|file| file.path.clone()).collect());
+        if *self != next {
+            *self = next;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirSnapshot {
+    dir: PathBuf,
+    extension: String,
+    files: Vec<FileFingerprint>,
+}
+
+impl DirSnapshot {
+    fn capture(dir: impl AsRef<Path>, extension: &str) -> Self {
+        let dir = PathBuf::from(dir.as_ref());
+        let mut paths = Vec::new();
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) == Some(extension) {
+                    paths.push(path);
+                }
+            }
+        }
+        paths.sort();
+        Self {
+            dir,
+            extension: extension.to_owned(),
+            files: paths.into_iter().map(FileFingerprint::capture).collect(),
+        }
+    }
+
+    fn refresh(&mut self) -> bool {
+        let next = Self::capture(&self.dir.clone(), &self.extension.clone());
+        if *self != next {
+            *self = next;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn config_resource_dir(kind: &str) -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".config/rs-pug").join(kind)
+    } else {
+        PathBuf::from(".config/rs-pug").join(kind)
+    }
+}
+
+const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "wav", "ogg", "m4a"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MusicDirsSnapshot {
+    dirs: Vec<String>,
+    files: Vec<FileFingerprint>,
+}
+
+impl MusicDirsSnapshot {
+    fn capture(dirs: &[String]) -> Self {
+        let mut paths = Vec::new();
+        for dir in dirs {
+            let path_str = if dir.starts_with('~') {
+                if let Ok(home) = std::env::var("HOME") {
+                    dir.replacen('~', &home, 1)
+                } else {
+                    dir.clone()
+                }
+            } else {
+                dir.clone()
+            };
+            let path = Path::new(&path_str);
+            if !path.exists() {
+                continue;
+            }
+            for entry in walkdir::WalkDir::new(path)
+                .follow_links(true)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if entry.file_type().is_file() {
+                    let p = entry.path();
+                    if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                        if AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
+                            paths.push(p.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+        paths.sort();
+        Self {
+            dirs: dirs.to_vec(),
+            files: paths.into_iter().map(FileFingerprint::capture).collect(),
+        }
+    }
+
+    fn refresh(&mut self) -> bool {
+        let next = Self::capture(&self.dirs.clone());
+        if *self != next {
+            *self = next;
+            true
+        } else {
+            false
+        }
+    }
+}

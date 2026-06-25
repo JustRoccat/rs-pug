@@ -2083,7 +2083,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
                 .block(
                     Block::default()
                         .title(Span::styled(
-                            " ⚠  CONFIRM DELETE ",
+                            "   CONFIRM DELETE ",
                             Style::default()
                                 .fg(pal.get_color("warn"))
                                 .add_modifier(Modifier::BOLD),

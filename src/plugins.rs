@@ -46,6 +46,8 @@ impl PluginWarning {
 
 pub struct PluginManager {
     plugins: Vec<LuaPlugin>,
+    enabled: bool,
+    configured_dir: String,
     allow_lua_ui_changes: bool,
     warnings: Mutex<VecDeque<PluginWarning>>,
 }
@@ -385,6 +387,8 @@ impl PluginManager {
         if !enabled {
             return Self {
                 plugins: Vec::new(),
+                enabled,
+                configured_dir: configured_dir.to_owned(),
                 allow_lua_ui_changes,
                 warnings: Mutex::new(VecDeque::new()),
             };
@@ -402,6 +406,8 @@ impl PluginManager {
             });
             return Self {
                 plugins,
+                enabled,
+                configured_dir: configured_dir.to_owned(),
                 allow_lua_ui_changes,
                 warnings: Mutex::new(warnings),
             };
@@ -487,9 +493,28 @@ impl PluginManager {
 
         Self {
             plugins,
+            enabled,
+            configured_dir: configured_dir.to_owned(),
             allow_lua_ui_changes,
             warnings: Mutex::new(warnings),
         }
+    }
+
+    pub fn reload(&mut self, enabled: bool, configured_dir: &str, allow_lua_ui_changes: bool) {
+        let next = Self::load(enabled, configured_dir, allow_lua_ui_changes);
+        if let Ok(mut warnings) = self.warnings.lock() {
+            warnings.push_back(PluginWarning {
+                level: PluginWarningLevel::Warning,
+                plugin: None,
+                hook: None,
+                message: "plugins hot-reloaded".to_owned(),
+            });
+            warnings.extend(next.drain_warnings());
+        }
+        self.plugins = next.plugins;
+        self.enabled = next.enabled;
+        self.configured_dir = next.configured_dir;
+        self.allow_lua_ui_changes = next.allow_lua_ui_changes;
     }
 
     #[allow(dead_code)]

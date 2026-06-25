@@ -1,3 +1,11 @@
+
+
+# Read
+
+Im not gonna maintain aur anymore, if you want to be an aur maintainer please create a issue.
+
+This does not apply to crates.io, im gonna still maintain crates.io
+
 [![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
 
 # rs-pug
@@ -8,7 +16,6 @@ Built in Rust with `mpv`, `yt-dlp`, and `ratatui`. Requires `mpv` and `yt-dlp` i
 
 Plugins, themes and EQ presets from the community: [all-rspug](https://github.com/JustRoccat/all-rspug/) · [Discord](https://discord.gg/6FcBWwRQBX)
 
-![img](https://github.com/user-attachments/assets/f2934a10-1187-4ebf-9152-021b2c804fc0)
 ![img](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 
 ## Installation
