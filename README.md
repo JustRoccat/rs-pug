@@ -143,6 +143,11 @@ so yeah theres hot reload now and it works automaticly so you dont have to do an
 Config file path: `~/.config/rs-pug/config.toml`.
 
 
+## Works on
+
+
+Runs anywhere mpv and yt-dlp run - tested on Linux and Termux (Android). WSL2 on Windows should work too.
+
 ## License
 
 MIT
