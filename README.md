@@ -8,6 +8,8 @@ This does not apply to crates.io, im gonna still maintain crates.io
 
 [![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
 
+## If you find this useful, a star is the only currency I get paid in
+
 # rs-pug
 
 No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files — all from your terminal.
