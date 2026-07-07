@@ -56,6 +56,8 @@ pub struct Palette {
     pub primary: [u8; 3],
     pub accent2: [u8; 3],
     pub accent3: [u8; 3],
+    #[serde(default = "default_spectrum")]
+    pub spectrum: Vec<[u8; 3]>,
 }
 
 impl Palette {
@@ -74,6 +76,35 @@ impl Palette {
         };
         ratatui::style::Color::Rgb(rgb[0], rgb[1], rgb[2])
     }
+
+    pub fn spectrum_colors(&self) -> Vec<ratatui::style::Color> {
+        let source = if self.spectrum.is_empty() {
+            default_spectrum()
+        } else {
+            self.spectrum.clone()
+        };
+        source
+            .into_iter()
+            .map(|rgb| ratatui::style::Color::Rgb(rgb[0], rgb[1], rgb[2]))
+            .collect()
+    }
+}
+
+fn default_spectrum() -> Vec<[u8; 3]> {
+    vec![
+        [255, 62, 205],
+        [230, 72, 255],
+        [175, 82, 255],
+        [118, 108, 255],
+        [72, 168, 255],
+        [38, 222, 255],
+        [0, 255, 198],
+        [0, 255, 138],
+        [112, 255, 82],
+        [255, 235, 48],
+        [255, 158, 38],
+        [255, 78, 78],
+    ]
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -420,6 +451,20 @@ pub fn load_palette(theme: &Theme) -> Palette {
             primary: [20, 120, 220],
             accent2: [110, 10, 210],
             accent3: [0, 158, 210],
+            spectrum: vec![
+                [20, 120, 220],
+                [40, 130, 210],
+                [70, 120, 220],
+                [110, 10, 210],
+                [140, 60, 200],
+                [0, 158, 210],
+                [0, 158, 150],
+                [0, 158, 88],
+                [90, 170, 60],
+                [185, 128, 0],
+                [210, 100, 30],
+                [200, 50, 60],
+            ],
         },
         Theme::Nord => Palette {
             text: [216, 222, 233],
@@ -431,6 +476,20 @@ pub fn load_palette(theme: &Theme) -> Palette {
             primary: [94, 129, 172],
             accent2: [129, 161, 193],
             accent3: [136, 192, 208],
+            spectrum: vec![
+                [94, 129, 172],
+                [110, 145, 180],
+                [129, 161, 193],
+                [136, 192, 208],
+                [143, 188, 187],
+                [163, 190, 140],
+                [180, 195, 130],
+                [235, 203, 139],
+                [208, 135, 112],
+                [191, 97, 106],
+                [180, 142, 173],
+                [129, 161, 193],
+            ],
         },
         Theme::Gruvbox => Palette {
             text: [235, 219, 178],
@@ -442,6 +501,20 @@ pub fn load_palette(theme: &Theme) -> Palette {
             primary: [215, 153, 33],
             accent2: [211, 134, 155],
             accent3: [104, 157, 106],
+            spectrum: vec![
+                [251, 73, 52],
+                [254, 128, 25],
+                [250, 189, 47],
+                [184, 187, 38],
+                [142, 192, 124],
+                [104, 157, 106],
+                [131, 165, 152],
+                [69, 133, 136],
+                [211, 134, 155],
+                [214, 93, 14],
+                [215, 153, 33],
+                [204, 36, 29],
+            ],
         },
         Theme::Mono => Palette {
             text: [230, 230, 230],
@@ -453,6 +526,7 @@ pub fn load_palette(theme: &Theme) -> Palette {
             primary: [245, 245, 245],
             accent2: [210, 210, 210],
             accent3: [175, 175, 175],
+            spectrum: vec![[255, 255, 255]],
         },
         _ => Palette {
             text: [225, 218, 248],
@@ -464,6 +538,7 @@ pub fn load_palette(theme: &Theme) -> Palette {
             primary: [255, 62, 205],
             accent2: [152, 82, 255],
             accent3: [0, 228, 255],
+            spectrum: default_spectrum(),
         },
     }
 }

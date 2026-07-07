@@ -25,22 +25,7 @@ fn search_source_label(source: &crate::config::SearchSource) -> String {
 
 const VOLT_BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
-const SPECTRUM_COLORS: [Color; 12] = [
-    Color::Rgb(255, 62, 205),
-    Color::Rgb(230, 72, 255),
-    Color::Rgb(175, 82, 255),
-    Color::Rgb(118, 108, 255),
-    Color::Rgb(72, 168, 255),
-    Color::Rgb(38, 222, 255),
-    Color::Rgb(0, 255, 198),
-    Color::Rgb(0, 255, 138),
-    Color::Rgb(112, 255, 82),
-    Color::Rgb(255, 235, 48),
-    Color::Rgb(255, 158, 38),
-    Color::Rgb(255, 78, 78),
-];
-
-fn spectrum_spans(app: &App, width: usize) -> Vec<Span<'static>> {
+fn spectrum_spans(app: &App, pal: &Palette, width: usize) -> Vec<Span<'static>> {
     if width == 0 {
         return vec![];
     }
@@ -48,6 +33,7 @@ fn spectrum_spans(app: &App, width: usize) -> Vec<Span<'static>> {
     let playing = app.player_state == PlayerState::Playing;
     let vol_factor = (app.volume as f32 / 100.0).clamp(0.2, 1.0);
     let tick = app.anim_tick as f64;
+    let colors = pal.spectrum_colors();
 
     (0..width)
         .map(|col| {
@@ -67,13 +53,10 @@ fn spectrum_spans(app: &App, width: usize) -> Vec<Span<'static>> {
                 (combined * 2.0 * 0.3).clamp(0.0, 3.0) as usize
             };
 
-            let nc = SPECTRUM_COLORS.len();
+            let nc = colors.len();
             let idx = (col * nc / width + tick as usize / 15) % nc;
 
-            Span::styled(
-                VOLT_BLOCKS[level],
-                Style::default().fg(SPECTRUM_COLORS[idx]),
-            )
+            Span::styled(VOLT_BLOCKS[level], Style::default().fg(colors[idx]))
         })
         .collect()
 }
@@ -1424,7 +1407,7 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     let mut rows = vec![line1, line2];
     rows.extend((0..spectrum_rows).map(|_| {
         let mut spec = vec![Span::styled("  ".to_string(), Style::default())];
-        spec.extend(spectrum_spans(app, spec_w));
+        spec.extend(spectrum_spans(app, pal, spec_w));
         Line::from(spec)
     }));
 
@@ -1724,15 +1707,16 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
         }
 
         let focused = i == app.eq_focus_band && app.options_index == 7;
+        let spectrum = pal.spectrum_colors();
         let band_color = if focused {
             anim
         } else if app.eq_enabled {
-            SPECTRUM_COLORS[i % SPECTRUM_COLORS.len()]
+            spectrum[i % spectrum.len()]
         } else {
             pal.get_color("dim")
         };
         let bg_color = if app.eq_enabled {
-            SPECTRUM_COLORS[(i + 4) % SPECTRUM_COLORS.len()]
+            spectrum[(i + 4) % spectrum.len()]
         } else {
             pal.get_color("dim")
         };

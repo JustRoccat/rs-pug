@@ -92,9 +92,20 @@ In the **Options** tab, you can trigger the **Smart Queue**. This feature analyz
 
 `rs-pug` comes with several built-in themes: `dark` (default), `light`, `nord`, `gruvbox`, and `mono`.
 
-You can add your own themes by creating `.json` files in `~/.config/rs-pug/themes/`.
+**Switching to a built-in theme**
 
-Example `mytheme.json`:
+Add this to `~/.config/rs-pug/config.toml`:
+```toml
+[general]
+theme = "nord"
+```
+Restart `rs-pug` (or hot reload, see below) and the new colors apply immediately.
+
+**Creating your own theme**
+
+1. Create a `.json` file in `~/.config/rs-pug/themes/`, e.g. `~/.config/rs-pug/themes/mytheme.json`.
+2. Fill in your colors as `[r, g, b]` triples (0-255):
+
 ```json
 {
   "text": [255, 255, 255],
@@ -105,13 +116,39 @@ Example `mytheme.json`:
   "ok": [0, 255, 0],
   "primary": [255, 0, 255],
   "accent2": [200, 0, 200],
-  "accent3": [100, 0, 100]
+  "accent3": [100, 0, 100],
+  "spectrum": [
+    [255, 0, 255],
+    [230, 0, 255],
+    [200, 0, 255],
+    [150, 0, 255],
+    [100, 50, 255],
+    [0, 150, 255],
+    [0, 255, 255],
+    [0, 255, 150],
+    [100, 255, 0],
+    [255, 255, 0],
+    [255, 150, 0],
+    [255, 0, 0]
+  ]
 }
 ```
+
+3. Point `config.toml` at it by filename (without `.json`):
+```toml
+[general]
+theme = "mytheme"
+```
+4. Restart `rs-pug` / hot reload. The whole UI and the spectrum visualizer under "Now Playing" now uses your colors.
+
+All nine base colors (`text`, `dim`, `muted`, `info`, `warn`, `ok`, `primary`, `accent2`, `accent3`) are required if one is missing the file fails to parse and `rs-pug` silently falls back to the built-in palette instead. `spectrum` is the one optional field: omit it and you get the standard gradient shown above. It accepts a list of any length; the colors are cycled through as the visualizer bars animate.
+
+Community themes: [all-rspug](https://github.com/JustRoccat/all-rspug/).
 
 ### EQ Presets
 
 Your custom EQ presets are stored as `.json` files in `~/.config/rs-pug/eqpresets/`.
+
 
 ## Local Music
 
