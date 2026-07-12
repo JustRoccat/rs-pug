@@ -189,6 +189,6 @@ Runs anywhere mpv and yt-dlp run - tested on Linux and Termux (Android). WSL2 on
 
 ## License
 
-MIT
+GPL-2.0
 
 ![gif](https://github.com/user-attachments/assets/43e4fc61-cd06-43a3-872c-632059467259)
