@@ -1,4 +1,5 @@
-
+[![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
+## If you find this useful, a star is the only currency I get paid in
 
 # Read
 
@@ -6,9 +7,11 @@ Im not gonna maintain aur anymore, if you want to be an aur maintainer please cr
 
 This does not apply to crates.io, im gonna still maintain crates.io
 
-[![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
 
-## If you find this useful, a star is the only currency I get paid in
+# Read this too
+
+Always check if you have the latest yt-dlp and mpv before calling this project shit
+
 
 # rs-pug
 
