@@ -12,8 +12,8 @@ use crate::{
     utils::natural_compare,
 };
 
-fn palette(theme: Theme) -> Palette {
-    crate::config::load_palette(&theme)
+fn palette(theme: &Theme) -> Palette {
+    crate::config::load_palette(theme)
 }
 
 fn search_source_label(source: &crate::config::SearchSource) -> String {
@@ -62,7 +62,7 @@ fn spectrum_spans(app: &App, pal: &Palette, width: usize) -> Vec<Span<'static>> 
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    let pal = palette(app.theme.clone());
+    let pal = palette(&app.theme);
     let anim = pal.get_color("primary");
     let anim2 = pal.get_color("accent2");
     let size = frame.size();
@@ -255,27 +255,27 @@ fn draw_tabs_vertical(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             if i == active {
                 ListItem::new(Line::from(vec![
                     Span::styled(
-                        shortcut.clone(),
+                        shortcut,
                         Style::default()
                             .fg(pal.get_color("warn"))
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        icon.clone(),
+                        icon.as_str(),
                         Style::default().fg(anim).add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" "),
                     Span::styled(
-                        label.clone(),
+                        label.as_str(),
                         Style::default().fg(anim).add_modifier(Modifier::BOLD),
                     ),
                 ]))
             } else {
                 ListItem::new(Line::from(vec![
                     Span::styled(shortcut, Style::default().fg(pal.get_color("dim"))),
-                    Span::styled(icon.clone(), Style::default().fg(pal.get_color("dim"))),
+                    Span::styled(icon.as_str(), Style::default().fg(pal.get_color("dim"))),
                     Span::raw(" "),
-                    Span::styled(label.clone(), Style::default().fg(pal.get_color("muted"))),
+                    Span::styled(label.as_str(), Style::default().fg(pal.get_color("muted"))),
                 ]))
             }
         })
@@ -527,7 +527,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             ("⊞", "Smart Queue    press Enter".to_owned()),
             (
                 "⊞",
-                format!("Theme          {}", theme_label(app.opt_theme.clone())),
+                format!("Theme          {}", theme_label(&app.opt_theme)),
             ),
             ("⊞", format!("Repeat mode    {}", app.repeat_mode.label())),
             ("⊞", eq_label),
@@ -585,7 +585,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                         Span::styled(arrow.to_string(), Style::default().fg(anim)),
                         Span::raw(" "),
                         Span::styled(
-                            p.name.clone(),
+                            p.name.as_str(),
                             Style::default()
                                 .fg(pal.get_color("text"))
                                 .add_modifier(Modifier::BOLD),
@@ -603,7 +603,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                             Style::default().fg(pal.get_color("muted")),
                         ),
                         Span::raw(" "),
-                        Span::styled(p.name.clone(), Style::default().fg(pal.get_color("text"))),
+                        Span::styled(p.name.as_str(), Style::default().fg(pal.get_color("text"))),
                         Span::styled(
                             format!("  ·  {} tracks", p.songs.len()),
                             Style::default().fg(pal.get_color("dim")),
@@ -618,7 +618,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                                 Style::default().fg(pal.get_color("accent2")),
                             ),
                             Span::styled(
-                                song.title.clone(),
+                                song.title.as_str(),
                                 Style::default().fg(pal.get_color("text")),
                             ),
                         ]))
@@ -642,7 +642,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                         Span::styled(arrow.to_string(), Style::default().fg(anim)),
                         Span::raw(" "),
                         Span::styled(
-                            album.name.clone(),
+                            album.name.as_str(),
                             Style::default()
                                 .fg(pal.get_color("text"))
                                 .add_modifier(Modifier::BOLD),
@@ -661,7 +661,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                         ),
                         Span::raw(" "),
                         Span::styled(
-                            album.name.clone(),
+                            album.name.as_str(),
                             Style::default().fg(pal.get_color("text")),
                         ),
                         Span::styled(
@@ -685,7 +685,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                                 )
                             },
                             Span::styled(
-                                song.title.clone(),
+                                song.title.as_str(),
                                 if is_song_sel {
                                     Style::default().fg(anim).add_modifier(Modifier::BOLD)
                                 } else {
@@ -750,7 +750,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             Tab::Options => {
                 if let Some(active_id) = &app.active_plugin_tab {
                     if let Some(tab) = app.plugin_tabs.iter().find(|t| &t.id == active_id) {
-                        let icon = tab.icon.clone().unwrap_or_else(|| "◌".to_string());
+                        let icon = tab.icon.as_deref().unwrap_or("◌");
                         format!(" ⚙  SETTINGS — {} {} ", icon, tab.title.to_uppercase())
                     } else {
                         " ⚙  SETTINGS ".to_owned()
@@ -908,7 +908,7 @@ fn build_local_song_list<'a>(
                 Line::from(vec![
                     Span::styled("▶ ", Style::default().fg(anim)),
                     Span::styled(
-                        song.title.clone(),
+                        song.title.as_str(),
                         Style::default().fg(anim).add_modifier(Modifier::BOLD),
                     ),
                 ])
@@ -916,7 +916,7 @@ fn build_local_song_list<'a>(
                 Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        song.title.clone(),
+                        song.title.as_str(),
                         Style::default().fg(pal.get_color("text")),
                     ),
                 ])
@@ -965,7 +965,7 @@ fn build_organized_local_list<'a>(
             artists.dedup();
 
             let items = artists
-                .iter()
+                .into_iter()
                 .enumerate()
                 .map(|(idx, artist)| {
                     let is_sel = idx == app.selected_local_nav_idx && focused;
@@ -973,7 +973,7 @@ fn build_organized_local_list<'a>(
                         Line::from(vec![
                             Span::styled("▶ ", Style::default().fg(anim)),
                             Span::styled(
-                                artist.clone(),
+                                artist,
                                 Style::default().fg(anim).add_modifier(Modifier::BOLD),
                             ),
                         ])
@@ -981,7 +981,7 @@ fn build_organized_local_list<'a>(
                         Line::from(vec![
                             Span::raw("  "),
                             Span::styled(
-                                artist.clone(),
+                                artist,
                                 Style::default().fg(pal.get_color("text")),
                             ),
                         ])
@@ -1003,7 +1003,7 @@ fn build_organized_local_list<'a>(
             albums.dedup();
 
             let items = albums
-                .iter()
+                .into_iter()
                 .enumerate()
                 .map(|(idx, album)| {
                     let is_sel = idx == app.selected_local_nav_idx && focused;
@@ -1011,14 +1011,17 @@ fn build_organized_local_list<'a>(
                         Line::from(vec![
                             Span::styled("▶ ", Style::default().fg(anim)),
                             Span::styled(
-                                album.clone(),
+                                album,
                                 Style::default().fg(anim).add_modifier(Modifier::BOLD),
                             ),
                         ])
                     } else {
                         Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(album.clone(), Style::default().fg(pal.get_color("text"))),
+                            Span::styled(
+                                album,
+                                Style::default().fg(pal.get_color("text")),
+                            ),
                         ])
                     };
                     ListItem::new(line)
@@ -1045,7 +1048,7 @@ fn build_organized_local_list<'a>(
                         Line::from(vec![
                             Span::styled("▶ ", Style::default().fg(anim)),
                             Span::styled(
-                                song.title.clone(),
+                                song.title.as_str(),
                                 Style::default().fg(anim).add_modifier(Modifier::BOLD),
                             ),
                         ])
@@ -1053,7 +1056,7 @@ fn build_organized_local_list<'a>(
                         Line::from(vec![
                             Span::raw("  "),
                             Span::styled(
-                                song.title.clone(),
+                                song.title.as_str(),
                                 Style::default().fg(pal.get_color("text")),
                             ),
                         ])
@@ -1179,7 +1182,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
                                 ListItem::new(Line::from(vec![
                                     Span::styled("▶ ", Style::default().fg(anim)),
                                     Span::styled(
-                                        song.title.clone(),
+                                        song.title.as_str(),
                                         Style::default().fg(anim).add_modifier(Modifier::BOLD),
                                     ),
                                 ]))
@@ -1190,7 +1193,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
                                         Style::default().fg(pal.get_color("dim")),
                                     ),
                                     Span::styled(
-                                        song.title.clone(),
+                                        song.title.as_str(),
                                         Style::default().fg(pal.get_color("text")),
                                     ),
                                 ]))
@@ -1216,7 +1219,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
                             Style::default().fg(pal.get_color("dim")),
                         ),
                         Span::styled(
-                            song.title.clone(),
+                            song.title.as_str(),
                             Style::default().fg(pal.get_color("muted")),
                         ),
                     ]))
@@ -1236,7 +1239,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
                             Span::styled(num, Style::default().fg(pal.get_color("dim"))),
                             Span::raw(" "),
                             Span::styled(
-                                song.title.clone(),
+                                song.title.as_str(),
                                 Style::default().fg(anim).add_modifier(Modifier::BOLD),
                             ),
                         ]))
@@ -1246,7 +1249,7 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
                             Span::styled(num, Style::default().fg(pal.get_color("dim"))),
                             Span::raw(" "),
                             Span::styled(
-                                song.title.clone(),
+                                song.title.as_str(),
                                 Style::default().fg(pal.get_color("muted")),
                             ),
                         ]))
@@ -1560,7 +1563,7 @@ fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
             ));
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                warning.clone(),
+                warning.as_str(),
                 Style::default().fg(pal.get_color("warn")),
             ));
         }
@@ -1863,7 +1866,7 @@ fn draw_plugin_panels(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 .iter()
                 .map(|line| {
                     Line::from(Span::styled(
-                        line.clone(),
+                        line.as_str(),
                         Style::default().fg(pal.get_color("text")),
                     ))
                 })
@@ -1952,7 +1955,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             Line::from(vec![
                 Span::styled("> ", Style::default().fg(anim)),
                 Span::styled(
-                    app.local_tag_edit_buffer.clone(),
+                    app.local_tag_edit_buffer.as_str(),
                     Style::default().fg(pal.get_color("text")),
                 ),
             ]),
@@ -2121,13 +2124,13 @@ fn format_time(seconds: f64) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
 
-fn theme_label(theme: Theme) -> String {
+fn theme_label(theme: &Theme) -> String {
     match theme {
         Theme::Dark => "dark".to_string(),
         Theme::Light => "light".to_string(),
         Theme::Nord => "nord".to_string(),
         Theme::Gruvbox => "gruvbox".to_string(),
         Theme::Mono => "mono".to_string(),
-        Theme::Custom(name) => name,
+        Theme::Custom(name) => name.clone(),
     }
 }

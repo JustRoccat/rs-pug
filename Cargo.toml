@@ -1,6 +1,6 @@
 [package]
 name = "rs-pug"
-version = "0.1.9"
+version = "1.0.0"
 edition = "2021"
 description = "Blazing fast tui music player"
 license = "GPL-2.0-only"

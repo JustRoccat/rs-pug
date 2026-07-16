@@ -17,10 +17,24 @@ impl Default for EqPreset {
     }
 }
 
+fn sanitize_preset_filename(name: &str) -> Result<String, std::io::Error> {
+    let sanitized = name.replace(['/', '\\'], "_");
+    if sanitized.trim().is_empty() || sanitized.contains("..") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid preset name",
+        ));
+    }
+    Ok(sanitized)
+}
+
 pub fn save_eq_preset(preset: &EqPreset) -> Result<(), std::io::Error> {
-    let home = std::env::var("HOME").map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
-    let path = PathBuf::from(home).join(format!(".config/rs-pug/eqpresets/{}.json", preset.name));
-    let raw = serde_json::to_string_pretty(preset).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let home = std::env::var("HOME")
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
+    let safe_name = sanitize_preset_filename(&preset.name)?;
+    let path = PathBuf::from(home).join(format!(".config/rs-pug/eqpresets/{}.json", safe_name));
+    let raw = serde_json::to_string_pretty(preset)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(path, raw)
 }
 
@@ -540,5 +554,55 @@ pub fn load_palette(theme: &Theme) -> Palette {
             accent3: [0, 228, 255],
             spectrum: default_spectrum(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_preset_filename_keeps_plain_names() {
+        assert_eq!(sanitize_preset_filename("My Preset").unwrap(), "My Preset");
+    }
+
+    #[test]
+    fn sanitize_preset_filename_strips_path_separators() {
+        assert_eq!(
+            sanitize_preset_filename("foo/bar\\baz").unwrap(),
+            "foo_bar_baz"
+        );
+    }
+
+    #[test]
+    fn sanitize_preset_filename_rejects_traversal() {
+        assert!(sanitize_preset_filename("../../etc/passwd").is_err());
+        assert!(sanitize_preset_filename("..").is_err());
+    }
+
+    #[test]
+    fn sanitize_preset_filename_rejects_empty() {
+        assert!(sanitize_preset_filename("").is_err());
+        assert!(sanitize_preset_filename("   ").is_err());
+    }
+
+    #[test]
+    fn save_eq_preset_does_not_escape_presets_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let preset = EqPreset {
+            name: "../../evil".to_string(),
+            bands: [0.0; 10],
+        };
+        let result = save_eq_preset(&preset);
+        assert!(result.is_err());
+
+        let escaped = dir.path().join("evil.json");
+        assert!(!escaped.exists());
+        let presets_dir = dir.path().join(".config/rs-pug/eqpresets");
+        if presets_dir.exists() {
+            assert_eq!(fs::read_dir(presets_dir).unwrap().count(), 0);
+        }
     }
 }
