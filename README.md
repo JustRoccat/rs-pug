@@ -17,7 +17,10 @@ Always check if you have the latest yt-dlp and mpv before calling this project s
 
 No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files — all from your terminal.
 
-Built in Rust with `mpv`, `yt-dlp`, and `ratatui`. Requires `mpv` and `yt-dlp` installed.
+Built in Rust with `mpv`, `yt-dlp`, and `ratatui`. Requires `mpv` installed.
+
+YT-DLP IS HIGHLY RECOMMENDED BUT NOT NECESSARY.
+rs-pug will work without it but you will lose the ability to stream and download songs through rs-pug.
 
 Plugins, themes and EQ presets from the community: [all-rspug](https://github.com/JustRoccat/all-rspug/) · [Discord](https://discord.gg/6FcBWwRQBX)
 
