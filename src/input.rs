@@ -14,12 +14,10 @@ use crossterm::{
     terminal,
 };
 use tokio::sync::mpsc;
-
 pub enum KeyPluginAction {
     Handled(bool),
     Dispatch { labels: Vec<String> },
 }
-
 pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollDown => {
@@ -38,7 +36,38 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
         _ => {}
     }
 }
-
+fn format_key(key: KeyEvent) -> String {
+    let mut s = String::new();
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        s.push_str("C-");
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        s.push_str("M-");
+    }
+    if key.modifiers.contains(KeyModifiers::SHIFT) {
+        s.push_str("S-");
+    }
+    match key.code {
+        KeyCode::Char(' ') => s.push_str("Space"),
+        KeyCode::Char(c) => s.push(c),
+        KeyCode::Enter => s.push_str("Enter"),
+        KeyCode::Esc => s.push_str("Esc"),
+        KeyCode::Tab => s.push_str("Tab"),
+        KeyCode::Up => s.push_str("Up"),
+        KeyCode::Down => s.push_str("Down"),
+        KeyCode::Left => s.push_str("Left"),
+        KeyCode::Right => s.push_str("Right"),
+        KeyCode::Backspace => s.push_str("Backspace"),
+        KeyCode::Delete => s.push_str("Delete"),
+        KeyCode::Home => s.push_str("Home"),
+        KeyCode::End => s.push_str("End"),
+        KeyCode::PageUp => s.push_str("PageUp"),
+        KeyCode::PageDown => s.push_str("PageDown"),
+        KeyCode::F(n) => s.push_str(&format!("F{}", n)),
+        _ => s.push_str("Unknown"),
+    }
+    s
+}
 pub fn handle_key_event_pre_plugin(
     app: &mut App,
     key: KeyEvent,
@@ -47,28 +76,25 @@ pub fn handle_key_event_pre_plugin(
     if key.kind != KeyEventKind::Press {
         return KeyPluginAction::Handled(true);
     }
-
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return KeyPluginAction::Handled(false);
     }
-
-    if app.local_tag_editor_open {
+    if app.local.tag_editor_open {
         match key.code {
             KeyCode::Esc => {
-                app.local_tag_editor_open = false;
-                app.local_tag_editor_song = None;
+                app.local.tag_editor_open = false;
+                app.local.tag_editor_song = None;
             }
             KeyCode::Tab => cycle_tag_field(app),
             KeyCode::Backspace => {
-                app.local_tag_edit_buffer.pop();
+                app.local.tag_edit_buffer.pop();
             }
             KeyCode::Enter => save_tag_field_or_close(app),
-            KeyCode::Char(c) => app.local_tag_edit_buffer.push(c),
+            KeyCode::Char(c) => app.local.tag_edit_buffer.push(c),
             _ => {}
         }
         return KeyPluginAction::Handled(true);
     }
-
     if app.opt_editing {
         if let KeyCode::Char(c) = key.code {
             app.opt_edit_buffer.push(c);
@@ -81,62 +107,65 @@ pub fn handle_key_event_pre_plugin(
             return KeyPluginAction::Handled(true);
         }
     }
-    if app.context_open {
+    if app.playlists.context_open {
         match key.code {
-            KeyCode::Esc => app.context_open = false,
+            KeyCode::Esc => app.playlists.context_open = false,
             KeyCode::Char('j') | KeyCode::Down => {
-                app.context_index =
-                    (app.context_index + 1).min(context_menu_len(app).saturating_sub(1));
+                app.playlists.context_index =
+                    (app.playlists.context_index + 1).min(context_menu_len(app).saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                app.context_index = app.context_index.saturating_sub(1);
+                app.playlists.context_index = app.playlists.context_index.saturating_sub(1);
             }
             KeyCode::Enter => {
-                let idx = app.context_index;
+                let idx = app.playlists.context_index;
                 playlist::execute_context_action(app, idx, cmd_tx);
                 playlist::ensure_playlist_state(app);
-                app.context_open = false;
+                app.playlists.context_open = false;
             }
             _ => {}
         }
         return KeyPluginAction::Handled(true);
     }
-    if app.confirm_delete_playlist {
+    if app.playlists.confirm_delete {
         match key.code {
             KeyCode::Char('y') | KeyCode::Enter => {
-                if app.selected_playlist < app.playlists.len() {
-                    let deleted = app.playlists.remove(app.selected_playlist);
-                    if app.selected_playlist < app.playlist_expanded.len() {
-                        app.playlist_expanded.remove(app.selected_playlist);
+                if app.playlists.selected_playlist < app.playlists.playlists.len() {
+                    let deleted = app
+                        .playlists
+                        .playlists
+                        .remove(app.playlists.selected_playlist);
+                    if app.playlists.selected_playlist < app.playlists.expanded.len() {
+                        app.playlists
+                            .expanded
+                            .remove(app.playlists.selected_playlist);
                     }
-                    app.selected_playlist = app
+                    app.playlists.selected_playlist = app
+                        .playlists
                         .selected_playlist
-                        .min(app.playlists.len().saturating_sub(1));
-                    app.storage
-                        .save_playlists(&app.playlists)
-                        .expect("Failed to save playlists");
+                        .min(app.playlists.playlists.len().saturating_sub(1));
+                    playlist::save_playlists(app);
                     app.set_flash(format!("Deleted {}", deleted.name), 3);
                     playlist::ensure_playlist_state(app);
                 }
-                app.confirm_delete_playlist = false;
+                app.playlists.confirm_delete = false;
             }
             KeyCode::Char('n') | KeyCode::Esc => {
-                app.confirm_delete_playlist = false;
+                app.playlists.confirm_delete = false;
                 app.set_flash("Delete canceled", 2);
             }
             _ => {}
         }
         return KeyPluginAction::Handled(true);
     }
-
     if app.search_mode {
         match key.code {
             KeyCode::Esc => app.search_mode = false,
             KeyCode::Enter => {
                 let q = if app.active_tab == Tab::Albums {
-                    app.album_search_query.trim().to_owned()
+                    app.albums.search_query.trim().to_owned()
                 } else {
-                    app.search_query.trim().to_owned()
+                    app.search.query.trim().to_owned()
                 };
                 if !q.is_empty() && app.active_tab != Tab::Local {
                     app.player_state = PlayerState::Searching;
@@ -150,34 +179,34 @@ pub fn handle_key_event_pre_plugin(
                 if app.active_tab == Tab::Local {
                     if let Ok((window, offset, total)) = app
                         .storage
-                        .fetch_local_songs_window(app.selected_local_song, 200)
+                        .fetch_local_songs_window(app.local.selected_song, 200)
                     {
-                        app.local_library_window = window;
-                        app.local_library_offset = offset;
-                        app.local_library_total = total;
+                        app.local.window = window;
+                        app.local.offset = offset;
+                        app.local.total = total;
                     }
                 }
             }
             KeyCode::Backspace => {
                 if app.active_tab == Tab::Albums {
-                    app.album_search_query.pop();
+                    app.albums.search_query.pop();
                 } else {
-                    app.search_query.pop();
+                    app.search.query.pop();
                 }
                 if app.active_tab == Tab::Local {
-                    let q = app.search_query.to_lowercase();
+                    let q = app.search.query.to_lowercase();
                     let _ = q;
                     ui_helpers::refresh_local_visible_window(app);
                 }
             }
             KeyCode::Char(c) => {
                 if app.active_tab == Tab::Albums {
-                    app.album_search_query.push(c);
+                    app.albums.search_query.push(c);
                 } else {
-                    app.search_query.push(c);
+                    app.search.query.push(c);
                 }
                 if app.active_tab == Tab::Local {
-                    let q = app.search_query.to_lowercase();
+                    let q = app.search.query.to_lowercase();
                     let _ = q;
                     ui_helpers::refresh_local_visible_window(app);
                 }
@@ -186,20 +215,113 @@ pub fn handle_key_event_pre_plugin(
         }
         return KeyPluginAction::Handled(true);
     }
-
     KeyPluginAction::Dispatch {
         labels: ui_helpers::describe_key_event_labels(&key.code, key.modifiers),
     }
 }
-
 pub fn handle_native_key_event(
     app: &mut App,
     key: KeyEvent,
     cmd_tx: &mpsc::UnboundedSender<CoreCmd>,
 ) -> bool {
     let is_core_options =
-        |app: &App| app.active_tab == Tab::Options && app.active_plugin_tab.is_none();
-
+        |app: &App| app.active_tab == Tab::Options && app.plugin_ui.active_tab.is_none();
+    const KEY_SEQUENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+    if !app.key_sequence.is_empty() {
+        if let Some(started) = app.key_sequence_started {
+            if started.elapsed() > KEY_SEQUENCE_TIMEOUT {
+                app.key_sequence.clear();
+                app.key_sequence_started = None;
+            }
+        }
+    }
+    let key_str = format_key(key);
+    if app.key_sequence.is_empty() {
+        app.key_sequence = key_str.clone();
+        app.key_sequence_started = Some(std::time::Instant::now());
+    } else {
+        app.key_sequence.push(' ');
+        app.key_sequence.push_str(&key_str);
+    }
+    let seq = app.key_sequence.clone();
+    let clear_sequence = |app: &mut App| {
+        app.key_sequence.clear();
+        app.key_sequence_started = None;
+    };
+    if seq == app.key_next {
+        clear_sequence(app);
+        if app.queue.len() > 1 {
+            if let Some(song) = app.queue.pop_front() {
+                app.queue.push_back(song);
+            }
+            if let Some(next_song) = app.queue.front().cloned() {
+                let _ = cmd_tx.send(CoreCmd::Play(next_song));
+            }
+        } else {
+            let _ = cmd_tx.send(CoreCmd::Next);
+        }
+        return true;
+    } else if seq == app.key_prev {
+        clear_sequence(app);
+        if app.queue.len() > 1 {
+            if let Some(song) = app.queue.pop_back() {
+                app.queue.push_front(song);
+            }
+            if let Some(song) = app.queue.front().cloned() {
+                let _ = cmd_tx.send(CoreCmd::Play(song));
+            }
+        } else {
+            let _ = cmd_tx.send(CoreCmd::Prev);
+        }
+        return true;
+    } else if seq == app.key_mute {
+        clear_sequence(app);
+        let _ = cmd_tx.send(CoreCmd::ToggleMute);
+        return true;
+    } else if seq == app.key_repeat {
+        clear_sequence(app);
+        app.repeat_mode = app.repeat_mode.next();
+        app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
+        return true;
+    } else if seq == app.key_shuffle {
+        clear_sequence(app);
+        ui_helpers::shuffle_queue_keep_current(app);
+        return true;
+    } else if seq == app.key_seek_back {
+        clear_sequence(app);
+        let _ = cmd_tx.send(CoreCmd::SeekBy(-10));
+        return true;
+    } else if seq == app.key_seek_forward {
+        clear_sequence(app);
+        let _ = cmd_tx.send(CoreCmd::SeekBy(10));
+        return true;
+    } else if seq == app.key_fft_toggle {
+        clear_sequence(app);
+        app.show_fft = !app.show_fft;
+        if app.show_fft {
+            if app.fft_state.is_none() {
+                app.fft_state = Some(crate::fft::start_fft_monitor());
+            }
+            app.set_flash("FFT visualizer: ON", 3);
+        } else {
+            app.set_flash("FFT visualizer: OFF", 2);
+        }
+        return true;
+    }
+    let is_prefix = |s: &str, p: &str| s.starts_with(p) && s.len() > p.len();
+    if is_prefix(&app.key_next, &seq)
+        || is_prefix(&app.key_prev, &seq)
+        || is_prefix(&app.key_mute, &seq)
+        || is_prefix(&app.key_repeat, &seq)
+        || is_prefix(&app.key_shuffle, &seq)
+        || is_prefix(&app.key_seek_back, &seq)
+        || is_prefix(&app.key_seek_forward, &seq)
+        || is_prefix(&app.key_fft_toggle, &seq)
+    {
+        return true;
+    }
+    app.key_sequence.clear();
+    app.key_sequence_started = None;
     match key.code {
         KeyCode::Char(c @ '1'..='8') => {
             activate_numbered_tab(app, c);
@@ -211,22 +333,27 @@ pub fn handle_native_key_event(
             let _ = cmd_tx.send(CoreCmd::VolumeUp);
         }
         KeyCode::Char('a') if app.active_tab == Tab::Library => {
-            let name = format!("Playlist {}", app.playlists.len() + 1);
+            let name = format!("Playlist {}", app.playlists.playlists.len() + 1);
             playlist::create_empty_playlist(app, &name);
-            app.storage
-                .save_playlists(&app.playlists)
-                .expect("Failed to save playlists");
+            playlist::save_playlists(app);
             app.set_flash(format!("Created {name}"), 3);
             playlist::ensure_playlist_state(app);
         }
         KeyCode::Char('x') if app.active_tab == Tab::Library => {
-            if app.selected_playlist < app.playlists.len() {
-                app.confirm_delete_playlist = true;
-                app.delete_playlist_name = app.playlists[app.selected_playlist].name.clone();
+            if app.playlists.selected_playlist < app.playlists.playlists.len() {
+                app.playlists.confirm_delete = true;
+                app.playlists.delete_name = app.playlists.playlists
+                    [app.playlists.selected_playlist]
+                    .name
+                    .clone();
             }
         }
         KeyCode::Char('e') if app.active_tab == Tab::Library => {
-            if let Some(open) = app.playlist_expanded.get_mut(app.selected_playlist) {
+            if let Some(open) = app
+                .playlists
+                .expanded
+                .get_mut(app.playlists.selected_playlist)
+            {
                 *open = !*open;
             }
         }
@@ -237,8 +364,8 @@ pub fn handle_native_key_event(
                 app.selected_song_for_context().is_some()
             };
             if can_open {
-                app.context_open = true;
-                app.context_index = 0;
+                app.playlists.context_open = true;
+                app.playlists.context_index = 0;
             }
         }
         KeyCode::Char('/') => {
@@ -250,20 +377,20 @@ pub fn handle_native_key_event(
         }
         KeyCode::Backspace | KeyCode::Esc
             if app.active_tab == Tab::Local
-                && app.local_view_mode == LocalViewMode::Organized
+                && app.local.view_mode == LocalViewMode::Organized
                 && app.focus == Focus::Results =>
         {
             local_nav_back(app);
         }
         KeyCode::Char('v') if app.active_tab == Tab::Local => {
-            app.local_view_mode = match app.local_view_mode {
+            app.local.view_mode = match app.local.view_mode {
                 LocalViewMode::Flat => LocalViewMode::Organized,
                 LocalViewMode::Organized => LocalViewMode::Flat,
             };
             app.set_flash(
                 format!(
                     "View mode: {}",
-                    match app.local_view_mode {
+                    match app.local.view_mode {
                         LocalViewMode::Flat => "Flat",
                         LocalViewMode::Organized => "Organized",
                     }
@@ -271,11 +398,10 @@ pub fn handle_native_key_event(
                 2,
             );
         }
-
         KeyCode::Char('s') if app.active_tab == Tab::Local => {
-            app.local_sort_mode = app.local_sort_mode.next();
+            app.local.sort_mode = app.local.sort_mode.next();
             ui_helpers::refresh_local_visible_window(app);
-            app.set_flash(format!("Local sort: {}", app.local_sort_mode.label()), 2);
+            app.set_flash(format!("Local sort: {}", app.local.sort_mode.label()), 2);
         }
         KeyCode::Char('f')
             if app.active_tab == Tab::Local && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -289,7 +415,7 @@ pub fn handle_native_key_event(
         KeyCode::Char('a') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'a'),
         KeyCode::Char('b') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'b'),
         KeyCode::Char('e')
-            if app.active_tab == Tab::Local && app.local_view_mode == LocalViewMode::Flat =>
+            if app.active_tab == Tab::Local && app.local.view_mode == LocalViewMode::Flat =>
         {
             open_tag_editor(app)
         }
@@ -303,40 +429,42 @@ pub fn handle_native_key_event(
                 if is_core_options(app) {
                     app.options_index = (app.options_index + 1).min(ui_helpers::MAX_OPTIONS_INDEX);
                 } else if app.active_tab == Tab::Library {
-                    if !app.playlists.is_empty() {
-                        app.selected_playlist =
-                            (app.selected_playlist + 1).min(app.playlists.len().saturating_sub(1));
-                        app.selected_playlist_song = 0;
+                    if !app.playlists.playlists.is_empty() {
+                        app.playlists.selected_playlist = (app.playlists.selected_playlist + 1)
+                            .min(app.playlists.playlists.len().saturating_sub(1));
+                        app.playlists.selected_song = 0;
                         playlist::ensure_playlist_state(app);
                     }
                 } else if app.active_tab == Tab::Albums {
-                    if !app.album_results.is_empty() {
-                        app.selected_album_result = (app.selected_album_result + 1)
-                            .min(app.album_results.len().saturating_sub(1));
+                    if !app.albums.results.is_empty() {
+                        app.albums.selected_result = (app.albums.selected_result + 1)
+                            .min(app.albums.results.len().saturating_sub(1));
                     }
                 } else if app.active_tab == Tab::Local {
-                    if app.local_view_mode == LocalViewMode::Flat {
-                        if app.local_library_total > 0 {
-                            app.selected_local_song = (app.selected_local_song + 1)
-                                .min(app.local_library_total.saturating_sub(1));
+                    if app.local.view_mode == LocalViewMode::Flat {
+                        if app.local.total > 0 {
+                            app.local.selected_song = (app.local.selected_song + 1)
+                                .min(app.local.total.saturating_sub(1));
                         }
                     } else {
                         let local_nav_len = get_local_nav_len(app);
                         if local_nav_len > 0 {
-                            app.selected_local_nav_idx = (app.selected_local_nav_idx + 1)
+                            app.local.selected_nav_idx = (app.local.selected_nav_idx + 1)
                                 .min(local_nav_len.saturating_sub(1));
                         }
                     }
-                } else if !app.search_results.is_empty() {
-                    app.selected_result =
-                        (app.selected_result + 1).min(app.search_results.len().saturating_sub(1));
+                } else if !app.search.results.is_empty() {
+                    app.search.selected_result = (app.search.selected_result + 1)
+                        .min(app.search.results.len().saturating_sub(1));
                 }
             }
             Focus::Queue => {
                 if app.active_tab == Tab::Library {
-                    if let Some(playlist) = app.playlists.get(app.selected_playlist) {
+                    if let Some(playlist) =
+                        app.playlists.playlists.get(app.playlists.selected_playlist)
+                    {
                         if !playlist.songs.is_empty() {
-                            app.selected_playlist_song = (app.selected_playlist_song + 1)
+                            app.playlists.selected_song = (app.playlists.selected_song + 1)
                                 .min(playlist.songs.len().saturating_sub(1));
                             playlist::ensure_playlist_state(app);
                         }
@@ -353,24 +481,25 @@ pub fn handle_native_key_event(
                 if is_core_options(app) {
                     app.options_index = app.options_index.saturating_sub(1);
                 } else if app.active_tab == Tab::Library {
-                    app.selected_playlist = app.selected_playlist.saturating_sub(1);
-                    app.selected_playlist_song = 0;
+                    app.playlists.selected_playlist =
+                        app.playlists.selected_playlist.saturating_sub(1);
+                    app.playlists.selected_song = 0;
                     playlist::ensure_playlist_state(app);
                 } else if app.active_tab == Tab::Albums {
-                    app.selected_album_result = app.selected_album_result.saturating_sub(1);
+                    app.albums.selected_result = app.albums.selected_result.saturating_sub(1);
                 } else if app.active_tab == Tab::Local {
-                    if app.local_view_mode == LocalViewMode::Flat {
-                        app.selected_local_song = app.selected_local_song.saturating_sub(1);
+                    if app.local.view_mode == LocalViewMode::Flat {
+                        app.local.selected_song = app.local.selected_song.saturating_sub(1);
                     } else {
-                        app.selected_local_nav_idx = app.selected_local_nav_idx.saturating_sub(1);
+                        app.local.selected_nav_idx = app.local.selected_nav_idx.saturating_sub(1);
                     }
                 } else {
-                    app.selected_result = app.selected_result.saturating_sub(1);
+                    app.search.selected_result = app.search.selected_result.saturating_sub(1);
                 }
             }
             Focus::Queue => {
                 if app.active_tab == Tab::Library {
-                    app.selected_playlist_song = app.selected_playlist_song.saturating_sub(1);
+                    app.playlists.selected_song = app.playlists.selected_song.saturating_sub(1);
                     playlist::ensure_playlist_state(app);
                 } else {
                     app.selected_queue = app.selected_queue.saturating_sub(1);
@@ -414,12 +543,12 @@ pub fn handle_native_key_event(
                     let name = app.opt_edit_buffer.clone();
                     let preset = EqPreset {
                         name: name.clone(),
-                        bands: app.eq_bands,
+                        bands: app.eq.bands,
                     };
                     if let Err(e) = crate::config::save_eq_preset(&preset) {
                         app.set_flash(format!("Error saving preset: {e}"), 4);
                     } else {
-                        app.custom_eq_presets.push(preset);
+                        app.eq.custom_presets.push(preset);
                         app.set_flash(format!("Saved preset: {name}"), 3);
                     }
                     app.opt_editing = false;
@@ -432,9 +561,9 @@ pub fn handle_native_key_event(
                         app.set_flash("Smart Queue needs a currently playing song", 3);
                     }
                 } else if app.options_index == 7 {
-                    app.eq_enabled = !app.eq_enabled;
-                    if app.eq_enabled {
-                        eq::send_eq_update(cmd_tx, app.eq_bands);
+                    app.eq.enabled = !app.eq.enabled;
+                    if app.eq.enabled {
+                        eq::send_eq_update(cmd_tx, app.eq.bands);
                         app.set_flash("Equalizer ON", 2);
                     } else {
                         eq::send_eq_update(cmd_tx, [0.0f32; 10]);
@@ -454,7 +583,7 @@ pub fn handle_native_key_event(
                     }
                 }
                 Focus::Results if app.active_tab == Tab::Albums => {
-                    if let Some(album) = app.album_results.get(app.selected_album_result) {
+                    if let Some(album) = app.albums.results.get(app.albums.selected_result) {
                         if let Some(song) = album.songs.first() {
                             app.queue.push_back(song.clone());
                             app.selected_queue = app.queue.len().saturating_sub(1);
@@ -463,7 +592,9 @@ pub fn handle_native_key_event(
                     }
                 }
                 Focus::Results if app.active_tab == Tab::Library => {
-                    if let Some(playlist) = app.playlists.get(app.selected_playlist) {
+                    if let Some(playlist) =
+                        app.playlists.playlists.get(app.playlists.selected_playlist)
+                    {
                         app.queue.clear();
                         for s in &playlist.songs {
                             app.queue.push_back(s.clone());
@@ -475,11 +606,14 @@ pub fn handle_native_key_event(
                 }
                 Focus::Queue => {
                     if app.active_tab == Tab::Library {
-                        if let Some(playlist) = app.playlists.get(app.selected_playlist) {
+                        if let Some(playlist) =
+                            app.playlists.playlists.get(app.playlists.selected_playlist)
+                        {
                             if !playlist.songs.is_empty() {
                                 app.queue.clear();
                                 let start = app
-                                    .selected_playlist_song
+                                    .playlists
+                                    .selected_song
                                     .min(playlist.songs.len().saturating_sub(1));
                                 for s in playlist.songs.iter().skip(start) {
                                     app.queue.push_back(s.clone());
@@ -500,11 +634,12 @@ pub fn handle_native_key_event(
                 }
                 Focus::Results => {
                     if app.active_tab == Tab::Local {
-                        if app.local_view_mode == LocalViewMode::Flat {
-                            if let Some(ls) = app.local_library_window.get(
-                                app.selected_local_song
-                                    .saturating_sub(app.local_library_offset),
-                            ) {
+                        if app.local.view_mode == LocalViewMode::Flat {
+                            if let Some(ls) = app
+                                .local
+                                .window
+                                .get(app.local.selected_song.saturating_sub(app.local.offset))
+                            {
                                 let song = Song::from(ls);
                                 app.queue.push_back(song.clone());
                                 app.selected_queue = app.queue.len().saturating_sub(1);
@@ -514,21 +649,21 @@ pub fn handle_native_key_event(
                             let items = ui_helpers::get_local_nav_items(app);
                             match items {
                                 ui_helpers::LocalNavItems::Artists(artists) => {
-                                    if let Some(artist) = artists.get(app.selected_local_nav_idx) {
-                                        app.local_nav_artist = Some(artist.clone());
-                                        app.local_nav_level = LocalNavLevel::Albums;
-                                        app.selected_local_nav_idx = 0;
+                                    if let Some(artist) = artists.get(app.local.selected_nav_idx) {
+                                        app.local.nav_artist = Some(artist.clone());
+                                        app.local.nav_level = LocalNavLevel::Albums;
+                                        app.local.selected_nav_idx = 0;
                                     }
                                 }
                                 ui_helpers::LocalNavItems::Albums(albums) => {
-                                    if let Some(album) = albums.get(app.selected_local_nav_idx) {
-                                        app.local_nav_album = Some(album.clone());
-                                        app.local_nav_level = LocalNavLevel::Songs;
-                                        app.selected_local_nav_idx = 0;
+                                    if let Some(album) = albums.get(app.local.selected_nav_idx) {
+                                        app.local.nav_album = Some(album.clone());
+                                        app.local.nav_level = LocalNavLevel::Songs;
+                                        app.local.selected_nav_idx = 0;
                                     }
                                 }
                                 ui_helpers::LocalNavItems::Songs(songs) => {
-                                    if let Some(ls) = songs.get(app.selected_local_nav_idx) {
+                                    if let Some(ls) = songs.get(app.local.selected_nav_idx) {
                                         let song = Song::from(*ls);
                                         app.queue.push_back(song.clone());
                                         app.selected_queue = app.queue.len().saturating_sub(1);
@@ -551,46 +686,6 @@ pub fn handle_native_key_event(
         KeyCode::Right if !is_core_options(app) => {
             let _ = cmd_tx.send(CoreCmd::SeekBy(10));
         }
-        KeyCode::Char(c) if c == app.key_next => {
-            if app.queue.len() > 1 {
-                if let Some(song) = app.queue.pop_front() {
-                    app.queue.push_back(song);
-                }
-                if let Some(next_song) = app.queue.front().cloned() {
-                    let _ = cmd_tx.send(CoreCmd::Play(next_song));
-                }
-            } else {
-                let _ = cmd_tx.send(CoreCmd::Next);
-            }
-        }
-        KeyCode::Char(c) if c == app.key_prev => {
-            if app.queue.len() > 1 {
-                if let Some(song) = app.queue.pop_back() {
-                    app.queue.push_front(song);
-                }
-                if let Some(song) = app.queue.front().cloned() {
-                    let _ = cmd_tx.send(CoreCmd::Play(song));
-                }
-            } else {
-                let _ = cmd_tx.send(CoreCmd::Prev);
-            }
-        }
-        KeyCode::Char(c) if c == app.key_mute => {
-            let _ = cmd_tx.send(CoreCmd::ToggleMute);
-        }
-        KeyCode::Char(c) if c == app.key_repeat => {
-            app.repeat_mode = app.repeat_mode.next();
-            app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
-        }
-        KeyCode::Char(c) if c == app.key_shuffle => {
-            ui_helpers::shuffle_queue_keep_current(app);
-        }
-        KeyCode::Char(c) if c == app.key_seek_back => {
-            let _ = cmd_tx.send(CoreCmd::SeekBy(-10));
-        }
-        KeyCode::Char(c) if c == app.key_seek_forward => {
-            let _ = cmd_tx.send(CoreCmd::SeekBy(10));
-        }
         KeyCode::Char('q') => {
             return false;
         }
@@ -598,9 +693,7 @@ pub fn handle_native_key_event(
             if app.active_tab == Tab::Library && app.focus == Focus::Queue {
                 playlist::remove_selected_playlist_song(app);
                 playlist::ensure_playlist_state(app);
-                app.storage
-                    .save_playlists(&app.playlists)
-                    .expect("Failed to save playlists");
+                playlist::save_playlists(app);
             } else if app.focus == Focus::Queue {
                 playlist::remove_selected_queue_song(app);
             }
@@ -628,15 +721,15 @@ pub fn handle_native_key_event(
                 app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
             }
             7 => {
-                if app.eq_focus_band > 0 {
-                    app.eq_focus_band -= 1;
+                if app.eq.focus_band > 0 {
+                    app.eq.focus_band -= 1;
                 }
             }
             8 => eq::cycle_eq_preset(app, cmd_tx, -1),
-            9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, -1),
-            10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, -1),
+            9 => app.key_next = ui_helpers::cycle_keybind_char(&app.key_next, -1),
+            10 => app.key_prev = ui_helpers::cycle_keybind_char(&app.key_prev, -1),
             ui_helpers::MAX_OPTIONS_INDEX => {
-                app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, -1)
+                app.key_mute = ui_helpers::cycle_keybind_char(&app.key_mute, -1);
             }
             _ => {}
         },
@@ -654,15 +747,15 @@ pub fn handle_native_key_event(
                 app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
             }
             7 => {
-                if app.eq_focus_band < 9 {
-                    app.eq_focus_band += 1;
+                if app.eq.focus_band < 9 {
+                    app.eq.focus_band += 1;
                 }
             }
             8 => eq::cycle_eq_preset(app, cmd_tx, 1),
-            9 => app.key_next = ui_helpers::cycle_keybind_char(app.key_next, 1),
-            10 => app.key_prev = ui_helpers::cycle_keybind_char(app.key_prev, 1),
+            9 => app.key_next = ui_helpers::cycle_keybind_char(&app.key_next, 1),
+            10 => app.key_prev = ui_helpers::cycle_keybind_char(&app.key_prev, 1),
             ui_helpers::MAX_OPTIONS_INDEX => {
-                app.key_mute = ui_helpers::cycle_keybind_char(app.key_mute, 1)
+                app.key_mute = ui_helpers::cycle_keybind_char(&app.key_mute, 1);
             }
             _ => {}
         },
@@ -677,24 +770,23 @@ pub fn handle_native_key_event(
         KeyCode::Char('+') | KeyCode::Char('=')
             if is_core_options(app) && app.options_index == 7 =>
         {
-            let b = app.eq_focus_band;
-            app.eq_bands[b] = (app.eq_bands[b] + 1.0).min(12.0);
-            if app.eq_enabled {
-                eq::send_eq_update(cmd_tx, app.eq_bands);
+            let b = app.eq.focus_band;
+            app.eq.bands[b] = (app.eq.bands[b] + 1.0).min(12.0);
+            if app.eq.enabled {
+                eq::send_eq_update(cmd_tx, app.eq.bands);
             }
         }
         KeyCode::Char('-') if is_core_options(app) && app.options_index == 7 => {
-            let b = app.eq_focus_band;
-            app.eq_bands[b] = (app.eq_bands[b] - 1.0).max(-12.0);
-            if app.eq_enabled {
-                eq::send_eq_update(cmd_tx, app.eq_bands);
+            let b = app.eq.focus_band;
+            app.eq.bands[b] = (app.eq.bands[b] - 1.0).max(-12.0);
+            if app.eq.enabled {
+                eq::send_eq_update(cmd_tx, app.eq.bands);
             }
         }
         _ => {}
     }
     true
 }
-
 fn activate_numbered_tab(app: &mut App, key: char) {
     let Some(digit) = key.to_digit(10).map(|value| value as usize) else {
         return;
@@ -702,26 +794,22 @@ fn activate_numbered_tab(app: &mut App, key: char) {
     if !(1..=8).contains(&digit) {
         return;
     }
-
     activate_tab_by_render_index(app, digit - 1);
 }
-
 fn activate_tab_by_render_index(app: &mut App, tab_index: usize) {
     if tab_index < app.main_tabs.len() {
         events::activate_main_tab(app, tab_index);
         return;
     }
-
     let plugin_index = tab_index.saturating_sub(app.main_tabs.len());
-    if let Some(tab) = app.plugin_tabs.get(plugin_index) {
+    if let Some(tab) = app.plugin_ui.tabs.get(plugin_index) {
         app.active_tab = Tab::Options;
-        app.active_plugin_tab = Some(tab.id.clone());
-        app.active_custom_tab = None;
+        app.plugin_ui.active_tab = Some(tab.id.clone());
+        app.plugin_ui.active_custom_tab = None;
     }
 }
-
 fn tab_index_from_mouse(app: &App, mouse: MouseEvent) -> Option<usize> {
-    let tab_count = app.main_tabs.len() + app.plugin_tabs.len();
+    let tab_count = app.main_tabs.len() + app.plugin_ui.tabs.len();
     if tab_count == 0 {
         return None;
     }
@@ -729,7 +817,6 @@ fn tab_index_from_mouse(app: &App, mouse: MouseEvent) -> Option<usize> {
     if terminal_width == 0 || terminal_height == 0 {
         return None;
     }
-
     match app.ui_layout.tab_bar_position.as_str() {
         "left" => {
             let tabs_width = side_tabs_width(app, terminal_width);
@@ -761,7 +848,6 @@ fn tab_index_from_mouse(app: &App, mouse: MouseEvent) -> Option<usize> {
         }
     }
 }
-
 fn side_tabs_width(app: &App, terminal_width: u16) -> u16 {
     app.ui_layout
         .tabs_width
@@ -769,16 +855,13 @@ fn side_tabs_width(app: &App, terminal_width: u16) -> u16 {
         .max(1)
         .min(terminal_width)
 }
-
 fn vertical_tab_index(row: u16, tab_count: usize) -> Option<usize> {
     (row as usize).checked_sub(1).filter(|idx| *idx < tab_count)
 }
-
 fn horizontal_tab_index(app: &App, column: u16, terminal_width: u16) -> Option<usize> {
     if column == 0 || column >= terminal_width.saturating_sub(1) {
         return None;
     }
-
     let inner_col = column.saturating_sub(1) as usize;
     let mut start = 0usize;
     for (idx, (icon, label)) in tab_defs_for_input(app).into_iter().enumerate() {
@@ -790,14 +873,13 @@ fn horizontal_tab_index(app: &App, column: u16, terminal_width: u16) -> Option<u
     }
     None
 }
-
 fn tab_defs_for_input(app: &App) -> Vec<(String, String)> {
     let mut defs: Vec<(String, String)> = app
         .main_tabs
         .iter()
         .map(|tab| (tab.icon.clone(), tab.title.clone()))
         .collect();
-    defs.extend(app.plugin_tabs.iter().map(|tab| {
+    defs.extend(app.plugin_ui.tabs.iter().map(|tab| {
         (
             tab.icon.clone().unwrap_or_else(|| "◌".to_owned()),
             tab.title.to_uppercase(),
@@ -805,32 +887,29 @@ fn tab_defs_for_input(app: &App) -> Vec<(String, String)> {
     }));
     defs
 }
-
 fn local_nav_back(app: &mut App) {
-    match app.local_nav_level {
+    match app.local.nav_level {
         LocalNavLevel::Artists => {}
         LocalNavLevel::Albums => {
-            app.local_nav_level = LocalNavLevel::Artists;
-            app.local_nav_artist = None;
-            app.local_nav_album = None;
-            app.selected_local_nav_idx = 0;
+            app.local.nav_level = LocalNavLevel::Artists;
+            app.local.nav_artist = None;
+            app.local.nav_album = None;
+            app.local.selected_nav_idx = 0;
         }
         LocalNavLevel::Songs => {
-            app.local_nav_level = LocalNavLevel::Albums;
-            app.local_nav_album = None;
-            app.selected_local_nav_idx = 0;
+            app.local.nav_level = LocalNavLevel::Albums;
+            app.local.nav_album = None;
+            app.local.selected_nav_idx = 0;
         }
     }
 }
-
 fn get_local_nav_len(app: &App) -> usize {
-    if app.active_tab == Tab::Local && app.local_view_mode == LocalViewMode::Organized {
+    if app.active_tab == Tab::Local && app.local.view_mode == LocalViewMode::Organized {
         ui_helpers::get_local_nav_items(app).len()
     } else {
         0
     }
 }
-
 fn toggle_search_source(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) {
     app.opt_source = match app.opt_source {
         SearchSource::YouTube => SearchSource::SoundCloud,
@@ -850,7 +929,6 @@ fn toggle_search_source(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) 
         2,
     );
 }
-
 fn context_menu_len(app: &App) -> usize {
     if app.active_tab == Tab::Library && app.focus == Focus::Results {
         2
@@ -858,16 +936,12 @@ fn context_menu_len(app: &App) -> usize {
         5
     }
 }
-
 fn selected_local_song_clone(app: &App) -> Option<crate::model::LocalSong> {
-    app.local_library_window
-        .get(
-            app.selected_local_song
-                .saturating_sub(app.local_library_offset),
-        )
+    app.local
+        .window
+        .get(app.local.selected_song.saturating_sub(app.local.offset))
         .cloned()
 }
-
 fn tag_value(song: &crate::model::LocalSong, field: LocalTagField) -> String {
     match field {
         LocalTagField::Title => song.title.clone(),
@@ -877,7 +951,6 @@ fn tag_value(song: &crate::model::LocalSong, field: LocalTagField) -> String {
         LocalTagField::Year => song.year.map(|y| y.to_string()).unwrap_or_default(),
     }
 }
-
 fn apply_tag_value(
     song: &mut crate::model::LocalSong,
     field: LocalTagField,
@@ -903,46 +976,43 @@ fn apply_tag_value(
     }
     Ok(())
 }
-
 fn open_tag_editor(app: &mut App) {
     if let Some(song) = selected_local_song_clone(app) {
-        app.local_tag_editor_field = LocalTagField::Title;
-        app.local_tag_edit_buffer = tag_value(&song, app.local_tag_editor_field);
-        app.local_tag_editor_song = Some(song);
-        app.local_tag_editor_open = true;
+        app.local.tag_editor_field = LocalTagField::Title;
+        app.local.tag_edit_buffer = tag_value(&song, app.local.tag_editor_field);
+        app.local.tag_editor_song = Some(song);
+        app.local.tag_editor_open = true;
         app.set_flash(
             "Editing local tags: Tab switches field, Enter saves field, Esc cancels",
             3,
         );
     }
 }
-
 fn cycle_tag_field(app: &mut App) {
-    if let Some(mut song) = app.local_tag_editor_song.take() {
+    if let Some(mut song) = app.local.tag_editor_song.take() {
         if let Err(err) = apply_tag_value(
             &mut song,
-            app.local_tag_editor_field,
-            app.local_tag_edit_buffer.clone(),
+            app.local.tag_editor_field,
+            app.local.tag_edit_buffer.clone(),
         ) {
             app.set_flash(err, 3);
         }
-        app.local_tag_editor_field = app.local_tag_editor_field.next();
-        app.local_tag_edit_buffer = tag_value(&song, app.local_tag_editor_field);
-        app.local_tag_editor_song = Some(song);
+        app.local.tag_editor_field = app.local.tag_editor_field.next();
+        app.local.tag_edit_buffer = tag_value(&song, app.local.tag_editor_field);
+        app.local.tag_editor_song = Some(song);
     }
 }
-
 fn save_tag_field_or_close(app: &mut App) {
-    let Some(mut song) = app.local_tag_editor_song.take() else {
+    let Some(mut song) = app.local.tag_editor_song.take() else {
         return;
     };
     if let Err(err) = apply_tag_value(
         &mut song,
-        app.local_tag_editor_field,
-        app.local_tag_edit_buffer.clone(),
+        app.local.tag_editor_field,
+        app.local.tag_edit_buffer.clone(),
     ) {
         app.set_flash(err, 3);
-        app.local_tag_editor_song = Some(song);
+        app.local.tag_editor_song = Some(song);
         return;
     }
     match crate::core::write_local_tags(&song)
@@ -950,27 +1020,25 @@ fn save_tag_field_or_close(app: &mut App) {
         .and_then(|_| app.storage.update_local_song(&song))
     {
         Ok(()) => {
-            app.local_tag_editor_open = false;
+            app.local.tag_editor_open = false;
             app.set_flash("Local tags saved", 3);
             ui_helpers::refresh_local_visible_window(app);
         }
         Err(err) => {
             app.set_flash(format!("Tag save failed: {err}"), 5);
-            app.local_tag_editor_song = Some(song);
+            app.local.tag_editor_song = Some(song);
         }
     }
 }
-
 fn clear_local_filters(app: &mut App) {
-    app.local_filter_genre = None;
-    app.local_filter_artist = None;
-    app.local_filter_album = None;
+    app.local.filter_genre = None;
+    app.local.filter_artist = None;
+    app.local.filter_album = None;
     ui_helpers::refresh_local_visible_window(app);
     app.set_flash("Local filters cleared", 2);
 }
-
 fn selected_local_filter_value(app: &App, kind: char) -> Option<String> {
-    if app.local_view_mode == LocalViewMode::Flat {
+    if app.local.view_mode == LocalViewMode::Flat {
         let song = selected_local_song_clone(app)?;
         return match kind {
             'g' => Some(song.genre),
@@ -979,19 +1047,18 @@ fn selected_local_filter_value(app: &App, kind: char) -> Option<String> {
             _ => None,
         };
     }
-
     match ui_helpers::get_local_nav_items(app) {
         ui_helpers::LocalNavItems::Artists(artists) => match kind {
-            'a' => artists.get(app.selected_local_nav_idx).cloned(),
+            'a' => artists.get(app.local.selected_nav_idx).cloned(),
             _ => None,
         },
         ui_helpers::LocalNavItems::Albums(albums) => match kind {
-            'a' => app.local_nav_artist.clone(),
-            'b' => albums.get(app.selected_local_nav_idx).cloned(),
+            'a' => app.local.nav_artist.clone(),
+            'b' => albums.get(app.local.selected_nav_idx).cloned(),
             _ => None,
         },
         ui_helpers::LocalNavItems::Songs(songs) => {
-            let song = songs.get(app.selected_local_nav_idx)?;
+            let song = songs.get(app.local.selected_nav_idx)?;
             match kind {
                 'g' => Some(song.genre.clone()),
                 'a' => Some(song.artist.clone()),
@@ -1001,13 +1068,12 @@ fn selected_local_filter_value(app: &App, kind: char) -> Option<String> {
         }
     }
 }
-
 fn set_filter_from_selected(app: &mut App, kind: char) {
     if let Some(value) = selected_local_filter_value(app, kind) {
         match kind {
-            'g' => app.local_filter_genre = Some(value),
-            'a' => app.local_filter_artist = Some(value),
-            'b' => app.local_filter_album = Some(value),
+            'g' => app.local.filter_genre = Some(value),
+            'a' => app.local.filter_artist = Some(value),
+            'b' => app.local.filter_album = Some(value),
             _ => {}
         }
         ui_helpers::refresh_local_visible_window(app);

@@ -1,8 +1,95 @@
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
-
+#[derive(Debug, Default)]
+pub struct SearchState {
+    pub query: String,
+    pub results: Vec<Song>,
+    pub selected_result: usize,
+}
+#[derive(Debug, Default)]
+pub struct AlbumState {
+    pub search_query: String,
+    pub results: Vec<Album>,
+    pub selected_result: usize,
+    pub expanded: Vec<bool>,
+}
+#[derive(Debug, Default)]
+pub struct PlaylistState {
+    pub playlists: Vec<Playlist>,
+    pub selected_playlist: usize,
+    pub context_open: bool,
+    pub context_index: usize,
+    pub expanded: Vec<bool>,
+    pub selected_song: usize,
+    pub confirm_delete: bool,
+    pub delete_name: String,
+    pub adding_song: bool,
+}
+#[derive(Debug, Default)]
+pub struct EqState {
+    pub enabled: bool,
+    pub bands: [f32; 10],
+    pub focus_band: usize,
+    pub preset_index: usize,
+    pub custom_presets: Vec<crate::config::EqPreset>,
+}
+#[derive(Debug, Default)]
+pub struct PluginUiState {
+    pub panels: Vec<PluginPanel>,
+    pub tabs: Vec<PluginTab>,
+    pub active_tab: Option<String>,
+    pub active_custom_tab: Option<String>,
+    pub warnings: std::collections::VecDeque<String>,
+    pub allow_lua_ui_changes: bool,
+    pub custom_sections: Vec<PluginCustomSection>,
+    pub hidden_sections: Vec<String>,
+    pub section_items: std::collections::HashMap<String, Vec<PluginPanelItem>>,
+    pub inject: PluginUiInject,
+}
+#[derive(Debug)]
+pub struct LocalLibraryState {
+    pub scanning: bool,
+    pub window: Vec<LocalSong>,
+    pub offset: usize,
+    pub total: usize,
+    pub view_mode: LocalViewMode,
+    pub sort_mode: LocalSortMode,
+    pub filter_genre: Option<String>,
+    pub filter_artist: Option<String>,
+    pub filter_album: Option<String>,
+    pub tag_editor_open: bool,
+    pub tag_editor_field: LocalTagField,
+    pub tag_editor_song: Option<LocalSong>,
+    pub tag_edit_buffer: String,
+    pub selected_song: usize,
+    pub nav_level: LocalNavLevel,
+    pub nav_artist: Option<String>,
+    pub nav_album: Option<String>,
+    pub selected_nav_idx: usize,
+}
+impl Default for LocalLibraryState {
+    fn default() -> Self {
+        Self {
+            scanning: false,
+            window: Vec::new(),
+            offset: 0,
+            total: 0,
+            view_mode: LocalViewMode::Flat,
+            sort_mode: LocalSortMode::Title,
+            filter_genre: None,
+            filter_artist: None,
+            filter_album: None,
+            tag_editor_open: false,
+            tag_editor_field: LocalTagField::Title,
+            tag_editor_song: None,
+            tag_edit_buffer: String::new(),
+            selected_song: 0,
+            nav_level: LocalNavLevel::Artists,
+            nav_artist: None,
+            nav_album: None,
+            selected_nav_idx: 0,
+        }
+    }
+}
+use std::time::{Duration, Instant};
 use crate::config::{
     Config, GeneralConfig, KeybindsConfig, LuaConfig, MpvConfig, SearchConfig, Theme,
 };
@@ -11,7 +98,6 @@ use crate::plugins::{
     PluginUiLayoutState,
 };
 use serde::{Deserialize, Serialize};
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Song {
     pub id: String,
@@ -22,20 +108,17 @@ pub struct Song {
     #[serde(default)]
     pub duration: Option<f64>,
 }
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Album {
     pub name: String,
     pub artist: String,
     pub songs: Vec<Song>,
 }
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Playlist {
     pub name: String,
     pub songs: Vec<Song>,
 }
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LocalSong {
     pub path: String,
@@ -51,13 +134,11 @@ pub struct LocalSong {
     #[serde(default)]
     pub added_at: u64,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub enum LocalViewMode {
     Flat,
     Organized,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalSortMode {
     Title,
@@ -66,7 +147,6 @@ pub enum LocalSortMode {
     Year,
     DateAdded,
 }
-
 impl LocalSortMode {
     pub fn next(self) -> Self {
         match self {
@@ -77,7 +157,6 @@ impl LocalSortMode {
             LocalSortMode::DateAdded => LocalSortMode::Title,
         }
     }
-
     pub fn label(self) -> &'static str {
         match self {
             LocalSortMode::Title => "title",
@@ -88,7 +167,6 @@ impl LocalSortMode {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalTagField {
     Title,
@@ -97,7 +175,6 @@ pub enum LocalTagField {
     Genre,
     Year,
 }
-
 impl LocalTagField {
     pub fn next(self) -> Self {
         match self {
@@ -108,7 +185,6 @@ impl LocalTagField {
             LocalTagField::Year => LocalTagField::Title,
         }
     }
-
     pub fn label(self) -> &'static str {
         match self {
             LocalTagField::Title => "title",
@@ -119,7 +195,6 @@ impl LocalTagField {
         }
     }
 }
-
 impl From<&LocalSong> for Song {
     fn from(ls: &LocalSong) -> Self {
         Self {
@@ -131,7 +206,6 @@ impl From<&LocalSong> for Song {
         }
     }
 }
-
 impl Song {
     pub fn subtitle(&self) -> String {
         let artist = self
@@ -145,7 +219,6 @@ impl Song {
         format!("{artist} • {duration}")
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
     Idle,
@@ -153,21 +226,18 @@ pub enum PlayerState {
     Playing,
     Paused,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum LocalNavLevel {
     Artists,
     Albums,
     Songs,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Search,
     Results,
     Queue,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Discover,
@@ -176,13 +246,11 @@ pub enum Tab {
     Local,
     Options,
 }
-
 #[derive(Debug, Clone)]
 pub enum MainTabKind {
     Stock(Tab),
     Custom(String),
 }
-
 #[derive(Debug, Clone)]
 pub struct MainTab {
     pub id: String,
@@ -190,7 +258,6 @@ pub struct MainTab {
     pub icon: String,
     pub kind: MainTabKind,
 }
-
 #[derive(Debug, Clone)]
 pub struct UiLayout {
     pub queue_width_percent: u16,
@@ -203,7 +270,6 @@ pub struct UiLayout {
     pub tabs_width: u16,
     pub queue_position: String,
 }
-
 impl Default for UiLayout {
     fn default() -> Self {
         Self {
@@ -219,54 +285,35 @@ impl Default for UiLayout {
         }
     }
 }
-
 pub fn default_main_tabs() -> Vec<MainTab> {
     vec![
-        MainTab {
-            id: "discover".to_owned(),
-            title: "DISCOVER".to_owned(),
-            icon: "♫".to_owned(),
-            kind: MainTabKind::Stock(Tab::Discover),
-        },
-        MainTab {
-            id: "albums".to_owned(),
-            title: "ALBUMS".to_owned(),
-            icon: "◈".to_owned(),
-            kind: MainTabKind::Stock(Tab::Albums),
-        },
-        MainTab {
-            id: "library".to_owned(),
-            title: "LIBRARY".to_owned(),
-            icon: "◉".to_owned(),
-            kind: MainTabKind::Stock(Tab::Library),
-        },
-        MainTab {
-            id: "local".to_owned(),
-            title: "LOCAL".to_owned(),
-            icon: "🗀".to_owned(),
-            kind: MainTabKind::Stock(Tab::Local),
-        },
-        MainTab {
-            id: "options".to_owned(),
-            title: "OPTIONS".to_owned(),
-            icon: "⚙".to_owned(),
-            kind: MainTabKind::Stock(Tab::Options),
-        },
+        MainTab { id : "discover".to_owned(), title : "DISCOVER".to_owned(), icon : "♫"
+        .to_owned(), kind : MainTabKind::Stock(Tab::Discover), }, MainTab { id : "albums"
+        .to_owned(), title : "ALBUMS".to_owned(), icon : "◈".to_owned(), kind :
+        MainTabKind::Stock(Tab::Albums), }, MainTab { id : "library".to_owned(), title :
+        "LIBRARY".to_owned(), icon : "◉".to_owned(), kind :
+        MainTabKind::Stock(Tab::Library), }, MainTab { id : "local".to_owned(), title :
+        "LOCAL".to_owned(), icon : "🗀".to_owned(), kind :
+        MainTabKind::Stock(Tab::Local), }, MainTab { id : "options".to_owned(), title :
+        "OPTIONS".to_owned(), icon : "⚙".to_owned(), kind :
+        MainTabKind::Stock(Tab::Options), },
     ]
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepeatMode {
     Off,
     One,
     All,
 }
-
-pub const EQ_PRESET_NAMES: [&str; 5] =
-    ["Flat", "Bass Boost", "Vocal Boost", "Treble Boost", "Night"];
-
+pub const EQ_PRESET_NAMES: [&str; 5] = [
+    "Flat",
+    "Bass Boost",
+    "Vocal Boost",
+    "Treble Boost",
+    "Night",
+];
 pub fn eq_preset_bands(app: &App, index: usize) -> [f32; 10] {
-    let total = EQ_PRESET_NAMES.len() + app.custom_eq_presets.len();
+    let total = EQ_PRESET_NAMES.len() + app.eq.custom_presets.len();
     let idx = index % total;
     if idx < EQ_PRESET_NAMES.len() {
         match idx {
@@ -277,22 +324,18 @@ pub fn eq_preset_bands(app: &App, index: usize) -> [f32; 10] {
             _ => [3.0, 2.0, 1.0, 0.0, -1.0, -2.0, -2.0, -2.0, -3.0, -3.0],
         }
     } else {
-        app.custom_eq_presets[idx - EQ_PRESET_NAMES.len()].bands
+        app.eq.custom_presets[idx - EQ_PRESET_NAMES.len()].bands
     }
 }
-
 pub fn eq_preset_name(app: &App, index: usize) -> String {
-    let total = EQ_PRESET_NAMES.len() + app.custom_eq_presets.len();
+    let total = EQ_PRESET_NAMES.len() + app.eq.custom_presets.len();
     let idx = index % total;
     if idx < EQ_PRESET_NAMES.len() {
         EQ_PRESET_NAMES[idx].to_string()
     } else {
-        app.custom_eq_presets[idx - EQ_PRESET_NAMES.len()]
-            .name
-            .clone()
+        app.eq.custom_presets[idx - EQ_PRESET_NAMES.len()].name.clone()
     }
 }
-
 impl RepeatMode {
     pub fn next(self) -> Self {
         match self {
@@ -301,7 +344,6 @@ impl RepeatMode {
             RepeatMode::All => RepeatMode::Off,
         }
     }
-
     pub fn label(self) -> &'static str {
         match self {
             RepeatMode::Off => "OFF",
@@ -310,24 +352,18 @@ impl RepeatMode {
         }
     }
 }
-
 #[derive(Debug)]
 pub struct App {
+    pub fft_state: Option<std::sync::Arc<std::sync::Mutex<crate::fft::FftState>>>,
+    pub show_fft: bool,
     pub player_state: PlayerState,
     pub focus: Focus,
     pub search_mode: bool,
-    pub search_query: String,
-    pub search_results: Vec<Song>,
-    pub selected_result: usize,
-    pub album_search_query: String,
-    pub album_results: Vec<Album>,
-    pub selected_album_result: usize,
-    pub album_expanded: Vec<bool>,
-    pub queue: VecDeque<Song>,
+    pub queue: std::collections::VecDeque<Song>,
     pub selected_queue: usize,
     pub current_song: Option<Song>,
     pub flash_message: String,
-    pub flash_until: Instant,
+    pub flash_until: std::time::Instant,
     pub volume: u8,
     pub muted: bool,
     pub playback_pos: f64,
@@ -335,12 +371,6 @@ pub struct App {
     pub repeat_mode: RepeatMode,
     pub theme: Theme,
     pub active_tab: Tab,
-    pub playlists: Vec<Playlist>,
-    pub selected_playlist: usize,
-    pub context_open: bool,
-    pub context_index: usize,
-    pub playlist_expanded: Vec<bool>,
-    pub selected_playlist_song: usize,
     pub options_index: usize,
     pub opt_search_limit: u8,
     pub opt_source: crate::config::SearchSource,
@@ -353,74 +383,41 @@ pub struct App {
     pub opt_music_dirs: Vec<String>,
     pub opt_editing: bool,
     pub opt_edit_buffer: String,
-    pub key_next: char,
-    pub key_prev: char,
-    pub key_mute: char,
-    pub key_repeat: char,
-    pub key_shuffle: char,
-    pub key_seek_back: char,
-    pub key_seek_forward: char,
+    pub key_next: String,
+    pub key_prev: String,
+    pub key_mute: String,
+    pub key_repeat: String,
+    pub key_shuffle: String,
+    pub key_seek_back: String,
+    pub key_seek_forward: String,
+    pub key_fft_toggle: String,
+    pub key_sequence: String,
+    pub key_sequence_started: Option<Instant>,
     pub anim_tick: u64,
-    pub confirm_delete_playlist: bool,
-    pub delete_playlist_name: String,
-    pub eq_enabled: bool,
-    pub eq_bands: [f32; 10],
-    pub eq_focus_band: usize,
-    pub eq_preset_index: usize,
-    pub custom_eq_presets: Vec<crate::config::EqPreset>,
-    pub recently_played: VecDeque<Song>,
-    pub scanning: bool,
-    pub local_library_window: Vec<LocalSong>,
-    pub local_library_offset: usize,
-    pub local_library_total: usize,
-    pub local_view_mode: LocalViewMode,
-    pub local_sort_mode: LocalSortMode,
-    pub local_filter_genre: Option<String>,
-    pub local_filter_artist: Option<String>,
-    pub local_filter_album: Option<String>,
-    pub local_tag_editor_open: bool,
-    pub local_tag_editor_field: LocalTagField,
-    pub local_tag_editor_song: Option<LocalSong>,
-    pub local_tag_edit_buffer: String,
-    pub selected_local_song: usize,
-    pub local_nav_level: LocalNavLevel,
-    pub local_nav_artist: Option<String>,
-    pub local_nav_album: Option<String>,
-    pub selected_local_nav_idx: usize,
-    pub adding_song_to_playlist: bool,
-    pub plugin_panels: Vec<PluginPanel>,
-    pub plugin_tabs: Vec<PluginTab>,
-    pub active_plugin_tab: Option<String>,
-    pub active_custom_tab: Option<String>,
-    pub plugin_warnings: VecDeque<String>,
-    pub allow_lua_ui_changes: bool,
+    pub recently_played: std::collections::VecDeque<Song>,
     pub main_tabs: Vec<MainTab>,
     pub ui_layout: UiLayout,
-    pub custom_sections: Vec<PluginCustomSection>,
-    pub hidden_sections: Vec<String>,
-    pub ui_section_items: std::collections::HashMap<String, Vec<PluginPanelItem>>,
-    pub ui_inject: PluginUiInject,
     pub storage: crate::storage::Storage,
+    pub search: SearchState,
+    pub albums: AlbumState,
+    pub playlists: PlaylistState,
+    pub eq: EqState,
+    pub plugin_ui: PluginUiState,
+    pub local: LocalLibraryState,
 }
-
 impl App {
     pub fn new(storage: crate::storage::Storage) -> Self {
         Self {
+            fft_state: None,
+            show_fft: false,
             player_state: PlayerState::Idle,
             focus: Focus::Results,
             search_mode: false,
-            search_query: String::new(),
-            search_results: Vec::new(),
-            selected_result: 0,
-            album_search_query: String::new(),
-            album_results: Vec::new(),
-            selected_album_result: 0,
-            album_expanded: Vec::new(),
-            queue: VecDeque::new(),
+            queue: std::collections::VecDeque::new(),
             selected_queue: 0,
             current_song: None,
             flash_message: "Press / to search YouTube".to_owned(),
-            flash_until: Instant::now() + Duration::from_secs(4),
+            flash_until: std::time::Instant::now() + std::time::Duration::from_secs(4),
             volume: 70,
             muted: false,
             playback_pos: 0.0,
@@ -428,12 +425,6 @@ impl App {
             repeat_mode: RepeatMode::Off,
             theme: Theme::Dark,
             active_tab: Tab::Discover,
-            playlists: Vec::new(),
-            selected_playlist: 0,
-            context_open: false,
-            context_index: 0,
-            playlist_expanded: Vec::new(),
-            selected_playlist_song: 0,
             options_index: 0,
             opt_search_limit: 20,
             opt_source: crate::config::SearchSource::YouTube,
@@ -442,109 +433,75 @@ impl App {
             opt_mpris_enabled: true,
             opt_mpris_command: None,
             opt_plugins_enabled: true,
-            opt_plugins_dir: GeneralConfig::default().plugins_dir,
+            opt_plugins_dir: crate::config::GeneralConfig::default().plugins_dir,
             opt_music_dirs: Vec::new(),
             opt_editing: false,
             opt_edit_buffer: String::new(),
-            key_next: 'n',
-            key_prev: 'p',
-            key_mute: 'm',
-            key_repeat: 'r',
-            key_shuffle: 'z',
-            key_seek_back: '[',
-            key_seek_forward: ']',
+            key_next: "n".to_string(),
+            key_prev: "p".to_string(),
+            key_mute: "m".to_string(),
+            key_repeat: "r".to_string(),
+            key_shuffle: "z".to_string(),
+            key_seek_back: "[".to_string(),
+            key_seek_forward: "]".to_string(),
+            key_fft_toggle: "C-v".to_string(),
+            key_sequence: String::new(),
+            key_sequence_started: None,
             anim_tick: 0,
-            confirm_delete_playlist: false,
-            delete_playlist_name: String::new(),
-            eq_enabled: false,
-            eq_bands: [0.0f32; 10],
-            eq_focus_band: 0,
-            eq_preset_index: 0,
-            custom_eq_presets: Vec::new(),
-            recently_played: VecDeque::new(),
-            scanning: false,
-            local_library_window: Vec::new(),
-            local_library_offset: 0,
-            local_library_total: 0,
-            local_view_mode: LocalViewMode::Flat,
-            local_sort_mode: LocalSortMode::Title,
-            local_filter_genre: None,
-            local_filter_artist: None,
-            local_filter_album: None,
-            local_tag_editor_open: false,
-            local_tag_editor_field: LocalTagField::Title,
-            local_tag_editor_song: None,
-            local_tag_edit_buffer: String::new(),
-            selected_local_song: 0,
-            local_nav_level: LocalNavLevel::Artists,
-            local_nav_artist: None,
-            local_nav_album: None,
-            selected_local_nav_idx: 0,
-            adding_song_to_playlist: false,
-            plugin_panels: Vec::new(),
-            plugin_tabs: Vec::new(),
-            active_plugin_tab: None,
-            active_custom_tab: None,
-            plugin_warnings: VecDeque::new(),
-            allow_lua_ui_changes: false,
+            recently_played: std::collections::VecDeque::new(),
             main_tabs: default_main_tabs(),
             ui_layout: UiLayout::default(),
-            custom_sections: Vec::new(),
-            hidden_sections: Vec::new(),
-            ui_section_items: std::collections::HashMap::new(),
-            ui_inject: PluginUiInject::default(),
             storage,
+            search: SearchState::default(),
+            albums: AlbumState::default(),
+            playlists: PlaylistState::default(),
+            eq: EqState::default(),
+            plugin_ui: PluginUiState::default(),
+            local: LocalLibraryState::default(),
         }
     }
-
     pub fn set_flash(&mut self, msg: impl Into<String>, seconds: u64) {
         self.flash_message = msg.into();
         self.flash_until = Instant::now() + Duration::from_secs(seconds);
     }
-
     pub fn push_plugin_warning(&mut self, warning: String) {
-        if self.plugin_warnings.back() == Some(&warning) {
+        if self.plugin_ui.warnings.back() == Some(&warning) {
             return;
         }
-        if self.plugin_warnings.len() >= 20 {
-            self.plugin_warnings.pop_front();
+        if self.plugin_ui.warnings.len() >= 20 {
+            self.plugin_ui.warnings.pop_front();
         }
-        self.plugin_warnings.push_back(warning);
+        self.plugin_ui.warnings.push_back(warning);
     }
-
     pub fn shown_message(&self) -> &str {
-        if Instant::now() <= self.flash_until {
-            &self.flash_message
-        } else {
-            ""
-        }
+        if Instant::now() <= self.flash_until { &self.flash_message } else { "" }
     }
-
     pub fn current_selection(&self) -> Option<&Song> {
-        self.search_results.get(self.selected_result)
+        self.search.results.get(self.search.selected_result)
     }
-
     pub fn queue_selection(&self) -> Option<&Song> {
         self.queue.get(self.selected_queue)
     }
-
     pub fn selected_song_for_context(&self) -> Option<Song> {
         match self.active_tab {
-            Tab::Discover => match self.focus {
-                Focus::Results => self.current_selection().cloned(),
-                Focus::Queue => self.queue_selection().cloned(),
-                Focus::Search => None,
-            },
+            Tab::Discover => {
+                match self.focus {
+                    Focus::Results => self.current_selection().cloned(),
+                    Focus::Queue => self.queue_selection().cloned(),
+                    Focus::Search => None,
+                }
+            }
             Tab::Albums => {
                 let mut current_flat_idx = 0;
-                for (i, album) in self.album_results.iter().enumerate() {
-                    let expanded = self.album_expanded.get(i).copied().unwrap_or(false);
+                for (i, album) in self.albums.results.iter().enumerate() {
+                    let expanded = self.albums.expanded.get(i).copied().unwrap_or(false);
                     let album_size = 1 + if expanded { album.songs.len() } else { 0 };
-                    if self.selected_album_result < current_flat_idx + album_size {
-                        if self.selected_album_result == current_flat_idx {
+                    if self.albums.selected_result < current_flat_idx + album_size {
+                        if self.albums.selected_result == current_flat_idx {
                             return None;
                         } else {
-                            let song_idx = self.selected_album_result - current_flat_idx - 1;
+                            let song_idx = self.albums.selected_result - current_flat_idx
+                                - 1;
                             return album.songs.get(song_idx).cloned();
                         }
                     }
@@ -552,24 +509,28 @@ impl App {
                 }
                 None
             }
-            Tab::Library => self
-                .playlists
-                .get(self.selected_playlist)
-                .and_then(|p| p.songs.get(self.selected_playlist_song).cloned()),
-            Tab::Local => match self.focus {
-                Focus::Results => {
-                    let relative_idx = self
-                        .selected_local_song
-                        .saturating_sub(self.local_library_offset);
-                    self.local_library_window.get(relative_idx).map(Song::from)
+            Tab::Library => {
+                self.playlists
+                    .playlists
+                    .get(self.playlists.selected_playlist)
+                    .and_then(|p| p.songs.get(self.playlists.selected_song).cloned())
+            }
+            Tab::Local => {
+                match self.focus {
+                    Focus::Results => {
+                        let relative_idx = self
+                            .local
+                            .selected_song
+                            .saturating_sub(self.local.offset);
+                        self.local.window.get(relative_idx).map(Song::from)
+                    }
+                    Focus::Queue => self.queue_selection().cloned(),
+                    Focus::Search => None,
                 }
-                Focus::Queue => self.queue_selection().cloned(),
-                Focus::Search => None,
-            },
+            }
             Tab::Options => None,
         }
     }
-
     pub fn apply_config(&mut self, cfg: &Config) {
         self.opt_search_limit = cfg.search.limit.max(1);
         self.opt_source = cfg.search.source;
@@ -581,10 +542,9 @@ impl App {
         self.opt_plugins_dir = cfg.general.plugins_dir.clone();
         self.opt_music_dirs = cfg.general.music_directories.clone();
         self.theme = cfg.general.theme.clone();
-        self.allow_lua_ui_changes = cfg.lua.allow_lua_ui_changes;
+        self.plugin_ui.allow_lua_ui_changes = cfg.lua.allow_lua_ui_changes;
         self.apply_keybinds(&cfg.keybinds);
     }
-
     pub fn build_config(&self) -> Config {
         Config {
             general: GeneralConfig {
@@ -594,6 +554,7 @@ impl App {
                 plugins_enabled: self.opt_plugins_enabled,
                 plugins_dir: self.opt_plugins_dir.clone(),
                 music_directories: self.opt_music_dirs.clone(),
+                fft_visualizer_default: self.show_fft,
             },
             search: SearchConfig {
                 limit: self.opt_search_limit.max(1),
@@ -603,20 +564,20 @@ impl App {
                 socket: self.opt_socket.clone(),
             },
             keybinds: KeybindsConfig {
-                next: self.key_next,
-                prev: self.key_prev,
-                mute: self.key_mute,
-                repeat: self.key_repeat,
-                shuffle: self.key_shuffle,
-                seek_back: self.key_seek_back,
-                seek_forward: self.key_seek_forward,
+                next: self.key_next.clone(),
+                prev: self.key_prev.clone(),
+                mute: self.key_mute.clone(),
+                repeat: self.key_repeat.clone(),
+                shuffle: self.key_shuffle.clone(),
+                seek_back: self.key_seek_back.clone(),
+                seek_forward: self.key_seek_forward.clone(),
+                fft_toggle: self.key_fft_toggle.clone(),
             },
             lua: LuaConfig {
-                allow_lua_ui_changes: self.allow_lua_ui_changes,
+                allow_lua_ui_changes: self.plugin_ui.allow_lua_ui_changes,
             },
         }
     }
-
     pub fn current_layout_state(&self) -> PluginUiLayoutState {
         PluginUiLayoutState {
             queue_width_percent: self.ui_layout.queue_width_percent,
@@ -626,37 +587,39 @@ impl App {
             queue_position: self.ui_layout.queue_position.clone(),
         }
     }
-
     pub fn visible_section_ids(&self) -> Vec<String> {
-        self.custom_sections
+        self.plugin_ui
+            .custom_sections
             .iter()
-            .filter(|s| !self.hidden_sections.iter().any(|id| id == &s.id))
+            .filter(|s| !self.plugin_ui.hidden_sections.iter().any(|id| id == &s.id))
             .map(|s| s.id.clone())
             .collect()
     }
-
     pub fn active_tab_index(&self) -> usize {
         self.main_tabs
             .iter()
             .position(|tab| match &tab.kind {
-                MainTabKind::Stock(t) => self.active_custom_tab.is_none() && *t == self.active_tab,
-                MainTabKind::Custom(id) => self.active_custom_tab.as_ref() == Some(id),
+                MainTabKind::Stock(t) => {
+                    self.plugin_ui.active_custom_tab.is_none() && *t == self.active_tab
+                }
+                MainTabKind::Custom(id) => {
+                    self.plugin_ui.active_custom_tab.as_ref() == Some(id)
+                }
             })
             .map(|i| i + 1)
             .unwrap_or(1)
     }
-
     fn apply_keybinds(&mut self, keybinds: &KeybindsConfig) {
-        self.key_next = keybinds.next;
-        self.key_prev = keybinds.prev;
-        self.key_mute = keybinds.mute;
-        self.key_repeat = keybinds.repeat;
-        self.key_shuffle = keybinds.shuffle;
-        self.key_seek_back = keybinds.seek_back;
-        self.key_seek_forward = keybinds.seek_forward;
+        self.key_next = keybinds.next.clone();
+        self.key_prev = keybinds.prev.clone();
+        self.key_mute = keybinds.mute.clone();
+        self.key_repeat = keybinds.repeat.clone();
+        self.key_shuffle = keybinds.shuffle.clone();
+        self.key_seek_back = keybinds.seek_back.clone();
+        self.key_seek_forward = keybinds.seek_forward.clone();
+        self.key_fft_toggle = keybinds.fft_toggle.clone();
     }
 }
-
 fn format_duration(seconds: f64) -> String {
     let secs = seconds.round() as u64;
     let m = secs / 60;

@@ -1,72 +1,79 @@
-/* WARNING: Adding a function here is like playing Jenga with a live grenade. Change at your own risk. */
-use ratatui::{
-    prelude::*,
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Tabs},
-};
-
 use crate::{
     config::{Palette, Theme},
     model::{eq_preset_name, App, Focus, PlayerState, RepeatMode, Song, Tab},
     plugins::PluginPanelItem,
     utils::natural_compare,
 };
-
+use ratatui::{
+    prelude::*,
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Tabs},
+};
 fn palette(theme: &Theme) -> Palette {
     crate::config::load_palette(theme)
 }
-
 fn search_source_label(source: &crate::config::SearchSource) -> String {
     match source {
         crate::config::SearchSource::YouTube => "YouTube".to_string(),
         crate::config::SearchSource::SoundCloud => "SoundCloud".to_string(),
     }
 }
-
 const VOLT_BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-
 fn spectrum_spans(app: &App, pal: &Palette, width: usize) -> Vec<Span<'static>> {
     if width == 0 {
         return vec![];
     }
-
     let playing = app.player_state == PlayerState::Playing;
     let vol_factor = (app.volume as f32 / 100.0).clamp(0.2, 1.0);
     let tick = app.anim_tick as f64;
     let colors = pal.spectrum_colors();
-
+    let fft_data = if app.show_fft {
+        app.fft_state.as_ref().and_then(|s| {
+            if let Ok(state) = s.lock() {
+                if state.running {
+                    Some(state.bands.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
     (0..width)
         .map(|col| {
-            let c = col as f64;
-
-            let wave1 = (c * 0.1 + tick * 0.02).sin() * 0.3;
-
-            let wave2 = (c * 0.4 + tick * 0.08).sin() * 0.2;
-
-            let wave3 = (c * 1.2 + tick * 0.2).sin() * 0.1;
-
-            let combined = (wave1 + wave2 + wave3 + 1.0) / 2.0;
-
-            let level = if playing {
-                (combined * 6.0 * vol_factor as f64).clamp(1.0, 7.0) as usize
+            let level = if let Some(ref bands) = fft_data {
+                let band_idx = (col * bands.len() / width).min(bands.len().saturating_sub(1));
+                let val = bands[band_idx] * 7.0;
+                val.clamp(0.0, 7.0) as usize
             } else {
-                (combined * 2.0 * 0.3).clamp(0.0, 3.0) as usize
+                let c = col as f64;
+                let wave1 = (c * 0.1 + tick * 0.02).sin() * 0.3;
+                let wave2 = (c * 0.4 + tick * 0.08).sin() * 0.2;
+                let wave3 = (c * 1.2 + tick * 0.2).sin() * 0.1;
+                let combined = (wave1 + wave2 + wave3 + 1.0) / 2.0;
+                if playing {
+                    (combined * 6.0 * vol_factor as f64).clamp(1.0, 7.0) as usize
+                } else {
+                    (combined * 2.0 * 0.3).clamp(0.0, 3.0) as usize
+                }
             };
-
             let nc = colors.len();
             let idx = (col * nc / width + tick as usize / 15) % nc;
-
-            Span::styled(VOLT_BLOCKS[level], Style::default().fg(colors[idx]))
+            Span::styled(
+                VOLT_BLOCKS[level.clamp(0, 7)],
+                Style::default().fg(colors[idx]),
+            )
         })
         .collect()
 }
-
 pub fn draw(frame: &mut Frame, app: &App) {
     let pal = palette(&app.theme);
     let anim = pal.get_color("primary");
     let anim2 = pal.get_color("accent2");
     let size = frame.size();
-
     let tab_position = app.ui_layout.tab_bar_position.as_str();
     let tabs_width = app
         .ui_layout
@@ -94,13 +101,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
             (rows[1], rows[0], false)
         }
     };
-
     if vertical_tabs {
         draw_tabs_vertical(frame, app, &pal, anim, tab_area);
     } else {
         draw_tabs(frame, app, &pal, anim, anim2, tab_area);
     }
-
     let above_height = custom_sections_height(app, "above_player");
     let below_height = custom_sections_height(app, "below_player");
     let mut constraints = Vec::new();
@@ -123,7 +128,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     let vertical = Layout::vertical(constraints).split(main_area);
     let mut row = 0;
-
     draw_search(frame, app, &pal, vertical[row]);
     row += 1;
     if above_height > 0 {
@@ -151,35 +155,40 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     draw_overlays(frame, app, &pal, anim, size);
 }
-
 fn custom_sections_height(app: &App, position: &str) -> u16 {
-    if !app.allow_lua_ui_changes {
+    if !app.plugin_ui.allow_lua_ui_changes {
         return 0;
     }
-    app.custom_sections
+    app.plugin_ui
+        .custom_sections
         .iter()
         .filter(|section| {
-            section.position == position && !app.hidden_sections.iter().any(|id| id == &section.id)
+            section.position == position
+                && !app
+                    .plugin_ui
+                    .hidden_sections
+                    .iter()
+                    .any(|id| id == &section.id)
         })
         .map(|section| section.height.unwrap_or(3))
         .max()
         .unwrap_or(0)
 }
-
 fn tab_defs_and_active(app: &App) -> (Vec<(String, String)>, usize) {
     let mut defs: Vec<(String, String)> = app
         .main_tabs
         .iter()
         .map(|tab| (tab.icon.clone(), tab.title.clone()))
         .collect();
-    for t in &app.plugin_tabs {
+    for t in &app.plugin_ui.tabs {
         defs.push((
             t.icon.clone().unwrap_or_else(|| "◌".to_string()),
             t.title.to_uppercase(),
         ));
     }
-    let active = if let Some(active_id) = &app.active_plugin_tab {
-        app.plugin_tabs
+    let active = if let Some(active_id) = &app.plugin_ui.active_tab {
+        app.plugin_ui
+            .tabs
             .iter()
             .position(|t| &t.id == active_id)
             .map(|i| i + app.main_tabs.len())
@@ -189,10 +198,8 @@ fn tab_defs_and_active(app: &App) -> (Vec<(String, String)>, usize) {
     };
     (defs, active)
 }
-
 fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: Color, area: Rect) {
     let (defs, active) = tab_defs_and_active(app);
-
     let tab_lines: Vec<Line> = defs
         .iter()
         .enumerate()
@@ -221,13 +228,12 @@ fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: C
             }
         })
         .collect();
-
     let tabs = Tabs::new(tab_lines)
         .select(active)
         .block(
             Block::default()
                 .title(Span::styled(
-                    " ♪  R S - P U G  ♪ ",
+                    "   R S - P U G   ",
                     Style::default().fg(anim).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
@@ -236,10 +242,8 @@ fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: C
         .style(Style::default().fg(pal.get_color("muted")))
         .highlight_style(Style::default().fg(anim).add_modifier(Modifier::BOLD))
         .divider(Span::styled("│", Style::default().fg(pal.get_color("dim"))));
-
     frame.render_widget(tabs, area);
 }
-
 fn draw_tabs_vertical(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let (defs, active) = tab_defs_and_active(app);
     let items: Vec<ListItem> = defs
@@ -280,7 +284,6 @@ fn draw_tabs_vertical(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             }
         })
         .collect();
-
     let list = List::new(items).block(
         Block::default()
             .title(Span::styled(
@@ -292,14 +295,12 @@ fn draw_tabs_vertical(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
     );
     frame.render_widget(list, area);
 }
-
 fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     let active_query = if app.active_tab == Tab::Albums {
-        app.album_search_query.as_str()
+        app.albums.search_query.as_str()
     } else {
-        app.search_query.as_str()
+        app.search.query.as_str()
     };
-
     let (border_color, title_str) = if app.search_mode {
         (
             pal.get_color("info"),
@@ -315,7 +316,6 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
             },
         )
     };
-
     let content = if active_query.is_empty() && !app.search_mode {
         let prompt = if app.active_tab == Tab::Local {
             "search local files...".to_string()
@@ -340,7 +340,6 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
             ),
         ])
     };
-
     let widget = Paragraph::new(content).block(
         Block::default()
             .title(Span::styled(
@@ -354,7 +353,6 @@ fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     );
     frame.render_widget(widget, area);
 }
-
 fn panel_item_line(item: &PluginPanelItem, pal: &Palette) -> Line<'static> {
     match item {
         PluginPanelItem::Text { text } => Line::from(Span::styled(
@@ -418,7 +416,6 @@ fn panel_item_line(item: &PluginPanelItem, pal: &Palette) -> Line<'static> {
         }
     }
 }
-
 fn plugin_panel_lines(panel: &crate::plugins::PluginPanel, pal: &Palette) -> Vec<Line<'static>> {
     if !panel.items.is_empty() {
         panel
@@ -439,7 +436,6 @@ fn plugin_panel_lines(panel: &crate::plugins::PluginPanel, pal: &Palette) -> Vec
             .collect()
     }
 }
-
 fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let queue = app.ui_layout.queue_width_percent.clamp(10, 90);
     let queue_width = Constraint::Ratio(queue as u32, 100);
@@ -450,7 +446,6 @@ fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: 
         [results_width, queue_width]
     };
     let cols = Layout::horizontal(split).split(area);
-
     if app.ui_layout.queue_position == "left" {
         draw_queue_panel(frame, app, pal, anim, cols[0]);
         draw_results_panel(frame, app, pal, anim, cols[1]);
@@ -459,15 +454,14 @@ fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: 
         draw_queue_panel(frame, app, pal, anim, cols[1]);
     }
 }
-
 fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let focused = app.focus == Focus::Results;
-
-    let mut items: Vec<ListItem> = if app.active_plugin_tab.is_some()
-        || app.active_custom_tab.is_some()
+    let mut items: Vec<ListItem> = if app.plugin_ui.active_tab.is_some()
+        || app.plugin_ui.active_custom_tab.is_some()
     {
         let plugin_items: Vec<ListItem> = app
-            .plugin_panels
+            .plugin_ui
+            .panels
             .iter()
             .filter(|p| {
                 matches!(
@@ -494,11 +488,11 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             plugin_items
         }
     } else if app.active_tab == Tab::Options {
-        let eq_label = if app.eq_enabled {
+        let eq_label = if app.eq.enabled {
             format!(
                 "Equalizer      ON  ·  band {}/10  ·  {:.0} dB",
-                app.eq_focus_band + 1,
-                app.eq_bands[app.eq_focus_band]
+                app.eq.focus_band + 1,
+                app.eq.bands[app.eq.focus_band]
             )
         } else {
             "Equalizer      OFF  (Enter to enable)".to_owned()
@@ -538,7 +532,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 } else {
                     format!(
                         "EQ preset      {}",
-                        eq_preset_name(app, app.eq_preset_index)
+                        eq_preset_name(app, app.eq.preset_index)
                     )
                 },
             ),
@@ -573,11 +567,12 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             .collect()
     } else if app.active_tab == Tab::Library {
         app.playlists
+            .playlists
             .iter()
             .enumerate()
             .flat_map(|(idx, p)| {
-                let is_sel = idx == app.selected_playlist;
-                let open = app.playlist_expanded.get(idx).copied().unwrap_or(false);
+                let is_sel = idx == app.playlists.selected_playlist;
+                let open = app.playlists.expanded.get(idx).copied().unwrap_or(false);
                 let arrow = if open { "▾" } else { "▸" };
                 let mut items = vec![if is_sel {
                     ListItem::new(Line::from(vec![
@@ -629,12 +624,13 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             .collect()
     } else if app.active_tab == Tab::Albums {
         let mut current_flat_idx = 0;
-        app.album_results
+        app.albums
+            .results
             .iter()
             .enumerate()
             .flat_map(|(idx, album)| {
-                let is_album_sel = current_flat_idx == app.selected_album_result;
-                let open = app.album_expanded.get(idx).copied().unwrap_or(false);
+                let is_album_sel = current_flat_idx == app.albums.selected_result;
+                let open = app.albums.expanded.get(idx).copied().unwrap_or(false);
                 let arrow = if open { "▾" } else { "▸" };
                 let mut items = vec![if is_album_sel {
                     ListItem::new(Line::from(vec![
@@ -673,7 +669,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 current_flat_idx += 1;
                 if open {
                     items.extend(album.songs.iter().enumerate().map(|(_s_idx, song)| {
-                        let is_song_sel = current_flat_idx == app.selected_album_result;
+                        let is_song_sel = current_flat_idx == app.albums.selected_result;
                         current_flat_idx += 1;
                         ListItem::new(Line::from(vec![
                             if is_song_sel {
@@ -699,10 +695,10 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             })
             .collect()
     } else if app.active_tab == Tab::Local {
-        if app.local_view_mode == crate::model::LocalViewMode::Flat {
+        if app.local.view_mode == crate::model::LocalViewMode::Flat {
             build_local_song_list(
-                &app.local_library_window,
-                app.selected_local_song,
+                &app.local.window,
+                app.local.selected_song,
                 focused,
                 pal,
                 anim,
@@ -712,12 +708,18 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             list
         }
     } else {
-        build_song_list(&app.search_results, app.selected_result, focused, pal, anim)
+        build_song_list(
+            &app.search.results,
+            app.search.selected_result,
+            focused,
+            pal,
+            anim,
+        )
     };
-
-    if app.allow_lua_ui_changes {
+    if app.plugin_ui.allow_lua_ui_changes {
         let mut top: Vec<ListItem> = app
-            .ui_inject
+            .plugin_ui
+            .inject
             .results_top
             .iter()
             .map(|item| ListItem::new(panel_item_line(item, pal)))
@@ -727,14 +729,14 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             items = top;
         }
         items.extend(
-            app.ui_inject
+            app.plugin_ui
+                .inject
                 .results_bottom
                 .iter()
                 .map(|item| ListItem::new(panel_item_line(item, pal))),
         );
     }
-
-    let custom_title = app.active_custom_tab.as_ref().and_then(|id| {
+    let custom_title = app.plugin_ui.active_custom_tab.as_ref().and_then(|id| {
         app.main_tabs
             .iter()
             .find(|tab| &tab.id == id)
@@ -748,8 +750,8 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             Tab::Albums => " ◈  ALBUM RESULTS ".to_owned(),
             Tab::Library => " ◉  PLAYLISTS ".to_owned(),
             Tab::Options => {
-                if let Some(active_id) = &app.active_plugin_tab {
-                    if let Some(tab) = app.plugin_tabs.iter().find(|t| &t.id == active_id) {
+                if let Some(active_id) = &app.plugin_ui.active_tab {
+                    if let Some(tab) = app.plugin_ui.tabs.iter().find(|t| &t.id == active_id) {
                         let icon = tab.icon.as_deref().unwrap_or("◌");
                         format!(" ⚙  SETTINGS — {} {} ", icon, tab.title.to_uppercase())
                     } else {
@@ -760,15 +762,18 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 }
             }
             Tab::Local => {
-                let mut t = format!(" 🗀  LOCAL LIBRARY — sort: {} ", app.local_sort_mode.label());
+                let mut t = format!(" 🗀  LOCAL LIBRARY — sort: {} ", app.local.sort_mode.label());
                 let filters: Vec<String> = [
-                    app.local_filter_genre
+                    app.local
+                        .filter_genre
                         .as_ref()
                         .map(|v| format!("genre={v}")),
-                    app.local_filter_artist
+                    app.local
+                        .filter_artist
                         .as_ref()
                         .map(|v| format!("artist={v}")),
-                    app.local_filter_album
+                    app.local
+                        .filter_album
                         .as_ref()
                         .map(|v| format!("album={v}")),
                 ]
@@ -778,17 +783,17 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 if !filters.is_empty() {
                     t.push_str(&format!(" — filters: {}", filters.join(", ")));
                 }
-                if app.local_view_mode == crate::model::LocalViewMode::Organized {
-                    match app.local_nav_level {
+                if app.local.view_mode == crate::model::LocalViewMode::Organized {
+                    match app.local.nav_level {
                         crate::model::LocalNavLevel::Artists => t.push_str(" ❯ Artists"),
                         crate::model::LocalNavLevel::Albums => {
-                            if let Some(artist) = &app.local_nav_artist {
+                            if let Some(artist) = &app.local.nav_artist {
                                 t = format!(" 🗀  LOCAL LIBRARY ❯ {} ❯ Albums", artist);
                             }
                         }
                         crate::model::LocalNavLevel::Songs => {
-                            if let Some(artist) = &app.local_nav_artist {
-                                if let Some(album) = &app.local_nav_album {
+                            if let Some(artist) = &app.local.nav_artist {
+                                if let Some(album) = &app.local.nav_album {
                                     t = format!(
                                         " 🗀  LOCAL LIBRARY ❯ {} ❯ {} ❯ Songs",
                                         artist, album
@@ -812,23 +817,21 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             }
         }
     };
-
     let mut state = ListState::default();
     let selected_idx = match app.active_tab {
         Tab::Options => app.options_index,
-        Tab::Library => app.selected_playlist,
-        Tab::Albums => app.selected_album_result,
+        Tab::Library => app.playlists.selected_playlist,
+        Tab::Albums => app.albums.selected_result,
         Tab::Local => {
-            if app.local_view_mode == crate::model::LocalViewMode::Flat {
-                app.selected_local_song
+            if app.local.view_mode == crate::model::LocalViewMode::Flat {
+                app.local.selected_song
             } else {
-                app.selected_local_nav_idx
+                app.local.selected_nav_idx
             }
         }
-        _ => app.selected_result,
+        _ => app.search.selected_result,
     };
     state.select(Some(selected_idx));
-
     let list = List::new(items)
         .block(
             Block::default()
@@ -842,10 +845,8 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 .border_style(Style::default().fg(border_color)),
         )
         .highlight_spacing(ratatui::widgets::HighlightSpacing::Always);
-
     frame.render_stateful_widget(list, area, &mut state);
 }
-
 fn build_song_list(
     songs: &[Song],
     selected: usize,
@@ -891,7 +892,6 @@ fn build_song_list(
         })
         .collect()
 }
-
 fn build_local_song_list<'a>(
     songs: &'a [crate::model::LocalSong],
     selected: usize,
@@ -947,28 +947,23 @@ fn build_local_song_list<'a>(
         })
         .collect()
 }
-
 fn build_organized_local_list<'a>(
     app: &'a App,
     focused: bool,
     pal: &'a Palette,
     anim: Color,
 ) -> (Vec<ListItem<'a>>, Option<usize>) {
-    match app.local_nav_level {
+    match app.local.nav_level {
         crate::model::LocalNavLevel::Artists => {
-            let mut artists: Vec<String> = app
-                .local_library_window
-                .iter()
-                .map(|s| s.artist.clone())
-                .collect();
+            let mut artists: Vec<String> =
+                app.local.window.iter().map(|s| s.artist.clone()).collect();
             artists.sort_by(|a, b| natural_compare(a, b));
             artists.dedup();
-
             let items = artists
                 .into_iter()
                 .enumerate()
                 .map(|(idx, artist)| {
-                    let is_sel = idx == app.selected_local_nav_idx && focused;
+                    let is_sel = idx == app.local.selected_nav_idx && focused;
                     let line = if is_sel {
                         Line::from(vec![
                             Span::styled("▶ ", Style::default().fg(anim)),
@@ -980,33 +975,30 @@ fn build_organized_local_list<'a>(
                     } else {
                         Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(
-                                artist,
-                                Style::default().fg(pal.get_color("text")),
-                            ),
+                            Span::styled(artist, Style::default().fg(pal.get_color("text"))),
                         ])
                     };
                     ListItem::new(line)
                 })
                 .collect();
-            (items, Some(app.selected_local_nav_idx))
+            (items, Some(app.local.selected_nav_idx))
         }
         crate::model::LocalNavLevel::Albums => {
-            let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
+            let artist = app.local.nav_artist.as_deref().unwrap_or("Unknown");
             let mut albums: Vec<String> = app
-                .local_library_window
+                .local
+                .window
                 .iter()
                 .filter(|s| s.artist == artist)
                 .map(|s| s.album.clone())
                 .collect();
             albums.sort_by(|a, b| natural_compare(a, b));
             albums.dedup();
-
             let items = albums
                 .into_iter()
                 .enumerate()
                 .map(|(idx, album)| {
-                    let is_sel = idx == app.selected_local_nav_idx && focused;
+                    let is_sel = idx == app.local.selected_nav_idx && focused;
                     let line = if is_sel {
                         Line::from(vec![
                             Span::styled("▶ ", Style::default().fg(anim)),
@@ -1018,32 +1010,29 @@ fn build_organized_local_list<'a>(
                     } else {
                         Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(
-                                album,
-                                Style::default().fg(pal.get_color("text")),
-                            ),
+                            Span::styled(album, Style::default().fg(pal.get_color("text"))),
                         ])
                     };
                     ListItem::new(line)
                 })
                 .collect();
-            (items, Some(app.selected_local_nav_idx))
+            (items, Some(app.local.selected_nav_idx))
         }
         crate::model::LocalNavLevel::Songs => {
-            let artist = app.local_nav_artist.as_deref().unwrap_or("Unknown");
-            let album = app.local_nav_album.as_deref().unwrap_or("Unknown");
+            let artist = app.local.nav_artist.as_deref().unwrap_or("Unknown");
+            let album = app.local.nav_album.as_deref().unwrap_or("Unknown");
             let mut songs: Vec<&crate::model::LocalSong> = app
-                .local_library_window
+                .local
+                .window
                 .iter()
                 .filter(|s| s.artist == artist && s.album == album)
                 .collect();
             songs.sort_by(|a, b| natural_compare(&a.title, &b.title));
-
             let items = songs
                 .iter()
                 .enumerate()
                 .map(|(idx, song)| {
-                    let is_sel = idx == app.selected_local_nav_idx && focused;
+                    let is_sel = idx == app.local.selected_nav_idx && focused;
                     let title_line = if is_sel {
                         Line::from(vec![
                             Span::styled("▶ ", Style::default().fg(anim)),
@@ -1082,25 +1071,23 @@ fn build_organized_local_list<'a>(
                     ListItem::new(vec![title_line, sub_line])
                 })
                 .collect();
-            (items, Some(app.selected_local_nav_idx))
+            (items, Some(app.local.selected_nav_idx))
         }
     }
 }
-
 fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let focused = app.focus == Focus::Queue;
-
     let chunks = if app.ui_layout.show_volume_bar {
         Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area)
     } else {
         Layout::vertical([Constraint::Min(3)]).split(area)
     };
-
     let mut items: Vec<ListItem> =
-        if app.active_plugin_tab.is_some() || app.active_custom_tab.is_some() {
+        if app.plugin_ui.active_tab.is_some() || app.plugin_ui.active_custom_tab.is_some() {
             {
                 let plugin_items: Vec<ListItem> = app
-                    .plugin_panels
+                    .plugin_ui
+                    .panels
                     .iter()
                     .filter(|p| p.target == Some(crate::plugins::PluginPanelTarget::Queue))
                     .flat_map(|p| {
@@ -1125,11 +1112,9 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         } else if app.active_tab == Tab::Options {
             if app.options_index == 7 || app.options_index == 8 {
                 draw_eq_panel(frame, app, pal, anim, chunks[0]);
-
                 if !app.ui_layout.show_volume_bar {
                     return;
                 }
-
                 let vol_ratio = (app.volume as f64 / 100.0).min(1.0);
                 let vol_label = if app.muted {
                     format!(" MUTED  ({}%) ", app.volume)
@@ -1171,13 +1156,14 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         } else if app.active_tab == Tab::Library {
             let mut items: Vec<ListItem> = app
                 .playlists
-                .get(app.selected_playlist)
+                .playlists
+                .get(app.playlists.selected_playlist)
                 .map(|p| {
                     p.songs
                         .iter()
                         .enumerate()
                         .map(|(idx, song)| {
-                            let is_sel = idx == app.selected_playlist_song && focused;
+                            let is_sel = idx == app.playlists.selected_song && focused;
                             if is_sel {
                                 ListItem::new(Line::from(vec![
                                     Span::styled("▶ ", Style::default().fg(anim)),
@@ -1257,10 +1243,10 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
                 })
                 .collect()
         };
-
-    if app.allow_lua_ui_changes {
+    if app.plugin_ui.allow_lua_ui_changes {
         let mut top: Vec<ListItem> = app
-            .ui_inject
+            .plugin_ui
+            .inject
             .queue_top
             .iter()
             .map(|item| ListItem::new(panel_item_line(item, pal)))
@@ -1270,13 +1256,13 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
             items = top;
         }
         items.extend(
-            app.ui_inject
+            app.plugin_ui
+                .inject
                 .queue_bottom
                 .iter()
                 .map(|item| ListItem::new(panel_item_line(item, pal))),
         );
     }
-
     let queue_title = match app.active_tab {
         Tab::Library => " PLAYLIST SONGS ",
         Tab::Options => " HELP ",
@@ -1287,15 +1273,13 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     } else {
         pal.get_color("dim")
     };
-
     let mut state = ListState::default();
     let selected_idx = if app.active_tab == Tab::Library {
-        app.selected_playlist_song
+        app.playlists.selected_song
     } else {
         app.selected_queue
     };
     state.select(Some(selected_idx));
-
     let list = List::new(items).block(
         Block::default()
             .title(Span::styled(
@@ -1311,7 +1295,6 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     if !app.ui_layout.show_volume_bar {
         return;
     }
-
     let vol_ratio = (app.volume as f64 / 100.0).min(1.0);
     let vol_label = if app.muted {
         format!(" MUTED  ({}%) ", app.volume)
@@ -1339,17 +1322,14 @@ fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         ));
     frame.render_widget(gauge, chunks[1]);
 }
-
 fn dim_item(text: &'static str, pal: &Palette) -> ListItem<'static> {
     ListItem::new(Span::styled(
         text,
         Style::default().fg(pal.get_color("muted")),
     ))
 }
-
 fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let inner_w = area.width.saturating_sub(2) as usize;
-
     let (song_str, artist_str) = if let Some(song) = &app.current_song {
         (song.title.clone(), song.subtitle())
     } else {
@@ -1358,14 +1338,12 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
             "Press / to search  ·  Tab to move focus".to_owned(),
         )
     };
-
     let state_icon = match app.player_state {
         PlayerState::Playing => "▶",
         PlayerState::Paused => "⏸",
         PlayerState::Searching => "⌛",
         PlayerState::Idle => "⏹",
     };
-
     let repeat_badge = match app.repeat_mode {
         RepeatMode::Off => String::new(),
         RepeatMode::One => "  ↺¹ ONE".to_owned(),
@@ -1376,7 +1354,6 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     } else {
         String::new()
     };
-
     let line1 = Line::from(vec![
         Span::styled(
             format!("{state_icon}  "),
@@ -1395,7 +1372,6 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
-
     let line2 = Line::from(vec![
         Span::styled(
             "   ◦  ".to_string(),
@@ -1403,7 +1379,6 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         ),
         Span::styled(artist_str, Style::default().fg(pal.get_color("accent3"))),
     ]);
-
     let playing = app.player_state == PlayerState::Playing;
     let spec_w = inner_w.saturating_sub(3);
     let spectrum_rows = area.height.saturating_sub(4).max(1) as usize;
@@ -1413,13 +1388,11 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
         spec.extend(spectrum_spans(app, pal, spec_w));
         Line::from(spec)
     }));
-
     let border_color = if playing { anim } else { pal.get_color("dim") };
-
     let widget = Paragraph::new(rows).block(
         Block::default()
             .title(Span::styled(
-                " ♫  NOW PLAYING ",
+                "   NOW PLAYING ",
                 Style::default()
                     .fg(border_color)
                     .add_modifier(Modifier::BOLD),
@@ -1429,14 +1402,12 @@ fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, ar
     );
     frame.render_widget(widget, area);
 }
-
 fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let ratio = if app.playback_duration > 0.0 {
         (app.playback_pos / app.playback_duration).clamp(0.0, 1.0)
     } else {
         0.0
     };
-
     let label = if app.playback_duration > 0.0 {
         format!(
             "  {}  ─  {}  ({:.0}%)",
@@ -1449,13 +1420,11 @@ fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
     } else {
         "  ─  no track loaded".to_owned()
     };
-
     let gauge_color = match app.player_state {
         PlayerState::Playing => anim,
         PlayerState::Paused => pal.get_color("warn"),
         _ => pal.get_color("dim"),
     };
-
     let gauge = Gauge::default()
         .block(
             Block::default()
@@ -1476,12 +1445,10 @@ fn draw_progress(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
         ));
     frame.render_widget(gauge, area);
 }
-
 fn tab_key_hint(app: &App) -> String {
-    let count = (app.main_tabs.len() + app.plugin_tabs.len()).clamp(1, 8);
+    let count = (app.main_tabs.len() + app.plugin_ui.tabs.len()).clamp(1, 8);
     format!("1-{count}")
 }
-
 fn key_span(text: impl Into<String>, pal: &Palette) -> Span<'static> {
     Span::styled(
         text.into(),
@@ -1490,7 +1457,6 @@ fn key_span(text: impl Into<String>, pal: &Palette) -> Span<'static> {
             .add_modifier(Modifier::BOLD),
     )
 }
-
 fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     macro_rules! key {
         ($text:expr) => {
@@ -1502,7 +1468,6 @@ fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
         Span::styled(a, Style::default().fg(pal.get_color("muted")))
     };
     let gap = || -> Span<'static> { Span::raw("  ") };
-
     let mut spans = if app.ui_layout.show_keybind_hints {
         vec![
             key!(tab_key_hint(app)),
@@ -1553,7 +1518,7 @@ fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
         Vec::new()
     };
     if app.ui_layout.show_statusbar {
-        if let Some(warning) = app.plugin_warnings.back() {
+        if let Some(warning) = app.plugin_ui.warnings.back() {
             spans.push(gap());
             spans.push(Span::styled(
                 "⚠",
@@ -1567,7 +1532,7 @@ fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
                 Style::default().fg(pal.get_color("warn")),
             ));
         }
-        for item in &app.ui_inject.statusbar_extra {
+        for item in &app.plugin_ui.inject.statusbar_extra {
             spans.push(gap());
             spans.extend(panel_item_line(item, pal).spans);
         }
@@ -1583,7 +1548,6 @@ fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     );
     frame.render_widget(widget, area);
 }
-
 fn draw_custom_sections(
     frame: &mut Frame,
     app: &App,
@@ -1592,14 +1556,20 @@ fn draw_custom_sections(
     position: &str,
     area: Rect,
 ) {
-    if !app.allow_lua_ui_changes {
+    if !app.plugin_ui.allow_lua_ui_changes {
         return;
     }
     let sections: Vec<_> = app
+        .plugin_ui
         .custom_sections
         .iter()
         .filter(|section| {
-            section.position == position && !app.hidden_sections.iter().any(|id| id == &section.id)
+            section.position == position
+                && !app
+                    .plugin_ui
+                    .hidden_sections
+                    .iter()
+                    .any(|id| id == &section.id)
         })
         .collect();
     if sections.is_empty() {
@@ -1638,7 +1608,8 @@ fn draw_custom_sections(
             continue;
         }
         let rows: Vec<Line> = app
-            .ui_section_items
+            .plugin_ui
+            .section_items
             .get(&section.id)
             .map(|items| {
                 items
@@ -1662,27 +1633,24 @@ fn draw_custom_sections(
         );
     }
 }
-
 fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     const BAND_LABELS: [&str; 10] = [
         "32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k",
     ];
     const MAX_DB: f32 = 12.0;
     const EQ_BLOCKS: [&str; 8] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "█"];
-
     let inner = area.inner(&ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
-    let title_color = if app.eq_enabled {
+    let title_color = if app.eq.enabled {
         anim
     } else {
         pal.get_color("muted")
     };
-
     let block = Block::default()
         .title(Span::styled(
-            if app.eq_enabled {
+            if app.eq.enabled {
                 " ▶ EQUALIZER  (ON) "
             } else {
                 " ⏹ EQUALIZER  (OFF) "
@@ -1694,41 +1662,35 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
         .borders(Borders::ALL)
         .border_style(Style::default().fg(title_color));
     frame.render_widget(block, area);
-
     if inner.width < 10 || inner.height < 4 {
         return;
     }
-
     let band_count = 10usize;
     let bar_h = inner.height.saturating_sub(4) as usize;
     let bar_w = (inner.width as usize / band_count).max(2);
-
-    for (i, &gain) in app.eq_bands.iter().enumerate() {
+    for (i, &gain) in app.eq.bands.iter().enumerate() {
         let col_x = inner.x + (i * bar_w) as u16;
         if col_x >= inner.x + inner.width {
             break;
         }
-
-        let focused = i == app.eq_focus_band && app.options_index == 7;
+        let focused = i == app.eq.focus_band && app.options_index == 7;
         let spectrum = pal.spectrum_colors();
         let band_color = if focused {
             anim
-        } else if app.eq_enabled {
+        } else if app.eq.enabled {
             spectrum[i % spectrum.len()]
         } else {
             pal.get_color("dim")
         };
-        let bg_color = if app.eq_enabled {
+        let bg_color = if app.eq.enabled {
             spectrum[(i + 4) % spectrum.len()]
         } else {
             pal.get_color("dim")
         };
-
         let norm = (gain / MAX_DB).clamp(-1.0, 1.0);
         let mid_row = inner.y + (bar_h / 2) as u16;
         let max_half = (bar_h / 2).max(1);
         let cells_from_mid = (norm.abs() * max_half as f32 * 8.0).round() as usize;
-
         for row in inner.y..(inner.y + bar_h as u16) {
             let cell_dist = if row <= mid_row {
                 (mid_row - row) as usize
@@ -1740,14 +1702,12 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
             let fill_units = cells_from_mid
                 .saturating_sub(units_start)
                 .min(units_end - units_start);
-
             let is_upper_half = row < mid_row;
             let should_fill = if norm >= 0.0 {
                 is_upper_half
             } else {
                 row > mid_row
             };
-
             let ch = if row == mid_row {
                 "─".to_owned()
             } else if should_fill {
@@ -1755,7 +1715,6 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
             } else {
                 "·".to_owned()
             };
-
             let style = if row == mid_row {
                 Style::default().fg(pal.get_color("dim"))
             } else if should_fill && fill_units > 0 {
@@ -1775,7 +1734,6 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
                 cell_area,
             );
         }
-
         let db_str = if gain == 0.0 {
             " 0".to_owned()
         } else {
@@ -1800,7 +1758,6 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
                 db_area,
             );
         }
-
         let lbl_area = Rect::new(col_x, inner.y + bar_h as u16 + 2, bar_w as u16, 1);
         if lbl_area.y < inner.y + inner.height {
             let lbl = BAND_LABELS[i];
@@ -1812,10 +1769,9 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
             );
         }
     }
-
     let info_y = inner.y + inner.height.saturating_sub(2);
     if info_y > inner.y {
-        let focus_hint = match app.eq_focus_band {
+        let focus_hint = match app.eq.focus_band {
             0 | 1 => "Sub-bass and body",
             2 | 3 => "Warmth and kick",
             4 | 5 => "Mids and vocals",
@@ -1824,8 +1780,8 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
         };
         let info = format!(
             "Band {} ({})  •  {}",
-            app.eq_focus_band + 1,
-            BAND_LABELS[app.eq_focus_band],
+            app.eq.focus_band + 1,
+            BAND_LABELS[app.eq.focus_band],
             focus_hint
         );
         frame.render_widget(
@@ -1835,11 +1791,9 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
             Rect::new(inner.x, info_y, inner.width, 1),
         );
     }
-
     let hint_y = inner.y + inner.height.saturating_sub(1);
     if hint_y >= inner.y {
         let hint = "h/l: band  +/-: gain  Enter: on/off  0: reset  f: save preset";
-
         let hint_area = Rect::new(inner.x, hint_y, inner.width, 1);
         frame.render_widget(
             Paragraph::new(hint)
@@ -1849,14 +1803,14 @@ fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area:
         );
     }
 }
-
 fn draw_plugin_panels(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size: Rect) {
-    if app.plugin_panels.is_empty() {
+    if app.plugin_ui.panels.is_empty() {
         return;
     }
     let mut y = size.y + 1;
     for panel in app
-        .plugin_panels
+        .plugin_ui
+        .panels
         .iter()
         .filter(|p| p.target == Some(crate::plugins::PluginPanelTarget::Overlay))
     {
@@ -1915,7 +1869,6 @@ fn draw_plugin_panels(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         }
     }
 }
-
 fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size: Rect) {
     draw_plugin_panels(frame, app, pal, anim, size);
     let msg = app.shown_message();
@@ -1938,16 +1891,15 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             area,
         );
     }
-
-    if app.local_tag_editor_open {
+    if app.local.tag_editor_open {
         let area = centered_rect(70, 32, size);
         frame.render_widget(Clear, area);
-        let song = app.local_tag_editor_song.as_ref();
+        let song = app.local.tag_editor_song.as_ref();
         let lines = vec![
             Line::from(vec![
                 Span::styled("Field: ", Style::default().fg(pal.get_color("muted"))),
                 Span::styled(
-                    app.local_tag_editor_field.label(),
+                    app.local.tag_editor_field.label(),
                     Style::default().fg(anim).add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -1955,7 +1907,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             Line::from(vec![
                 Span::styled("> ", Style::default().fg(anim)),
                 Span::styled(
-                    app.local_tag_edit_buffer.as_str(),
+                    app.local.tag_edit_buffer.as_str(),
                     Style::default().fg(pal.get_color("text")),
                 ),
             ]),
@@ -1991,8 +1943,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             area,
         );
     }
-
-    if app.context_open {
+    if app.playlists.context_open {
         let menu_w = if app.active_tab == Tab::Library && app.focus == Focus::Results {
             74
         } else {
@@ -2024,7 +1975,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             .iter()
             .enumerate()
             .map(|(idx, o)| {
-                if idx == app.context_index {
+                if idx == app.playlists.context_index {
                     ListItem::new(Line::from(vec![
                         Span::styled("▶ ", Style::default().fg(anim)),
                         Span::styled(
@@ -2045,7 +1996,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
         let menu = List::new(items).block(
             Block::default()
                 .title(Span::styled(
-                    if app.adding_song_to_playlist {
+                    if app.playlists.adding_song {
                         " ✦  SELECT PLAYLIST  (Enter / Esc) "
                     } else {
                         " ✦  SONG MENU  (Enter / Esc) "
@@ -2057,13 +2008,12 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
         );
         frame.render_widget(menu, area);
     }
-
-    if app.confirm_delete_playlist {
+    if app.playlists.confirm_delete {
         let area = centered_rect(54, 26, size);
         frame.render_widget(Clear, area);
         let text = format!(
             "\n  Delete playlist \"{}\"?\n\n  y / Enter  →  confirm\n  n / Esc    →  cancel",
-            app.delete_playlist_name,
+            app.playlists.delete_name,
         );
         frame.render_widget(
             Paragraph::new(text)
@@ -2082,8 +2032,7 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
             area,
         );
     }
-
-    if app.scanning {
+    if app.local.scanning {
         let area = centered_rect(40, 14, size);
         frame.render_widget(Clear, area);
         frame.render_widget(
@@ -2103,7 +2052,6 @@ fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size:
         );
     }
 }
-
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup = Layout::vertical([
         Constraint::Percentage((100 - percent_y) / 2),
@@ -2118,12 +2066,10 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     ])
     .split(popup[1])[1]
 }
-
 fn format_time(seconds: f64) -> String {
     let secs = seconds.max(0.0).round() as u64;
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
-
 fn theme_label(theme: &Theme) -> String {
     match theme {
         Theme::Dark => "dark".to_string(),

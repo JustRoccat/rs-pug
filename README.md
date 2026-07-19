@@ -15,9 +15,12 @@ Always check if you have the latest yt-dlp and mpv before calling this project s
 
 # rs-pug
 
-No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files — all from your terminal.
+No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files - all from your terminal.
 
-Built in Rust with `mpv`, `yt-dlp`, and `ratatui`. Requires `mpv` and `yt-dlp` installed.
+Built in Rust with `mpv`, `yt-dlp`, and `ratatui`. Requires `mpv` installed.
+
+YT-DLP IS HIGHLY RECOMMENDED BUT NOT NECESSARY.
+rs-pug will work without it but you will lose the ability to stream and download songs through rs-pug.
 
 Plugins, themes and EQ presets from the community: [all-rspug](https://github.com/JustRoccat/all-rspug/) · [Discord](https://discord.gg/6FcBWwRQBX)
 
@@ -26,7 +29,7 @@ Plugins, themes and EQ presets from the community: [all-rspug](https://github.co
 ## Installation
 
 ```bash
-# Arch
+# Arch [Unsupported]
 yay -S rs-pug-git
 
 # crates.io
@@ -64,11 +67,88 @@ Optional:
 | `r` | Cycle repeat mode |
 | `c` | Context menu |
 | `v` | Toggle flat/organized view (Local tab) |
+| `Ctrl+V` | Toggle the real FFT spectrum visualizer (needs `parec`) — see below |
 | `e` | Edit ID3 tags for selected local file (Local tab) |
 | `s` | Cycle local sort mode: title, artist, album, year, date added (Local tab) |
 | `g` / `a` / `b` | Filter local library by selected genre / artist / album |
 | `F` | Clear local library filters |
 | `q` | Quit |
+
+Every keybind above (`n`, `p`, `m`, `r`, `z`, `[`, `]`, and the FFT toggle) can be
+rebound in `~/.config/rs-pug/config.toml` under `[keybinds]`, and isn't limited
+to a single plain character:
+
+```toml
+[keybinds]
+next = "n"
+prev = "p"
+mute = "m"
+repeat = "r"
+shuffle = "z"
+seek_back = "["
+seek_forward = "]"
+fft_toggle = "C-v"   # Ctrl+V
+```
+
+- Modifiers: prefix with `C-` (Ctrl), `M-` (Alt), and/or `S-` (Shift), e.g. `C-r` or `M-S-n`.
+- Multi-key sequences: separate keys with a space, e.g. `g g` — press `g` then `g` again within 1.5s.
+`next`/`prev`/`mute`/`repeat`/`shuffle`/`seek_back`/`seek_forward` can also be re-mapped from the **Options** tab with `h`/`l` (currently limited to single characters there; use the config file directly for modifiers or sequences).
+
+## FFT Visualizer
+
+The "Now Playing" bar always shows an animated spectrum. By default it's a
+synthetic wave, but you can switch it to a **real** FFT computed from your
+system audio:
+
+- Press `Ctrl+V` (or your remapped `fft_toggle` key) at any time to flip
+  between the synthetic and real spectrum, this doesn't replace the
+  synthetic visualizer, it's an additional mode you can toggle on the fly.
+- The real visualizer captures **rs-pug's own audio** and runs it through an
+  FFT (`rustfft`) never the microphone. It does this by giving mpv a fixed
+  stream name (`--audio-client-name=rs-pug`) and looking that exact stream
+  up via `pactl` before recording it directly
+  (`parec --monitor-stream=<index>`). If rs-pug isn't playing anything yet
+  when the visualizer starts, it falls back to the system's default output
+  (`@DEFAULT_SINK@.monitor`) still speaker output, still never the mic.
+  It tries, in order, whichever of these is installed:
+  1. `parec` — PulseAudio, or PipeWire's `pipewire-pulse` compatibility layer
+     (most distros with PipeWire ship this, so `parec` just works, and it's
+     also what enables the precise per-stream capture above via `pactl`).
+  2. `pw-cat --record --raw --monitor`, targeting the default sink, native
+     PipeWire, for setups without the PulseAudio compatibility shim. This
+     path can't isolate rs-pug's stream specifically (no `pactl` to ask), so
+     it captures whatever's coming out of the default output instead.
+  3. `pw-record --monitor` native PipeWire fallback if `pw-cat` isn't
+     present, same default-sink targeting as above.
+
+  If none of them are installed, `rs-pug` silently falls back to the
+  synthetic wave. `pw-cat`/`pw-record` come from the `pipewire` /
+  `pipewire-utils` package on most distros, and the precise per-stream mode
+  additionally needs `pactl` (`pulseaudio-utils` or `pipewire-pulse`,
+  depending on distro).
+- To have it on by default at startup instead of toggling it every time, add:
+
+```toml
+[general]
+fft_visualizer_default = true
+```
+
+## CLI / IPC
+
+Beyond `--source`, `rs-pug` finally accepts flags that control an **already-running**
+instance over a local Unix socket. handy for `i3status`, `waybar`, or
+keybinding scripts, without needing to focus the TUI:
+
+```bash
+rs-pug --toggle-pause   # play/pause the running instance
+rs-pug --next           # skip to next track
+rs-pug --prev           # go to previous track
+rs-pug --play <path-or-url>   # queue and play a file or URL
+```
+
+Each of these connects to the running instance's IPC socket and exits
+immediately; if no instance is running, it prints an error instead of
+starting a new one.
 
 
 ## Contri-pug-ting

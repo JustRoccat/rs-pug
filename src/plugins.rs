@@ -1,24 +1,44 @@
-use std::{collections::VecDeque, fs, path::Path, sync::Mutex};
-
-use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
+use std::{collections::VecDeque, fs, path::Path, sync::Mutex, time::{Duration, Instant}};
+use mlua::{Function, HookTriggers, Lua, LuaSerdeExt, Table, Value, VmState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-
+const PLUGIN_EXEC_TIMEOUT: Duration = Duration::from_millis(250);
+const PLUGIN_HOOK_INSTRUCTION_INTERVAL: u32 = 10_000;
+fn with_exec_timeout<T>(
+    lua: &Lua,
+    f: impl FnOnce() -> mlua::Result<T>,
+) -> mlua::Result<T> {
+    let start = Instant::now();
+    lua.set_hook(
+        HookTriggers::new().every_nth_instruction(PLUGIN_HOOK_INSTRUCTION_INTERVAL),
+        move |_lua, _debug| {
+            if start.elapsed() > PLUGIN_EXEC_TIMEOUT {
+                Err(
+                    mlua::Error::RuntimeError(
+                        "plugin exceeded execution time limit".to_string(),
+                    ),
+                )
+            } else {
+                Ok(VmState::Continue)
+            }
+        },
+    );
+    let result = f();
+    lua.remove_hook();
+    result
+}
 #[cfg(test)]
 use crate::model::RepeatMode;
 use crate::model::{App, MainTabKind, Song, Tab};
-
 struct LuaPlugin {
     name: String,
     lua: Lua,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginWarningLevel {
     Warning,
     Error,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginWarning {
     pub level: PluginWarningLevel,
@@ -26,7 +46,6 @@ pub struct PluginWarning {
     pub hook: Option<String>,
     pub message: String,
 }
-
 impl PluginWarning {
     pub fn label(&self) -> String {
         let level = match self.level {
@@ -43,7 +62,6 @@ impl PluginWarning {
         }
     }
 }
-
 pub struct PluginManager {
     plugins: Vec<LuaPlugin>,
     enabled: bool,
@@ -51,7 +69,6 @@ pub struct PluginManager {
     allow_lua_ui_changes: bool,
     warnings: Mutex<VecDeque<PluginWarning>>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum PluginCoreAction {
@@ -68,7 +85,6 @@ pub enum PluginCoreAction {
     PlayUrl { url: String, title: Option<String> },
     RawMpv { command: JsonValue },
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginUiLayoutPatch {
     #[serde(default)]
@@ -86,7 +102,6 @@ pub struct PluginUiLayoutPatch {
     #[serde(default)]
     pub show_sections: Vec<String>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginUiPatch {
     #[serde(default)]
@@ -108,7 +123,6 @@ pub struct PluginUiPatch {
     #[serde(default)]
     pub layout: PluginUiLayoutPatch,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginDispatch {
     #[serde(default)]
@@ -122,7 +136,6 @@ pub struct PluginDispatch {
     #[serde(default)]
     pub ui: PluginUiPatch,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginEvent {
     pub kind: String,
@@ -131,7 +144,6 @@ pub struct PluginEvent {
     #[serde(default)]
     pub value: Option<f64>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum PluginPanelItem {
@@ -144,7 +156,6 @@ pub enum PluginPanelItem {
     Keybind { key: String, action: String },
     Progress { label: Option<String>, percent: f64 },
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginPanelTarget {
@@ -153,7 +164,6 @@ pub enum PluginPanelTarget {
     Queue,
     Overlay,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginPanel {
     pub title: String,
@@ -164,7 +174,6 @@ pub struct PluginPanel {
     #[serde(default)]
     pub items: Vec<PluginPanelItem>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginTab {
     pub id: String,
@@ -172,7 +181,6 @@ pub struct PluginTab {
     #[serde(default)]
     pub icon: Option<String>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginUiLayoutState {
     pub queue_width_percent: u16,
@@ -181,7 +189,6 @@ pub struct PluginUiLayoutState {
     pub tabs_width: u16,
     pub queue_position: String,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginUiConfig {
     #[serde(default)]
@@ -189,7 +196,6 @@ pub struct PluginUiConfig {
     #[serde(default)]
     pub layout: PluginLayoutConfig,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginTabsConfig {
     #[serde(default)]
@@ -201,7 +207,6 @@ pub struct PluginTabsConfig {
     #[serde(default)]
     pub custom: Vec<PluginCustomTab>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginTabRename {
     #[serde(default)]
@@ -209,7 +214,6 @@ pub struct PluginTabRename {
     #[serde(default)]
     pub icon: Option<String>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginCustomTab {
     pub id: String,
@@ -219,7 +223,6 @@ pub struct PluginCustomTab {
     #[serde(default)]
     pub position: Option<usize>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginLayoutConfig {
     #[serde(default)]
@@ -249,7 +252,6 @@ pub struct PluginLayoutConfig {
     #[serde(default)]
     pub show_sections: Vec<String>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginCustomSection {
     pub id: String,
@@ -262,11 +264,9 @@ pub struct PluginCustomSection {
     #[serde(default)]
     pub content: Option<String>,
 }
-
 fn default_section_position() -> String {
     "below_player".to_owned()
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginUiInject {
     #[serde(default)]
@@ -280,9 +280,7 @@ pub struct PluginUiInject {
     #[serde(default)]
     pub statusbar_extra: Vec<PluginPanelItem>,
 }
-
 pub type PluginUiSections = std::collections::HashMap<String, Vec<PluginPanelItem>>;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginUiState {
     pub active_tab: String,
@@ -299,7 +297,6 @@ pub struct PluginUiState {
     pub album_search_query: String,
     pub queue_len: usize,
 }
-
 impl PluginUiState {
     fn tab_id(tab: Tab) -> &'static str {
         match tab {
@@ -310,7 +307,6 @@ impl PluginUiState {
             Tab::Options => "options",
         }
     }
-
     #[cfg(test)]
     pub fn from_runtime(
         tab: Tab,
@@ -353,7 +349,7 @@ impl PluginUiState {
     }
     pub fn from_app(app: &App) -> Self {
         let active_tab_index = app.active_tab_index();
-        let active_tab = if let Some(custom) = &app.active_custom_tab {
+        let active_tab = if let Some(custom) = &app.plugin_ui.active_custom_tab {
             custom.clone()
         } else if let Some(tab) = app.main_tabs.get(active_tab_index.saturating_sub(1)) {
             match &tab.kind {
@@ -363,27 +359,30 @@ impl PluginUiState {
         } else {
             Self::tab_id(app.active_tab).to_owned()
         };
-
         Self {
             active_tab,
-            active_plugin_tab: app.active_plugin_tab.clone(),
-            active_custom_tab: app.active_custom_tab.clone(),
+            active_plugin_tab: app.plugin_ui.active_tab.clone(),
+            active_custom_tab: app.plugin_ui.active_custom_tab.clone(),
             active_tab_index,
             current_layout: app.current_layout_state(),
             visible_sections: app.visible_section_ids(),
-            player_state: crate::ui_helpers::player_state_label(app.player_state).to_owned(),
+            player_state: crate::ui_helpers::player_state_label(app.player_state)
+                .to_owned(),
             volume: app.volume,
             muted: app.muted,
             repeat_mode: app.repeat_mode.label().to_lowercase(),
-            search_query: app.search_query.clone(),
-            album_search_query: app.album_search_query.clone(),
+            search_query: app.search.query.clone(),
+            album_search_query: app.albums.search_query.clone(),
             queue_len: app.queue.len(),
         }
     }
 }
-
 impl PluginManager {
-    pub fn load(enabled: bool, configured_dir: &str, allow_lua_ui_changes: bool) -> Self {
+    pub fn load(
+        enabled: bool,
+        configured_dir: &str,
+        allow_lua_ui_changes: bool,
+    ) -> Self {
         if !enabled {
             return Self {
                 plugins: Vec::new(),
@@ -393,17 +392,17 @@ impl PluginManager {
                 warnings: Mutex::new(VecDeque::new()),
             };
         }
-
         let mut plugins = Vec::new();
         let mut warnings = VecDeque::new();
         let path = Path::new(configured_dir);
         let Ok(entries) = fs::read_dir(path) else {
-            warnings.push_back(PluginWarning {
-                level: PluginWarningLevel::Warning,
-                plugin: None,
-                hook: None,
-                message: format!("cannot read plugin directory {}", path.display()),
-            });
+            warnings
+                .push_back(PluginWarning {
+                    level: PluginWarningLevel::Warning,
+                    plugin: None,
+                    hook: None,
+                    message: format!("cannot read plugin directory {}", path.display()),
+                });
             return Self {
                 plugins,
                 enabled,
@@ -412,7 +411,6 @@ impl PluginManager {
                 warnings: Mutex::new(warnings),
             };
         };
-
         for entry in entries.flatten() {
             let p = entry.path();
             if p.extension().and_then(|e| e.to_str()) != Some("lua") {
@@ -420,77 +418,81 @@ impl PluginManager {
             }
             let plugin_file = p.to_string_lossy().into_owned();
             let Ok(src) = fs::read_to_string(&p) else {
-                warnings.push_back(PluginWarning {
-                    level: PluginWarningLevel::Error,
-                    plugin: Some(plugin_file),
-                    hook: None,
-                    message: "cannot read plugin file".to_owned(),
-                });
+                warnings
+                    .push_back(PluginWarning {
+                        level: PluginWarningLevel::Error,
+                        plugin: Some(plugin_file),
+                        hook: None,
+                        message: "cannot read plugin file".to_owned(),
+                    });
                 continue;
             };
-
             let lua = Lua::new();
             let plugin_name = p.to_string_lossy().into_owned();
             let chunk = lua.load(&src).set_name(plugin_name.as_str());
-            let value = match chunk.eval::<Value>() {
+            let value = match with_exec_timeout(&lua, || chunk.eval::<Value>()) {
                 Ok(value) => value,
                 Err(err) => {
-                    warnings.push_back(PluginWarning {
-                        level: PluginWarningLevel::Error,
-                        plugin: Some(plugin_name.clone()),
-                        hook: None,
-                        message: format!("load failed: {err}"),
-                    });
-                    continue;
-                }
-            };
-
-            let plugin_table = match value {
-                Value::Table(table) => table,
-                _ => match lua.globals().get::<Table>("plugin") {
-                    Ok(table) => table,
-                    Err(err) => {
-                        warnings.push_back(PluginWarning {
+                    warnings
+                        .push_back(PluginWarning {
                             level: PluginWarningLevel::Error,
                             plugin: Some(plugin_name.clone()),
                             hook: None,
-                            message: format!("missing plugin table: {err}"),
+                            message: format!("load failed: {err}"),
                         });
-                        continue;
+                    continue;
+                }
+            };
+            let plugin_table = match value {
+                Value::Table(table) => table,
+                _ => {
+                    match lua.globals().get::<Table>("plugin") {
+                        Ok(table) => table,
+                        Err(err) => {
+                            warnings
+                                .push_back(PluginWarning {
+                                    level: PluginWarningLevel::Error,
+                                    plugin: Some(plugin_name.clone()),
+                                    hook: None,
+                                    message: format!("missing plugin table: {err}"),
+                                });
+                            continue;
+                        }
                     }
-                },
+                }
             };
             if let Err(err) = lua
                 .globals()
                 .set("ALLOW_LUA_UI_CHANGES", allow_lua_ui_changes)
             {
-                warnings.push_back(PluginWarning {
-                    level: PluginWarningLevel::Warning,
-                    plugin: Some(plugin_name.clone()),
-                    hook: None,
-                    message: format!("cannot expose ALLOW_LUA_UI_CHANGES: {err}"),
-                });
+                warnings
+                    .push_back(PluginWarning {
+                        level: PluginWarningLevel::Warning,
+                        plugin: Some(plugin_name.clone()),
+                        hook: None,
+                        message: format!("cannot expose ALLOW_LUA_UI_CHANGES: {err}"),
+                    });
             }
             if let Err(err) = lua.globals().set("plugin", plugin_table) {
-                warnings.push_back(PluginWarning {
-                    level: PluginWarningLevel::Error,
-                    plugin: Some(plugin_name.clone()),
-                    hook: None,
-                    message: format!("cannot expose plugin table: {err}"),
-                });
+                warnings
+                    .push_back(PluginWarning {
+                        level: PluginWarningLevel::Error,
+                        plugin: Some(plugin_name.clone()),
+                        hook: None,
+                        message: format!("cannot expose plugin table: {err}"),
+                    });
                 continue;
             }
-
-            plugins.push(LuaPlugin {
-                name: p
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("plugin")
-                    .to_owned(),
-                lua,
-            });
+            plugins
+                .push(LuaPlugin {
+                    name: p
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("plugin")
+                        .to_owned(),
+                    lua,
+                });
         }
-
         Self {
             plugins,
             enabled,
@@ -499,16 +501,21 @@ impl PluginManager {
             warnings: Mutex::new(warnings),
         }
     }
-
-    pub fn reload(&mut self, enabled: bool, configured_dir: &str, allow_lua_ui_changes: bool) {
+    pub fn reload(
+        &mut self,
+        enabled: bool,
+        configured_dir: &str,
+        allow_lua_ui_changes: bool,
+    ) {
         let next = Self::load(enabled, configured_dir, allow_lua_ui_changes);
         if let Ok(mut warnings) = self.warnings.lock() {
-            warnings.push_back(PluginWarning {
-                level: PluginWarningLevel::Warning,
-                plugin: None,
-                hook: None,
-                message: "plugins hot-reloaded".to_owned(),
-            });
+            warnings
+                .push_back(PluginWarning {
+                    level: PluginWarningLevel::Warning,
+                    plugin: None,
+                    hook: None,
+                    message: "plugins hot-reloaded".to_owned(),
+                });
             warnings.extend(next.drain_warnings());
         }
         self.plugins = next.plugins;
@@ -516,19 +523,16 @@ impl PluginManager {
         self.configured_dir = next.configured_dir;
         self.allow_lua_ui_changes = next.allow_lua_ui_changes;
     }
-
     #[allow(dead_code)]
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
     }
-
     pub fn drain_warnings(&self) -> Vec<PluginWarning> {
         let Ok(mut warnings) = self.warnings.lock() else {
             return Vec::new();
         };
         warnings.drain(..).collect()
     }
-
     fn warn(
         &self,
         level: PluginWarningLevel,
@@ -540,49 +544,51 @@ impl PluginManager {
             if warnings.len() >= 100 {
                 warnings.pop_front();
             }
-            warnings.push_back(PluginWarning {
-                level,
-                plugin: plugin.map(|plugin| plugin.name.clone()),
-                hook: hook.map(str::to_owned),
-                message: message.into(),
-            });
+            warnings
+                .push_back(PluginWarning {
+                    level,
+                    plugin: plugin.map(|plugin| plugin.name.clone()),
+                    hook: hook.map(str::to_owned),
+                    message: message.into(),
+                });
         }
     }
-
     pub fn transform_search_query(&self, query: String) -> String {
         self.run_fold(query, "on_search_query")
     }
-
     pub fn transform_search_results(&self, songs: Vec<Song>) -> Vec<Song> {
         self.run_fold(songs, "on_search_results")
     }
-
     pub fn transform_song_start(&self, song: Song) -> Song {
         self.run_fold(song, "on_song_start")
     }
-
     pub fn dispatch_key(&self, key: &str, state: &PluginUiState) -> PluginDispatch {
         let mut merged = PluginDispatch::default();
         for plugin in &self.plugins {
             let Some(func) = self.read_hook(plugin, "on_key") else {
                 continue;
             };
-
             let Ok(key_lua) = plugin.lua.to_value(key) else {
                 continue;
             };
             let Ok(state_lua) = plugin.lua.to_value(state) else {
                 continue;
             };
-            let Ok(output) = func.call::<Value>((key_lua, state_lua)) else {
+            let Ok(output) = with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>((key_lua, state_lua)),
+            ) else {
                 continue;
             };
             self.merge_dispatch(&mut merged, plugin, output);
         }
         merged
     }
-
-    pub fn dispatch_event(&self, event: &PluginEvent, state: &PluginUiState) -> PluginDispatch {
+    pub fn dispatch_event(
+        &self,
+        event: &PluginEvent,
+        state: &PluginUiState,
+    ) -> PluginDispatch {
         let mut merged = PluginDispatch::default();
         for plugin in &self.plugins {
             let Some(func) = self.read_hook(plugin, "on_event") else {
@@ -594,14 +600,16 @@ impl PluginManager {
             let Ok(state_lua) = plugin.lua.to_value(state) else {
                 continue;
             };
-            let Ok(output) = func.call::<Value>((event_lua, state_lua)) else {
+            let Ok(output) = with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>((event_lua, state_lua)),
+            ) else {
                 continue;
             };
             self.merge_dispatch(&mut merged, plugin, output);
         }
         merged
     }
-
     pub fn collect_tabs(&self, state: &PluginUiState) -> Vec<PluginTab> {
         let mut tabs = Vec::new();
         for plugin in &self.plugins {
@@ -611,19 +619,22 @@ impl PluginManager {
             let Ok(state_lua) = plugin.lua.to_value(state) else {
                 continue;
             };
-            let Ok(output) = func.call::<Value>(state_lua) else {
+            let Ok(output) = with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>(state_lua),
+            ) else {
                 continue;
             };
             if output.is_nil() {
                 continue;
             }
-            if let Ok(mut plugin_tabs) = plugin.lua.from_value::<Vec<PluginTab>>(output) {
+            if let Ok(mut plugin_tabs) = plugin.lua.from_value::<Vec<PluginTab>>(output)
+            {
                 tabs.append(&mut plugin_tabs);
             }
         }
         tabs
     }
-
     pub fn collect_ui_config(&self, state: &PluginUiState) -> PluginUiConfig {
         if !self.allow_lua_ui_changes {
             return PluginUiConfig::default();
@@ -646,7 +657,10 @@ impl PluginManager {
                     continue;
                 }
             };
-            let output = match func.call::<Value>(state_lua) {
+            let output = match with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>(state_lua),
+            ) {
                 Ok(value) => value,
                 Err(err) => {
                     self.warn(
@@ -663,17 +677,18 @@ impl PluginManager {
             }
             match plugin.lua.from_value::<PluginUiConfig>(output) {
                 Ok(next) => merge_ui_config(&mut config, next),
-                Err(err) => self.warn(
-                    PluginWarningLevel::Error,
-                    Some(plugin),
-                    Some(hook),
-                    format!("invalid return shape: {err}"),
-                ),
+                Err(err) => {
+                    self.warn(
+                        PluginWarningLevel::Error,
+                        Some(plugin),
+                        Some(hook),
+                        format!("invalid return shape: {err}"),
+                    )
+                }
             }
         }
         config
     }
-
     pub fn collect_ui_sections(&self, state: &PluginUiState) -> PluginUiSections {
         if !self.allow_lua_ui_changes {
             return PluginUiSections::default();
@@ -696,7 +711,10 @@ impl PluginManager {
                     continue;
                 }
             };
-            let output = match func.call::<Value>(state_lua) {
+            let output = match with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>(state_lua),
+            ) {
                 Ok(value) => value,
                 Err(err) => {
                     self.warn(
@@ -713,17 +731,18 @@ impl PluginManager {
             }
             match plugin.lua.from_value::<PluginUiSections>(output) {
                 Ok(plugin_sections) => sections.extend(plugin_sections),
-                Err(err) => self.warn(
-                    PluginWarningLevel::Error,
-                    Some(plugin),
-                    Some(hook),
-                    format!("invalid return shape: {err}"),
-                ),
+                Err(err) => {
+                    self.warn(
+                        PluginWarningLevel::Error,
+                        Some(plugin),
+                        Some(hook),
+                        format!("invalid return shape: {err}"),
+                    )
+                }
             }
         }
         sections
     }
-
     pub fn collect_ui_inject(&self, state: &PluginUiState) -> PluginUiInject {
         if !self.allow_lua_ui_changes {
             return PluginUiInject::default();
@@ -746,7 +765,10 @@ impl PluginManager {
                     continue;
                 }
             };
-            let output = match func.call::<Value>(state_lua) {
+            let output = match with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>(state_lua),
+            ) {
                 Ok(value) => value,
                 Err(err) => {
                     self.warn(
@@ -769,17 +791,18 @@ impl PluginManager {
                     inject.queue_bottom.extend(plugin_inject.queue_bottom);
                     inject.statusbar_extra.extend(plugin_inject.statusbar_extra);
                 }
-                Err(err) => self.warn(
-                    PluginWarningLevel::Error,
-                    Some(plugin),
-                    Some(hook),
-                    format!("invalid return shape: {err}"),
-                ),
+                Err(err) => {
+                    self.warn(
+                        PluginWarningLevel::Error,
+                        Some(plugin),
+                        Some(hook),
+                        format!("invalid return shape: {err}"),
+                    )
+                }
             }
         }
         inject
     }
-
     pub fn collect_ui_update(&self, state: &PluginUiState) -> PluginLayoutConfig {
         if !self.allow_lua_ui_changes {
             return PluginLayoutConfig::default();
@@ -802,7 +825,10 @@ impl PluginManager {
                     continue;
                 }
             };
-            let output = match func.call::<Value>(state_lua) {
+            let output = match with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>(state_lua),
+            ) {
                 Ok(value) => value,
                 Err(err) => {
                     self.warn(
@@ -824,7 +850,6 @@ impl PluginManager {
         }
         layout
     }
-
     fn layout_config_from_value(
         &self,
         plugin: &LuaPlugin,
@@ -837,35 +862,46 @@ impl PluginManager {
             }
             _ => true,
         };
-
         let ui_result = plugin.lua.from_value::<PluginUiConfig>(output.clone());
         let layout_result = plugin.lua.from_value::<PluginLayoutConfig>(output);
-
         if prefer_ui_config {
             match ui_result {
                 Ok(config) => Some(config.layout),
-                Err(ui_err) => match layout_result {
-                    Ok(config) => Some(config),
-                    Err(layout_err) => {
-                        self.warn_invalid_layout_shape(plugin, hook, ui_err, layout_err);
-                        None
+                Err(ui_err) => {
+                    match layout_result {
+                        Ok(config) => Some(config),
+                        Err(layout_err) => {
+                            self.warn_invalid_layout_shape(
+                                plugin,
+                                hook,
+                                ui_err,
+                                layout_err,
+                            );
+                            None
+                        }
                     }
-                },
+                }
             }
         } else {
             match layout_result {
                 Ok(config) => Some(config),
-                Err(layout_err) => match ui_result {
-                    Ok(config) => Some(config.layout),
-                    Err(ui_err) => {
-                        self.warn_invalid_layout_shape(plugin, hook, ui_err, layout_err);
-                        None
+                Err(layout_err) => {
+                    match ui_result {
+                        Ok(config) => Some(config.layout),
+                        Err(ui_err) => {
+                            self.warn_invalid_layout_shape(
+                                plugin,
+                                hook,
+                                ui_err,
+                                layout_err,
+                            );
+                            None
+                        }
                     }
-                },
+                }
             }
         }
     }
-
     fn warn_invalid_layout_shape(
         &self,
         plugin: &LuaPlugin,
@@ -882,7 +918,6 @@ impl PluginManager {
             ),
         );
     }
-
     pub fn collect_ui_panels(&self, state: &PluginUiState) -> Vec<PluginPanel> {
         let mut panels = Vec::new();
         for plugin in &self.plugins {
@@ -892,13 +927,19 @@ impl PluginManager {
             let Ok(state_lua) = plugin.lua.to_value(state) else {
                 continue;
             };
-            let Ok(output) = func.call::<Value>(state_lua) else {
+            let Ok(output) = with_exec_timeout(
+                &plugin.lua,
+                || func.call::<Value>(state_lua),
+            ) else {
                 continue;
             };
             if output.is_nil() {
                 continue;
             }
-            if let Ok(mut plugin_panels) = plugin.lua.from_value::<Vec<PluginPanel>>(output) {
+            if let Ok(mut plugin_panels) = plugin
+                .lua
+                .from_value::<Vec<PluginPanel>>(output)
+            {
                 for panel in &mut plugin_panels {
                     if panel.items.is_empty() && !panel.lines.is_empty() {
                         panel.items = panel
@@ -914,7 +955,12 @@ impl PluginManager {
         }
         panels
     }
-    fn merge_dispatch(&self, merged: &mut PluginDispatch, plugin: &LuaPlugin, output: Value) {
+    fn merge_dispatch(
+        &self,
+        merged: &mut PluginDispatch,
+        plugin: &LuaPlugin,
+        output: Value,
+    ) {
         if output.is_nil() {
             return;
         }
@@ -930,7 +976,6 @@ impl PluginManager {
                 return;
             }
         };
-
         merged.consume |= dispatch.consume;
         merged.flash = merged.flash.take().or(dispatch.flash);
         merged.flash_seconds = merged.flash_seconds.or(dispatch.flash_seconds);
@@ -947,7 +992,10 @@ impl PluginManager {
             .take()
             .or(dispatch.ui.set_album_search_query);
         merged.ui.set_focus = merged.ui.set_focus.take().or(dispatch.ui.set_focus);
-        merged.ui.set_search_mode = merged.ui.set_search_mode.or(dispatch.ui.set_search_mode);
+        merged.ui.set_search_mode = merged
+            .ui
+            .set_search_mode
+            .or(dispatch.ui.set_search_mode);
         merged.ui.set_selected_result = merged
             .ui
             .set_selected_result
@@ -964,7 +1012,6 @@ impl PluginManager {
             merge_ui_layout_patch(&mut merged.ui.layout, dispatch.ui.layout);
         }
     }
-
     fn read_hook(&self, plugin: &LuaPlugin, hook: &str) -> Option<Function> {
         let root = match plugin.lua.globals().get::<Table>("plugin") {
             Ok(root) => root,
@@ -1001,7 +1048,6 @@ impl PluginManager {
             }
         }
     }
-
     fn run_fold<T>(&self, mut value: T, hook: &str) -> T
     where
         T: Clone + serde::Serialize + serde::de::DeserializeOwned,
@@ -1013,13 +1059,13 @@ impl PluginManager {
             let Ok(input) = plugin.lua.to_value(&value) else {
                 continue;
             };
-            let Ok(output) = func.call::<Value>(input) else {
+            let Ok(output) = with_exec_timeout(&plugin.lua, || func.call::<Value>(input))
+            else {
                 continue;
             };
             if output.is_nil() {
                 continue;
             }
-
             if let Ok(next) = plugin.lua.from_value::<T>(output) {
                 value = next;
             } else {
@@ -1029,19 +1075,17 @@ impl PluginManager {
         value
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-
     #[test]
     fn collects_ui_panels_from_lua_hook() {
         let dir = tempfile::tempdir().expect("tempdir");
         let plugin_path = dir.path().join("panel.lua");
         fs::write(
-            &plugin_path,
-            r#"
+                &plugin_path,
+                r#"
 plugin = {}
 function plugin.on_ui_panels(state)
   return {
@@ -1057,10 +1101,13 @@ function plugin.on_ui_panels(state)
 end
 return plugin
 "#,
-        )
-        .expect("write plugin");
-
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), false);
+            )
+            .expect("write plugin");
+        let manager = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            false,
+        );
         let state = PluginUiState::from_runtime(
             Tab::Discover,
             None,
@@ -1072,7 +1119,6 @@ return plugin
             String::new(),
             1,
         );
-
         let panels = manager.collect_ui_panels(&state);
         assert_eq!(panels.len(), 1);
         assert_eq!(panels[0].title, "Stats");
@@ -1080,14 +1126,13 @@ return plugin
         assert!(matches!(panels[0].items[1], PluginPanelItem::Option { .. }));
         assert!(matches!(panels[0].items[2], PluginPanelItem::Stat { .. }));
     }
-
     #[test]
     fn ignores_new_ui_hooks_when_flag_is_false() {
         let dir = tempfile::tempdir().expect("tempdir");
         let plugin_path = dir.path().join("ui.lua");
         fs::write(
-            &plugin_path,
-            r#"
+                &plugin_path,
+                r#"
 plugin = {}
 function plugin.on_ui_config(state)
   return { layout = { queue_width_percent = 25 } }
@@ -1097,9 +1142,13 @@ function plugin.on_ui_sections(state)
 end
 return plugin
 "#,
-        )
-        .expect("write plugin");
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), false);
+            )
+            .expect("write plugin");
+        let manager = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            false,
+        );
         let state = PluginUiState::from_runtime(
             Tab::Discover,
             None,
@@ -1111,20 +1160,15 @@ return plugin
             String::new(),
             0,
         );
-        assert!(manager
-            .collect_ui_config(&state)
-            .layout
-            .queue_width_percent
-            .is_none());
-        assert!(manager.collect_ui_sections(&state).is_empty());
+        assert!(manager.collect_ui_config(& state).layout.queue_width_percent.is_none());
+        assert!(manager.collect_ui_sections(& state).is_empty());
     }
-
     #[test]
     fn key_dispatch_deserializes_ui_layout_patch() {
         let dir = tempfile::tempdir().expect("tempdir");
         fs::write(
-            dir.path().join("layout_key.lua"),
-            r#"
+                dir.path().join("layout_key.lua"),
+                r#"
 plugin = {}
 function plugin.on_key(key, state)
   if key == "char:Z" then
@@ -1144,9 +1188,13 @@ function plugin.on_key(key, state)
 end
 return plugin
 "#,
-        )
-        .expect("write plugin");
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), true);
+            )
+            .expect("write plugin");
+        let manager = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            true,
+        );
         let state = PluginUiState::from_runtime(
             Tab::Discover,
             None,
@@ -1166,13 +1214,12 @@ return plugin
         assert_eq!(dispatch.ui.layout.visualizer_height, Some(4));
         assert_eq!(dispatch.ui.layout.tab_bar_position.as_deref(), Some("top"));
     }
-
     #[test]
     fn ui_update_accepts_layout_and_full_config_shapes() {
         let dir = tempfile::tempdir().expect("tempdir");
         fs::write(
-            dir.path().join("layout.lua"),
-            r#"
+                dir.path().join("layout.lua"),
+                r#"
 plugin = {}
 function plugin.on_ui_update(state)
   if state.active_tab == "discover" then
@@ -1182,9 +1229,13 @@ function plugin.on_ui_update(state)
 end
 return plugin
 "#,
-        )
-        .expect("write plugin");
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), true);
+            )
+            .expect("write plugin");
+        let manager = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            true,
+        );
         let mut state = PluginUiState::from_runtime(
             Tab::Discover,
             None,
@@ -1198,19 +1249,17 @@ return plugin
         );
         let layout = manager.collect_ui_update(&state);
         assert_eq!(layout.queue_width_percent, Some(33));
-
         state.active_tab = "library".to_owned();
         let layout = manager.collect_ui_update(&state);
         assert_eq!(layout.visualizer_height, Some(7));
     }
-
     #[test]
     fn collects_new_ui_hooks_when_flag_is_true() {
         let dir = tempfile::tempdir().expect("tempdir");
         let plugin_path = dir.path().join("ui.lua");
         fs::write(
-            &plugin_path,
-            r#"
+                &plugin_path,
+                r#"
 plugin = {}
 function plugin.on_ui_config(state)
   return {
@@ -1232,9 +1281,13 @@ function plugin.on_ui_inject(state)
 end
 return plugin
 "#,
-        )
-        .expect("write plugin");
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), true);
+            )
+            .expect("write plugin");
+        let manager = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            true,
+        );
         let state = PluginUiState::from_runtime(
             Tab::Discover,
             None,
@@ -1254,34 +1307,32 @@ return plugin
         assert_eq!(config.tabs.custom[0].id, "dash");
         let sections = manager.collect_ui_sections(&state);
         assert_eq!(sections["hello"].len(), 2);
-        assert_eq!(manager.collect_ui_inject(&state).statusbar_extra.len(), 1);
+        assert_eq!(manager.collect_ui_inject(& state).statusbar_extra.len(), 1);
     }
-
     #[test]
     fn records_lua_load_and_hook_warnings() {
         let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("broken.lua"), "plugin = { }
+function nope")
+            .expect("write plugin");
         fs::write(
-            dir.path().join("broken.lua"),
-            "plugin = { }
-function nope",
-        )
-        .expect("write plugin");
-        fs::write(
-            dir.path().join("bad_hook.lua"),
-            r#"
+                dir.path().join("bad_hook.lua"),
+                r#"
 plugin = {}
 function plugin.on_ui_config(state)
   error("bad config")
 end
 return plugin
 "#,
-        )
-        .expect("write plugin");
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), true);
+            )
+            .expect("write plugin");
+        let manager = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            true,
+        );
         let initial = manager.drain_warnings();
-        assert!(initial
-            .iter()
-            .any(|warning| warning.message.contains("load failed")));
+        assert!(initial.iter().any(| warning | warning.message.contains("load failed")));
         let state = PluginUiState::from_runtime(
             Tab::Discover,
             None,
@@ -1295,19 +1346,18 @@ return plugin
         );
         let _ = manager.collect_ui_config(&state);
         let hook_warnings = manager.drain_warnings();
-        assert!(hook_warnings.iter().any(|warning| {
-            warning.hook.as_deref() == Some("on_ui_config")
-                && warning.message.contains("hook call failed")
-        }));
+        assert!(
+            hook_warnings.iter().any(| warning | { warning.hook.as_deref() ==
+            Some("on_ui_config") && warning.message.contains("hook call failed") })
+        );
     }
-
     #[test]
     fn collects_legacy_lines_as_text_items() {
         let dir = tempfile::tempdir().expect("tempdir");
         let plugin_path = dir.path().join("panel.lua");
         fs::write(
-            &plugin_path,
-            r#"
+                &plugin_path,
+                r#"
 plugin = {}
 function plugin.on_ui_panels(state)
   return {
@@ -1316,9 +1366,13 @@ function plugin.on_ui_panels(state)
 end
 return plugin
 "#,
-        )
-        .expect("write plugin");
-        let manager = PluginManager::load(true, dir.path().to_str().expect("utf8"), false);
+            )
+            .expect("write plugin");
+        let manager = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            false,
+        );
         let state = PluginUiState::from_runtime(
             Tab::Discover,
             None,
@@ -1335,11 +1389,9 @@ return plugin
         assert!(matches!(panels[0].items[0], PluginPanelItem::Text { .. }));
     }
 }
-
 fn lua_table_has_key(table: &Table, key: &str) -> bool {
-    matches!(table.get::<Value>(key), Ok(value) if !value.is_nil())
+    matches!(table.get::< Value > (key), Ok(value) if ! value.is_nil())
 }
-
 fn merge_ui_config(target: &mut PluginUiConfig, source: PluginUiConfig) {
     target.tabs.remove.extend(source.tabs.remove);
     if !source.tabs.order.is_empty() {
@@ -1349,7 +1401,6 @@ fn merge_ui_config(target: &mut PluginUiConfig, source: PluginUiConfig) {
     target.tabs.custom.extend(source.tabs.custom);
     merge_layout_config(&mut target.layout, source.layout);
 }
-
 fn merge_layout_config(target: &mut PluginLayoutConfig, source: PluginLayoutConfig) {
     if source.queue_width_percent.is_some() {
         target.queue_width_percent = source.queue_width_percent;
@@ -1383,7 +1434,6 @@ fn merge_layout_config(target: &mut PluginLayoutConfig, source: PluginLayoutConf
     target.hide_sections.extend(source.hide_sections);
     target.show_sections.extend(source.show_sections);
 }
-
 fn merge_ui_layout_patch(target: &mut PluginUiLayoutPatch, source: PluginUiLayoutPatch) {
     if source.queue_width_percent.is_some() {
         target.queue_width_percent = source.queue_width_percent;
