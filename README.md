@@ -103,13 +103,6 @@ system audio:
 - Press `Ctrl+V` (or your remapped `fft_toggle` key) at any time to flip
   between the synthetic and real spectrum, this doesn't replace the
   synthetic visualizer, it's an additional mode you can toggle on the fly.
-- The real visualizer captures **rs-pug's own audio** and runs it through an
-  FFT (`rustfft`) never the microphone. It does this by giving mpv a fixed
-  stream name (`--audio-client-name=rs-pug`) and looking that exact stream
-  up via `pactl` before recording it directly
-  (`parec --monitor-stream=<index>`). If rs-pug isn't playing anything yet
-  when the visualizer starts, it falls back to the system's default output
-  (`@DEFAULT_SINK@.monitor`) still speaker output, still never the mic.
   It tries, in order, whichever of these is installed:
   1. `parec` — PulseAudio, or PipeWire's `pipewire-pulse` compatibility layer
      (most distros with PipeWire ship this, so `parec` just works, and it's
