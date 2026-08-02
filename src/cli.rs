@@ -13,6 +13,8 @@ pub struct Args {
     pub next: bool,
     #[arg(long)]
     pub prev: bool,
+    #[arg(long)]
+    pub debug: bool,
 }
 #[derive(ValueEnum, Clone, Debug)]
 pub enum SourceArg {

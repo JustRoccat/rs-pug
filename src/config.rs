@@ -29,7 +29,7 @@ pub fn save_eq_preset(preset: &EqPreset) -> Result<(), std::io::Error> {
     let path = PathBuf::from(home)
         .join(format!(".config/rs-pug/eqpresets/{}.json", safe_name));
     let raw = serde_json::to_string_pretty(preset)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     fs::write(path, raw)
 }
 pub fn load_eq_presets() -> Vec<EqPreset> {
@@ -101,7 +101,7 @@ fn default_spectrum() -> Vec<[u8; 3]> {
         [255, 158, 38], [255, 78, 78],
     ]
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -114,20 +114,10 @@ pub struct Config {
     #[serde(default)]
     pub lua: LuaConfig,
 }
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            search: SearchConfig::default(),
-            mpv: MpvConfig::default(),
-            keybinds: KeybindsConfig::default(),
-            lua: LuaConfig::default(),
-        }
-    }
-}
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
+    #[default]
     Dark,
     Light,
     Nord,
@@ -135,11 +125,6 @@ pub enum Theme {
     Mono,
     #[serde(untagged)]
     Custom(String),
-}
-impl Default for Theme {
-    fn default() -> Self {
-        Theme::Dark
-    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GeneralConfig {
@@ -171,17 +156,10 @@ impl Default for GeneralConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LuaConfig {
     #[serde(default, rename = "allow-lua-ui-changes", alias = "allow_lua_ui_changes")]
     pub allow_lua_ui_changes: bool,
-}
-impl Default for LuaConfig {
-    fn default() -> Self {
-        Self {
-            allow_lua_ui_changes: false,
-        }
-    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KeybindsConfig {
@@ -216,16 +194,12 @@ impl Default for KeybindsConfig {
         }
     }
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchSource {
+    #[default]
     YouTube,
     SoundCloud,
-}
-impl Default for SearchSource {
-    fn default() -> Self {
-        SearchSource::YouTube
-    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchConfig {
@@ -265,16 +239,28 @@ pub fn ensure_default_dirs() {
         let _ = fs::create_dir_all(eq_presets_dir);
     }
 }
-pub fn load_config() -> Config {
+pub fn load_config_with_diagnostics() -> (Config, Option<String>) {
     let paths = config_paths();
-    for path in paths {
-        if let Ok(raw) = fs::read_to_string(&path) {
-            if let Ok(cfg) = toml::from_str::<Config>(&raw) {
-                return cfg;
+    let mut warning: Option<String> = None;
+    for path in &paths {
+        let raw = match fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        match toml::from_str::<Config>(&raw) {
+            Ok(cfg) => return (cfg, None),
+            Err(err) => {
+                log::warn!("failed to parse config at {}: {err}", path.display());
+                if warning.is_none() {
+                    warning = Some(format!(
+                        "Config at {} is invalid, using defaults: {err}",
+                        path.display()
+                    ));
+                }
             }
         }
     }
-    Config::default()
+    (Config::default(), warning)
 }
 pub fn save_config(config: &Config) {
     let path = user_config_path();
@@ -295,6 +281,13 @@ fn user_config_path() -> PathBuf {
         PathBuf::from(home).join(".config/rs-pug/config.toml")
     } else {
         PathBuf::from("rs-pug.toml")
+    }
+}
+pub fn log_path() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".config/rs-pug/rs-pug.log")
+    } else {
+        PathBuf::from("rs-pug.log")
     }
 }
 fn default_true() -> bool {

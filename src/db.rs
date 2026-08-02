@@ -157,7 +157,7 @@ impl DbStorage {
                 .prepare(
                     "INSERT OR IGNORE INTO playlist_songs (playlist_id, song_id, song_type, position) VALUES (?, ?, ?, ?)",
                 )?;
-            for (_pos, playlist) in playlists.iter().enumerate() {
+            for playlist in playlists.iter() {
                 tx.execute(
                     "INSERT OR IGNORE INTO playlists (name) VALUES (?)",
                     [&playlist.name],

@@ -7,11 +7,13 @@ use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyEvent};
 use tokio::sync::mpsc;
+mod actions;
 mod cli;
 mod config;
 mod core;
 mod db;
 mod eq;
+mod extras;
 mod fft;
 mod events;
 mod input;
@@ -23,7 +25,7 @@ mod terminal;
 mod tui;
 mod ui_helpers;
 mod utils;
-use config::{load_config, SearchSource};
+use config::{load_config_with_diagnostics, SearchSource};
 use core::{Core, CoreCmd, CoreEvent};
 use input::KeyPluginAction;
 use model::App;
@@ -50,9 +52,29 @@ struct PendingPluginKey {
     labels: Vec<String>,
     state: PluginUiState,
 }
+fn init_logging(debug: bool) {
+    if !debug {
+        return;
+    }
+    let path = config::log_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let file = match fs::File::create(&path) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let _ = simplelog::WriteLogger::init(
+        log::LevelFilter::Debug,
+        simplelog::Config::default(),
+        file,
+    );
+    log::info!("rs-pug starting, debug logging enabled -> {}", path.display());
+}
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = cli::Args::parse();
+    init_logging(args.debug);
     let ipc_sock_path = "/tmp/rs-pug-ipc.sock";
     let is_client_cmd = args.toggle_pause || args.next || args.prev
         || args.play.is_some();
@@ -72,6 +94,7 @@ async fn main() -> Result<()> {
                 let _ = stream.write_all(format!("PLAY {play}\n").as_bytes()).await;
             }
         } else {
+            log::warn!("failed to connect to IPC socket at {ipc_sock_path}");
             eprintln!(
                 "Failed to connect to rs-pug instance at {ipc_sock_path}. Is it running?"
             );
@@ -81,7 +104,7 @@ async fn main() -> Result<()> {
     }
     terminal::install_panic_hook();
     config::ensure_default_dirs();
-    let mut config = load_config();
+    let (mut config, config_warning) = load_config_with_diagnostics();
     if let Some(source_arg) = args.source {
         config.search.source = SearchSource::from(source_arg);
     }
@@ -144,12 +167,16 @@ async fn main() -> Result<()> {
     let storage = match Storage::init() {
         Ok(storage) => storage,
         Err(err) => {
+            log::error!("failed to init storage: {err}");
             terminal::restore_terminal(terminal)?;
             anyhow::bail!("Failed to init storage: {err}");
         }
     };
     let mut app = App::new(storage);
     app.apply_config(&config);
+    if let Some(warning) = config_warning {
+        app.set_flash(warning, 6);
+    }
     if config.general.fft_visualizer_default {
         app.show_fft = true;
         app.fft_state = Some(fft::start_fft_monitor());
@@ -211,9 +238,13 @@ async fn main() -> Result<()> {
             if hr.config_changed {
                 let old = config.clone();
                 let prev_opt_theme = app.opt_theme.clone();
-                config = load_config();
+                let (reloaded, warning) = load_config_with_diagnostics();
+                config = reloaded;
                 app.apply_config(&config);
                 app.opt_theme = prev_opt_theme;
+                if let Some(warning) = warning {
+                    app.set_flash(warning, 6);
+                }
                 let _ = hr_paths_tx
                     .send(HotReloadPaths {
                         plugins_dir: config.general.plugins_dir.clone(),
@@ -721,7 +752,7 @@ impl DirSnapshot {
         }
     }
     fn refresh(&mut self) -> bool {
-        let next = Self::capture(&self.dir.clone(), &self.extension.clone());
+        let next = Self::capture(self.dir.clone(), &self.extension.clone());
         if *self != next {
             *self = next;
             true

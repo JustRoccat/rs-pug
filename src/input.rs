@@ -1,7 +1,9 @@
 use crate::config::{save_config, EqPreset, SearchSource};
+use crate::actions;
 use crate::core::CoreCmd;
 use crate::eq;
 use crate::events;
+use crate::extras;
 use crate::model::{
     App, Focus, LocalNavLevel, LocalTagField, LocalViewMode, PlayerState, Song, Tab,
 };
@@ -153,6 +155,52 @@ pub fn handle_key_event_pre_plugin(
             KeyCode::Char('n') | KeyCode::Esc => {
                 app.playlists.confirm_delete = false;
                 app.set_flash("Delete canceled", 2);
+            }
+            _ => {}
+        }
+        return KeyPluginAction::Handled(true);
+    }
+    if app.help_open {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                app.help_open = false;
+            }
+            _ => {}
+        }
+        return KeyPluginAction::Handled(true);
+    }
+    if app.palette_open {
+        match key.code {
+            KeyCode::Esc => {
+                app.palette_open = false;
+                app.palette_query.clear();
+            }
+            KeyCode::Up => {
+                app.palette_selected = app.palette_selected.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                let len = actions::filter_commands(&app.palette_query).len();
+                app.palette_selected = (app.palette_selected + 1).min(len.saturating_sub(1));
+            }
+            KeyCode::Backspace => {
+                app.palette_query.pop();
+                app.palette_selected = 0;
+            }
+            KeyCode::Enter => {
+                let matches = actions::filter_commands(&app.palette_query);
+                if let Some(cmd) = matches.get(app.palette_selected) {
+                    let action = cmd.action;
+                    app.palette_open = false;
+                    app.palette_query.clear();
+                    app.palette_selected = 0;
+                    if !actions::dispatch(app, cmd_tx, action) {
+                        return KeyPluginAction::Handled(false);
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                app.palette_query.push(c);
+                app.palette_selected = 0;
             }
             _ => {}
         }
@@ -339,14 +387,15 @@ pub fn handle_native_key_event(
             app.set_flash(format!("Created {name}"), 3);
             playlist::ensure_playlist_state(app);
         }
-        KeyCode::Char('x') if app.active_tab == Tab::Library => {
-            if app.playlists.selected_playlist < app.playlists.playlists.len() {
-                app.playlists.confirm_delete = true;
-                app.playlists.delete_name = app.playlists.playlists
-                    [app.playlists.selected_playlist]
-                    .name
-                    .clone();
-            }
+        KeyCode::Char('x')
+            if app.active_tab == Tab::Library
+                && app.playlists.selected_playlist < app.playlists.playlists.len() =>
+        {
+            app.playlists.confirm_delete = true;
+            app.playlists.delete_name = app.playlists.playlists
+                [app.playlists.selected_playlist]
+                .name
+                .clone();
         }
         KeyCode::Char('e') if app.active_tab == Tab::Library => {
             if let Some(open) = app
@@ -368,12 +417,30 @@ pub fn handle_native_key_event(
                 app.playlists.context_index = 0;
             }
         }
+        KeyCode::Char('?') => {
+            app.help_open = true;
+        }
+        KeyCode::Char(':') => {
+            app.palette_open = true;
+            app.palette_query.clear();
+            app.palette_selected = 0;
+        }
         KeyCode::Char('/') => {
             if !matches!(app.active_tab, Tab::Discover | Tab::Albums | Tab::Local) {
                 return true;
             }
             app.search_mode = true;
             app.focus = Focus::Search;
+        }
+        KeyCode::Esc
+            if app.focus == Focus::Results
+                && !app.multi_select.is_empty()
+                && (app.active_tab == Tab::Discover
+                    || (app.active_tab == Tab::Local
+                        && app.local.view_mode == LocalViewMode::Flat)) =>
+        {
+            app.multi_select.clear();
+            app.set_flash("Selection cleared", 2);
         }
         KeyCode::Backspace | KeyCode::Esc
             if app.active_tab == Tab::Local
@@ -413,7 +480,11 @@ pub fn handle_native_key_event(
         }
         KeyCode::Char('g') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'g'),
         KeyCode::Char('a') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'a'),
-        KeyCode::Char('b') if app.active_tab == Tab::Local => set_filter_from_selected(app, 'b'),
+        KeyCode::Char('b')
+            if app.active_tab == Tab::Local && app.local.view_mode == LocalViewMode::Organized =>
+        {
+            set_filter_from_selected(app, 'b')
+        }
         KeyCode::Char('e')
             if app.active_tab == Tab::Local && app.local.view_mode == LocalViewMode::Flat =>
         {
@@ -571,10 +642,15 @@ pub fn handle_native_key_event(
                     }
                 } else if app.options_index == 8 {
                     eq::cycle_eq_preset(app, cmd_tx, 1);
+                } else if app.options_index == ui_helpers::SPEED_OPTIONS_INDEX {
+                    extras::reset_speed(app, cmd_tx);
                 }
                 return true;
             }
             match app.focus {
+                Focus::Results if app.active_tab == Tab::Discover && !app.multi_select.is_empty() => {
+                    extras::bulk_queue_marked_discover(app, cmd_tx);
+                }
                 Focus::Results if app.active_tab == Tab::Discover => {
                     if let Some(song) = app.current_selection().cloned() {
                         app.queue.push_back(song.clone());
@@ -632,6 +708,13 @@ pub fn handle_native_key_event(
                         let _ = cmd_tx.send(CoreCmd::Play(song));
                     }
                 }
+                Focus::Results
+                    if app.active_tab == Tab::Local
+                        && app.local.view_mode == LocalViewMode::Flat
+                        && !app.multi_select.is_empty() =>
+                {
+                    extras::bulk_queue_marked_local(app, cmd_tx);
+                }
                 Focus::Results => {
                     if app.active_tab == Tab::Local {
                         if app.local.view_mode == LocalViewMode::Flat {
@@ -680,6 +763,24 @@ pub fn handle_native_key_event(
         KeyCode::Char(' ') => {
             let _ = cmd_tx.send(CoreCmd::TogglePause);
         }
+        KeyCode::Char('b')
+            if (app.active_tab == Tab::Discover && app.focus == Focus::Results)
+                || (app.active_tab == Tab::Local
+                    && app.local.view_mode == LocalViewMode::Flat
+                    && app.focus == Focus::Results) =>
+        {
+            let key = if app.active_tab == Tab::Discover {
+                app.current_selection().map(|s| s.id.clone())
+            } else {
+                app.local
+                    .window
+                    .get(app.local.selected_song.saturating_sub(app.local.offset))
+                    .map(|s| s.path.clone())
+            };
+            if let Some(key) = key {
+                extras::toggle_mark(app, key);
+            }
+        }
         KeyCode::Left if !is_core_options(app) => {
             let _ = cmd_tx.send(CoreCmd::SeekBy(-10));
         }
@@ -720,17 +821,16 @@ pub fn handle_native_key_event(
                 app.repeat_mode = ui_helpers::prev_repeat_mode(app.repeat_mode);
                 app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
             }
-            7 => {
-                if app.eq.focus_band > 0 {
-                    app.eq.focus_band -= 1;
-                }
+            7 if app.eq.focus_band > 0 => {
+                app.eq.focus_band -= 1;
             }
             8 => eq::cycle_eq_preset(app, cmd_tx, -1),
             9 => app.key_next = ui_helpers::cycle_keybind_char(&app.key_next, -1),
             10 => app.key_prev = ui_helpers::cycle_keybind_char(&app.key_prev, -1),
-            ui_helpers::MAX_OPTIONS_INDEX => {
+            ui_helpers::KEY_MUTE_OPTIONS_INDEX => {
                 app.key_mute = ui_helpers::cycle_keybind_char(&app.key_mute, -1);
             }
+            ui_helpers::SPEED_OPTIONS_INDEX => extras::nudge_speed(app, cmd_tx, -1),
             _ => {}
         },
         KeyCode::Char('l') | KeyCode::Right if is_core_options(app) => match app.options_index {
@@ -746,17 +846,16 @@ pub fn handle_native_key_event(
                 app.repeat_mode = app.repeat_mode.next();
                 app.set_flash(format!("Repeat mode: {}", app.repeat_mode.label()), 2);
             }
-            7 => {
-                if app.eq.focus_band < 9 {
-                    app.eq.focus_band += 1;
-                }
+            7 if app.eq.focus_band < 9 => {
+                app.eq.focus_band += 1;
             }
             8 => eq::cycle_eq_preset(app, cmd_tx, 1),
             9 => app.key_next = ui_helpers::cycle_keybind_char(&app.key_next, 1),
             10 => app.key_prev = ui_helpers::cycle_keybind_char(&app.key_prev, 1),
-            ui_helpers::MAX_OPTIONS_INDEX => {
+            ui_helpers::KEY_MUTE_OPTIONS_INDEX => {
                 app.key_mute = ui_helpers::cycle_keybind_char(&app.key_mute, 1);
             }
+            ui_helpers::SPEED_OPTIONS_INDEX => extras::nudge_speed(app, cmd_tx, 1),
             _ => {}
         },
         KeyCode::Char('p') if is_core_options(app) => {

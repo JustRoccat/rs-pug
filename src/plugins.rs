@@ -493,6 +493,11 @@ impl PluginManager {
                     lua,
                 });
         }
+        log::debug!(
+            "plugin load: {} loaded, {} warnings from {configured_dir}",
+            plugins.len(),
+            warnings.len()
+        );
         Self {
             plugins,
             enabled,

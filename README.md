@@ -56,22 +56,25 @@ Optional:
 
 | Key | Action |
 |-----|--------|
-| `1`–`5` | Switch tabs |
+| `1`–`5` | Switch tabs: Discover, Albums, Library (playlists), Local, Options |
 | `Tab` | Switch panel focus |
 | `j` / `k` | Move up / down |
 | `/` | Search |
-| `Enter` | Play |
+| `Enter` | Play (or, with marked songs, add them all to the queue - see Multi-select below) |
 | `Space` | Pause / Resume |
 | `n` / `p` | Next / Previous |
 | `m` | Mute |
 | `r` | Cycle repeat mode |
 | `c` | Context menu |
 | `v` | Toggle flat/organized view (Local tab) |
-| `Ctrl+V` | Toggle the real FFT spectrum visualizer (needs `parec`) — see below |
+| `Ctrl+V` | Toggle the real FFT spectrum visualizer (needs `parec`) - see below |
 | `e` | Edit ID3 tags for selected local file (Local tab) |
 | `s` | Cycle local sort mode: title, artist, album, year, date added (Local tab) |
-| `g` / `a` / `b` | Filter local library by selected genre / artist / album |
+| `g` / `a` | Filter local library by selected genre / artist (Local tab, Organized view) |
+| `b` | Organized view (Local): filter by selected album. Flat view (Local) / Discover results: mark/unmark the selected song for bulk-queue - see Multi-select below |
 | `F` | Clear local library filters |
+| `:` | Open the command palette - type to search any action, `↑`/`↓` to pick, `Enter` to run |
+| `?` | Show the full list of commands (same list the palette searches, read-only) |
 | `q` | Quit |
 
 Every keybind above (`n`, `p`, `m`, `r`, `z`, `[`, `]`, and the FFT toggle) can be
@@ -91,7 +94,7 @@ fft_toggle = "C-v"   # Ctrl+V
 ```
 
 - Modifiers: prefix with `C-` (Ctrl), `M-` (Alt), and/or `S-` (Shift), e.g. `C-r` or `M-S-n`.
-- Multi-key sequences: separate keys with a space, e.g. `g g` — press `g` then `g` again within 1.5s.
+- Multi-key sequences: separate keys with a space, e.g. `g g` - press `g` then `g` again within 1.5s.
 `next`/`prev`/`mute`/`repeat`/`shuffle`/`seek_back`/`seek_forward` can also be re-mapped from the **Options** tab with `h`/`l` (currently limited to single characters there; use the config file directly for modifiers or sequences).
 
 ## FFT Visualizer
@@ -104,7 +107,7 @@ system audio:
   between the synthetic and real spectrum, this doesn't replace the
   synthetic visualizer, it's an additional mode you can toggle on the fly.
   It tries, in order, whichever of these is installed:
-  1. `parec` — PulseAudio, or PipeWire's `pipewire-pulse` compatibility layer
+  1. `parec` - PulseAudio, or PipeWire's `pipewire-pulse` compatibility layer
      (most distros with PipeWire ship this, so `parec` just works, and it's
      also what enables the precise per-stream capture above via `pactl`).
   2. `pw-cat --record --raw --monitor`, targeting the default sink, native
@@ -143,6 +146,9 @@ Each of these connects to the running instance's IPC socket and exits
 immediately; if no instance is running, it prints an error instead of
 starting a new one.
 
+Pass `--debug` to write debug logs to `~/.config/rs-pug/rs-pug.log` Useful when
+filing a bug report.
+
 
 ## Contri-pug-ting
 
@@ -151,7 +157,7 @@ starting a new one.
 3. Smash your head against the keyboard (Rust can be like that)
 4. Open a pull request
 
-Lua plugin PRs especially welcome — API reference in [`docs.md`](./docs.md).
+Lua plugin PRs especially welcome - API reference in [`docs.md`](./docs.md).
 
 ## Mouse Support
 
@@ -161,6 +167,35 @@ Lua plugin PRs especially welcome — API reference in [`docs.md`](./docs.md).
 ## Smart Queue
 
 In the **Options** tab, you can trigger the **Smart Queue**. This feature analyzes the currently playing song and automatically finds similar tracks from the same uploader or with similar titles to keep the music flowing.
+
+## Multi-select / Bulk Queue
+
+Instead of adding search results or local songs to the queue one at a time:
+
+- Press `b` on a song to mark it (shows a `✓` next to it). Works in **Discover** results and in the **Local** tab's flat view.
+- Keep moving with `j`/`k` and marking more songs.
+- Press `Enter` to add every marked song to the queue at once, in list order. Playback starts automatically only if nothing was already playing.
+- Press `Esc` to clear the marks without queuing anything.
+
+Marks are tracked by song, not by list position, so scrolling or paging the list won't shift or lose them.
+
+## Command Palette & Help
+
+- `:` opens a command palette (like Vim's `:` or a VS Code-style command bar). Start typing to fuzzy-filter every available action, playback controls, volume, repeat/shuffle, seeking, speed, equalizer, and jumping to any tab then `↑`/`↓` to pick one and `Enter` to run it. `Esc` closes it without running anything.
+- `?` opens a read-only, full list of the same commands with short descriptions, if you just want to see what's available without typing anything. Close it with `?`, `q`, or `Esc`.
+
+## Playback Speed
+
+The **Options** tab has a **Speed** row (0.25x–2.00x). Select it and use `h`/`l` to adjust in 0.05x steps, or `Enter` to reset to 1.00x. The current speed shows as a small badge next to "Now Playing" whenever it isn't 1.00x, and is also reachable from the command palette (`speed up` / `speed down` / `speed reset`).
+
+## Equalizer
+
+Beyond enabling/disabling the EQ and picking a preset from the **Options** tab, the 10-band graph itself is interactive once the **EQ** row is selected:
+
+- `h`/`l` moves between the 10 bands.
+- `+`/`-` raises or lowers the gain of the selected band (-12 dB to +12 dB).
+- `p` cycles through EQ presets from anywhere in the Options tab.
+- `s` saves the current settings (including EQ) to `~/.config/rs-pug/config.toml`.
 
 ## Customization
 

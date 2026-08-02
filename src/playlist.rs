@@ -191,8 +191,10 @@ pub fn ensure_playlist_state(app: &mut App) {
         app.playlists
             .expanded
             .extend(
-                std::iter::repeat(false)
-                    .take(app.playlists.playlists.len() - app.playlists.expanded.len()),
+                std::iter::repeat_n(
+                    false,
+                    app.playlists.playlists.len() - app.playlists.expanded.len(),
+                ),
             );
     } else if app.playlists.expanded.len() > app.playlists.playlists.len() {
         app.playlists.expanded.truncate(app.playlists.playlists.len());

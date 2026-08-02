@@ -157,13 +157,13 @@ pub fn start_fft_monitor() -> Arc<Mutex<FftState>> {
             Some(s) => BufReader::new(s),
             None => return,
         };
-        if matches!(backend, CaptureBackend::PwRecord) {
-            if skip_wav_header(&mut stdout).await.is_err() {
-                return;
-            }
+        if matches!(backend, CaptureBackend::PwRecord)
+            && skip_wav_header(&mut stdout).await.is_err()
+        {
+            return;
         }
         {
-            let mut s = state_clone.lock().unwrap();
+            let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
             s.running = true;
         }
         let mut buffer = [0u8; 2048];
@@ -173,62 +173,55 @@ pub fn start_fft_monitor() -> Arc<Mutex<FftState>> {
         const USABLE_BINS: usize = 512;
         let mut band_peaks: [f32; NUM_BANDS] = [1e-3; NUM_BANDS];
         let mut smoothed = vec![0.0f64; NUM_BANDS];
-        loop {
-            match stdout.read_exact(&mut buffer).await {
-                Ok(_) => {
-                    let mut input: Vec<Complex<f32>> = buffer
-                        .chunks_exact(2)
-                        .map(|chunk| {
-                            let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32
-                                / 32768.0;
-                            Complex { re: sample, im: 0.0 }
-                        })
-                        .collect();
-                    if input.len() == 1024 {
-                        fft.process(&mut input);
-                        let mut raw_bands = [0.0f32; NUM_BANDS];
-                        let mut lower_bin = 1usize;
-                        for (i, band) in raw_bands.iter_mut().enumerate() {
-                            let frac = (i + 1) as f32 / NUM_BANDS as f32;
-                            let target = (USABLE_BINS as f32).powf(frac).round()
-                                as usize;
-                            let upper_bin = target.max(lower_bin + 1).min(USABLE_BINS);
-                            let mut sum = 0.0f32;
-                            let mut count = 0usize;
-                            for bin in lower_bin..upper_bin {
-                                if bin < input.len() {
-                                    sum += input[bin].norm();
-                                    count += 1;
-                                }
-                            }
-                            *band = if count > 0 { sum / count as f32 } else { 0.0 };
-                            lower_bin = upper_bin;
-                        }
-                        for i in 0..NUM_BANDS {
-                            band_peaks[i] = (band_peaks[i] * 0.995)
-                                .max(raw_bands[i])
-                                .max(1e-3);
-                            let ratio = (raw_bands[i] / band_peaks[i]).clamp(0.0, 1.0);
-                            let normalized = (ratio.powf(1.5) * 0.9) as f64;
-                            if normalized > smoothed[i] {
-                                smoothed[i] = smoothed[i] * 0.45 + normalized * 0.55;
-                            } else {
-                                smoothed[i] = smoothed[i] * 0.85 + normalized * 0.15;
-                            }
-                        }
-                        {
-                            let mut s = state_clone.lock().unwrap();
-                            s.bands = smoothed.clone();
+        while stdout.read_exact(&mut buffer).await.is_ok() {
+            let mut input: Vec<Complex<f32>> = buffer
+                .chunks_exact(2)
+                .map(|chunk| {
+                    let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32
+                        / 32768.0;
+                    Complex { re: sample, im: 0.0 }
+                })
+                .collect();
+            if input.len() == 1024 {
+                fft.process(&mut input);
+                let mut raw_bands = [0.0f32; NUM_BANDS];
+                let mut lower_bin = 1usize;
+                for (i, band) in raw_bands.iter_mut().enumerate() {
+                    let frac = (i + 1) as f32 / NUM_BANDS as f32;
+                    let target = (USABLE_BINS as f32).powf(frac).round()
+                        as usize;
+                    let upper_bin = target.max(lower_bin + 1).min(USABLE_BINS);
+                    let mut sum = 0.0f32;
+                    let mut count = 0usize;
+                    for bin in lower_bin..upper_bin {
+                        if bin < input.len() {
+                            sum += input[bin].norm();
+                            count += 1;
                         }
                     }
+                    *band = if count > 0 { sum / count as f32 } else { 0.0 };
+                    lower_bin = upper_bin;
                 }
-                Err(_) => {
-                    break;
+                for i in 0..NUM_BANDS {
+                    band_peaks[i] = (band_peaks[i] * 0.995)
+                        .max(raw_bands[i])
+                        .max(1e-3);
+                    let ratio = (raw_bands[i] / band_peaks[i]).clamp(0.0, 1.0);
+                    let normalized = (ratio.powf(1.5) * 0.9) as f64;
+                    if normalized > smoothed[i] {
+                        smoothed[i] = smoothed[i] * 0.45 + normalized * 0.55;
+                    } else {
+                        smoothed[i] = smoothed[i] * 0.85 + normalized * 0.15;
+                    }
+                }
+                {
+                    let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
+                    s.bands = smoothed.clone();
                 }
             }
         }
         {
-            let mut s = state_clone.lock().unwrap();
+            let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
             s.running = false;
         }
         let _ = child.kill().await;
