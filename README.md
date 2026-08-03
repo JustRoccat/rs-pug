@@ -1,85 +1,89 @@
-[![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
-## If you find this useful, a star is the only currency I get paid in
-
-# Read
-
-Im not gonna maintain aur anymore, if you want to be an aur maintainer please create a issue.
-
-This does not apply to crates.io, im gonna still maintain crates.io
-
-
-# Read this too
-
-Always check if you have the latest yt-dlp and mpv before calling this project shit
-
-
 # rs-pug
 
-No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files - all from your terminal.
+[![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
+[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
-Built in Rust with `mpv`, `yt-dlp`, and `ratatui`. Requires `mpv` installed.
+> No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files - all from your terminal.
 
-YT-DLP IS HIGHLY RECOMMENDED BUT NOT NECESSARY.
-rs-pug will work without it but you will lose the ability to stream and download songs through rs-pug.
+![demo](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 
-Plugins, themes and EQ presets from the community: [all-rspug](https://github.com/JustRoccat/all-rspug/) · [Discord](https://discord.gg/6FcBWwRQBX)
+`rs-pug` is a terminal music player built in Rust on top of `mpv`, `yt-dlp`, and `ratatui`. It streams and downloads from YouTube and SoundCloud, manages a local library and playlists, and can be extended with Lua plugins - all without leaving the terminal.
 
-![img](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
+> [!IMPORTANT]
+> AUR is no longer maintained by the author. If you'd like to take over as AUR maintainer, please open an issue. `crates.io` continues to be maintained.
+
+> [!TIP]
+> Before reporting a bug, make sure you're running the latest `yt-dlp` and `mpv`.
+
+Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRoccat/all-rspug/) · [Discord](https://discord.gg/6FcBWwRQBX)
+
+## Features
+
+- Search and stream from YouTube and SoundCloud, or play local files, all from one interface
+- Queue management with multi-select bulk-add
+- Playlists and library backed by SQLite, with automatic migration from legacy JSON
+- Smart Queue: finds similar tracks to keep the music flowing automatically
+- Real-time FFT audio spectrum visualizer (with a synthetic fallback)
+- 10-band graphic equalizer with savable presets
+- Fully remappable keybinds, including modifiers and multi-key sequences
+- Built-in and custom themes
+- Command palette (`:`) for fuzzy-searching every action
+- Control a running instance over IPC, for use in status bars or keybindings
+- Extensible with Lua plugins: custom keybinds, live panels, and full UI customization
+- Hot reload - configuration and theme changes apply automatically
+
+## Requirements
+
+- [`mpv`](https://mpv.io/) (required)
+- [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) (recommended - without it, streaming and downloading are unavailable, but local playback still works)
+- `mpv-mpris` (optional - enables media key / `playerctl` support)
 
 ## Installation
 
 ```bash
-# Arch [Unsupported]
-yay -S rs-pug-git
-
 # crates.io
 cargo install rs-pug
 
-# manual
-git clone https://github.com/JustRoccat/rs-pug && cd rs-pug
-cargo build --release && ./target/release/rs-pug
+# Manual
+git clone https://github.com/JustRoccat/rs-pug
+cd rs-pug
+cargo build --release
+./target/release/rs-pug
 ```
 
-## Dependencies
+> [!NOTE]
+> Community AUR packaging is not currently maintained. See the note above if you'd like to help.
 
-Required:
+## Usage
 
-- `mpv`
-- `yt-dlp`
+Run `rs-pug` to launch the TUI. The app scans `~/.config/rs-pug/music-local/` for local files by default; you can add more directories from the **Options** tab.
 
-Optional:
-
-- `mpv-mpris` (for media key / `playerctl` support)
-
-
-## Keybinds
+### Keybinds
 
 | Key | Action |
 |-----|--------|
-| `1`–`5` | Switch tabs: Discover, Albums, Library (playlists), Local, Options |
+| `1`-`5` | Switch tabs: Discover, Albums, Library (playlists), Local, Options |
 | `Tab` | Switch panel focus |
 | `j` / `k` | Move up / down |
 | `/` | Search |
-| `Enter` | Play (or, with marked songs, add them all to the queue - see Multi-select below) |
+| `Enter` | Play (or add all marked songs to the queue - see [Multi-select](#multi-select--bulk-queue)) |
 | `Space` | Pause / Resume |
 | `n` / `p` | Next / Previous |
 | `m` | Mute |
 | `r` | Cycle repeat mode |
 | `c` | Context menu |
 | `v` | Toggle flat/organized view (Local tab) |
-| `Ctrl+V` | Toggle the real FFT spectrum visualizer (needs `parec`) - see below |
+| `Ctrl+V` | Toggle the real FFT spectrum visualizer (needs `parec`) |
 | `e` | Edit ID3 tags for selected local file (Local tab) |
-| `s` | Cycle local sort mode: title, artist, album, year, date added (Local tab) |
-| `g` / `a` | Filter local library by selected genre / artist (Local tab, Organized view) |
-| `b` | Organized view (Local): filter by selected album. Flat view (Local) / Discover results: mark/unmark the selected song for bulk-queue - see Multi-select below |
+| `s` | Cycle local sort mode (Local tab) |
+| `g` / `a` | Filter local library by genre / artist (Local tab, Organized view) |
+| `b` | Filter by album (Organized view), or mark/unmark for bulk-queue (Flat view / Discover) |
 | `F` | Clear local library filters |
-| `:` | Open the command palette - type to search any action, `↑`/`↓` to pick, `Enter` to run |
-| `?` | Show the full list of commands (same list the palette searches, read-only) |
+| `:` | Open the command palette |
+| `?` | Show the full command reference |
 | `q` | Quit |
 
-Every keybind above (`n`, `p`, `m`, `r`, `z`, `[`, `]`, and the FFT toggle) can be
-rebound in `~/.config/rs-pug/config.toml` under `[keybinds]`, and isn't limited
-to a single plain character:
+Every keybind above (`n`, `p`, `m`, `r`, `z`, `[`, `]`, and the FFT toggle) can be rebound in `~/.config/rs-pug/config.toml`, using single characters or key sequences:
 
 ```toml
 [keybinds]
@@ -93,36 +97,47 @@ seek_forward = "]"
 fft_toggle = "C-v"   # Ctrl+V
 ```
 
-- Modifiers: prefix with `C-` (Ctrl), `M-` (Alt), and/or `S-` (Shift), e.g. `C-r` or `M-S-n`.
-- Multi-key sequences: separate keys with a space, e.g. `g g` - press `g` then `g` again within 1.5s.
-`next`/`prev`/`mute`/`repeat`/`shuffle`/`seek_back`/`seek_forward` can also be re-mapped from the **Options** tab with `h`/`l` (currently limited to single characters there; use the config file directly for modifiers or sequences).
+Modifiers are prefixed with `C-` (Ctrl), `M-` (Alt), and/or `S-` (Shift), e.g. `C-r` or `M-S-n`. Multi-key sequences are space-separated, e.g. `g g` (press `g` twice within 1.5s). The **Options** tab also lets you remap `next`/`prev`/`mute`/`repeat`/`shuffle`/`seek_back`/`seek_forward` directly, though it's currently limited to single characters there.
 
-## FFT Visualizer
+### Multi-select / bulk queue
 
-The "Now Playing" bar always shows an animated spectrum. By default it's a
-synthetic wave, but you can switch it to a **real** FFT computed from your
-system audio:
+Instead of queueing songs one at a time:
 
-- Press `Ctrl+V` (or your remapped `fft_toggle` key) at any time to flip
-  between the synthetic and real spectrum, this doesn't replace the
-  synthetic visualizer, it's an additional mode you can toggle on the fly.
-  It tries, in order, whichever of these is installed:
-  1. `parec` - PulseAudio, or PipeWire's `pipewire-pulse` compatibility layer
-     (most distros with PipeWire ship this, so `parec` just works, and it's
-     also what enables the precise per-stream capture above via `pactl`).
-  2. `pw-cat --record --raw --monitor`, targeting the default sink, native
-     PipeWire, for setups without the PulseAudio compatibility shim. This
-     path can't isolate rs-pug's stream specifically (no `pactl` to ask), so
-     it captures whatever's coming out of the default output instead.
-  3. `pw-record --monitor` native PipeWire fallback if `pw-cat` isn't
-     present, same default-sink targeting as above.
+1. Press `b` on a song to mark it (in **Discover** results or the **Local** tab's flat view).
+2. Keep marking more with `j`/`k`.
+3. Press `Enter` to queue every marked song in list order. Playback starts automatically only if nothing was already playing.
+4. Press `Esc` to clear marks without queuing anything.
 
-  If none of them are installed, `rs-pug` silently falls back to the
-  synthetic wave. `pw-cat`/`pw-record` come from the `pipewire` /
-  `pipewire-utils` package on most distros, and the precise per-stream mode
-  additionally needs `pactl` (`pulseaudio-utils` or `pipewire-pulse`,
-  depending on distro).
-- To have it on by default at startup instead of toggling it every time, add:
+Marks track the song itself, not its list position, so scrolling won't lose them.
+
+### Command palette
+
+`:` opens a fuzzy-searchable palette for playback, volume, repeat/shuffle, seeking, speed, EQ, and tab navigation - use `↑`/`↓` to pick a result and `Enter` to run it. `?` shows the same list read-only, without running anything.
+
+### Playback speed
+
+Available from the **Options** tab's **Speed** row (0.25x-2.00x, `h`/`l` to adjust in 0.05x steps, `Enter` to reset) or the command palette (`speed up` / `speed down` / `speed reset`). The current speed appears as a badge next to "Now Playing" whenever it isn't 1.00x.
+
+### Equalizer
+
+The 10-band graph in **Options** is interactive once selected:
+
+- `h`/`l` - move between bands
+- `+`/`-` - adjust gain of the selected band (-12 dB to +12 dB)
+- `p` - cycle EQ presets
+- `s` - save current settings, including EQ, to `config.toml`
+
+Custom EQ presets are stored as `.json` files in `~/.config/rs-pug/eqpresets/`.
+
+### FFT visualizer
+
+The "Now Playing" bar always shows an animated spectrum - a synthetic wave by default. Press `Ctrl+V` (or your remapped `fft_toggle`) to switch to a **real** spectrum computed from system audio. `rs-pug` tries these in order:
+
+1. `parec` (PulseAudio, or PipeWire's `pipewire-pulse` compatibility layer) - enables precise per-stream capture via `pactl`
+2. `pw-cat --record --raw --monitor` - native PipeWire, captures the default sink's output
+3. `pw-record --monitor` - native PipeWire fallback
+
+If none are installed, `rs-pug` silently falls back to the synthetic wave. To enable the real visualizer by default at startup:
 
 ```toml
 [general]
@@ -131,91 +146,33 @@ fft_visualizer_default = true
 
 ## CLI / IPC
 
-Beyond `--source`, `rs-pug` finally accepts flags that control an **already-running**
-instance over a local Unix socket. handy for `i3status`, `waybar`, or
-keybinding scripts, without needing to focus the TUI:
+Beyond `--source`, `rs-pug` accepts flags that control an **already-running** instance over a local Unix socket - handy for `i3status`, `waybar`, or keybinding scripts:
 
 ```bash
-rs-pug --toggle-pause   # play/pause the running instance
-rs-pug --next           # skip to next track
-rs-pug --prev           # go to previous track
+rs-pug --toggle-pause         # play/pause the running instance
+rs-pug --next                 # skip to next track
+rs-pug --prev                 # go to previous track
 rs-pug --play <path-or-url>   # queue and play a file or URL
 ```
 
-Each of these connects to the running instance's IPC socket and exits
-immediately; if no instance is running, it prints an error instead of
-starting a new one.
+Each command connects to the running instance's IPC socket and exits immediately. If no instance is running, an error is printed instead of starting a new one.
 
-Pass `--debug` to write debug logs to `~/.config/rs-pug/rs-pug.log` Useful when
-filing a bug report.
+Pass `--debug` to write logs to `~/.config/rs-pug/rs-pug.log`, useful when filing a bug report.
 
+## Configuration
 
-## Contri-pug-ting
-
-1. Fork the repo
-2. Install dependencies
-3. Smash your head against the keyboard (Rust can be like that)
-4. Open a pull request
-
-Lua plugin PRs especially welcome - API reference in [`docs.md`](./docs.md).
-
-## Mouse Support
-
-- **Scroll Wheel**: Scroll through search results, playlists, and the queue.
-- **Left Click**: Click on tab icons at the top to switch between views.
-
-## Smart Queue
-
-In the **Options** tab, you can trigger the **Smart Queue**. This feature analyzes the currently playing song and automatically finds similar tracks from the same uploader or with similar titles to keep the music flowing.
-
-## Multi-select / Bulk Queue
-
-Instead of adding search results or local songs to the queue one at a time:
-
-- Press `b` on a song to mark it (shows a `✓` next to it). Works in **Discover** results and in the **Local** tab's flat view.
-- Keep moving with `j`/`k` and marking more songs.
-- Press `Enter` to add every marked song to the queue at once, in list order. Playback starts automatically only if nothing was already playing.
-- Press `Esc` to clear the marks without queuing anything.
-
-Marks are tracked by song, not by list position, so scrolling or paging the list won't shift or lose them.
-
-## Command Palette & Help
-
-- `:` opens a command palette (like Vim's `:` or a VS Code-style command bar). Start typing to fuzzy-filter every available action, playback controls, volume, repeat/shuffle, seeking, speed, equalizer, and jumping to any tab then `↑`/`↓` to pick one and `Enter` to run it. `Esc` closes it without running anything.
-- `?` opens a read-only, full list of the same commands with short descriptions, if you just want to see what's available without typing anything. Close it with `?`, `q`, or `Esc`.
-
-## Playback Speed
-
-The **Options** tab has a **Speed** row (0.25x–2.00x). Select it and use `h`/`l` to adjust in 0.05x steps, or `Enter` to reset to 1.00x. The current speed shows as a small badge next to "Now Playing" whenever it isn't 1.00x, and is also reachable from the command palette (`speed up` / `speed down` / `speed reset`).
-
-## Equalizer
-
-Beyond enabling/disabling the EQ and picking a preset from the **Options** tab, the 10-band graph itself is interactive once the **EQ** row is selected:
-
-- `h`/`l` moves between the 10 bands.
-- `+`/`-` raises or lowers the gain of the selected band (-12 dB to +12 dB).
-- `p` cycles through EQ presets from anywhere in the Options tab.
-- `s` saves the current settings (including EQ) to `~/.config/rs-pug/config.toml`.
-
-## Customization
+Config file: `~/.config/rs-pug/config.toml`.
 
 ### Themes
 
-`rs-pug` comes with several built-in themes: `dark` (default), `light`, `nord`, `gruvbox`, and `mono`.
+Built-in themes: `dark` (default), `light`, `nord`, `gruvbox`, `mono`.
 
-**Switching to a built-in theme**
-
-Add this to `~/.config/rs-pug/config.toml`:
 ```toml
 [general]
 theme = "nord"
 ```
-Restart `rs-pug` (or hot reload, see below) and the new colors apply immediately.
 
-**Creating your own theme**
-
-1. Create a `.json` file in `~/.config/rs-pug/themes/`, e.g. `~/.config/rs-pug/themes/mytheme.json`.
-2. Fill in your colors as `[r, g, b]` triples (0-255):
+To create your own, add a `.json` file under `~/.config/rs-pug/themes/` with `[r, g, b]` triples for each color:
 
 ```json
 {
@@ -228,78 +185,42 @@ Restart `rs-pug` (or hot reload, see below) and the new colors apply immediately
   "primary": [255, 0, 255],
   "accent2": [200, 0, 200],
   "accent3": [100, 0, 100],
-  "spectrum": [
-    [255, 0, 255],
-    [230, 0, 255],
-    [200, 0, 255],
-    [150, 0, 255],
-    [100, 50, 255],
-    [0, 150, 255],
-    [0, 255, 255],
-    [0, 255, 150],
-    [100, 255, 0],
-    [255, 255, 0],
-    [255, 150, 0],
-    [255, 0, 0]
-  ]
+  "spectrum": [[255, 0, 255], [0, 255, 255], [255, 255, 0]]
 }
 ```
 
-3. Point `config.toml` at it by filename (without `.json`):
+Then reference it by filename (without `.json`):
+
 ```toml
 [general]
 theme = "mytheme"
 ```
-4. Restart `rs-pug` / hot reload. The whole UI and the spectrum visualizer under "Now Playing" now uses your colors.
 
-All nine base colors (`text`, `dim`, `muted`, `info`, `warn`, `ok`, `primary`, `accent2`, `accent3`) are required if one is missing the file fails to parse and `rs-pug` silently falls back to the built-in palette instead. `spectrum` is the one optional field: omit it and you get the standard gradient shown above. It accepts a list of any length; the colors are cycled through as the visualizer bars animate.
+> [!NOTE]
+> All nine base colors are required - if one is missing, the file fails to parse and `rs-pug` falls back to the built-in palette. `spectrum` is optional and accepts a list of any length, omit it for the default gradient.
 
-Community themes: [all-rspug](https://github.com/JustRoccat/all-rspug/).
+Restart or hot-reload to apply changes. Community themes: [all-rspug](https://github.com/JustRoccat/all-rspug/).
 
-### EQ Presets
+### Local music & storage
 
-Your custom EQ presets are stored as `.json` files in `~/.config/rs-pug/eqpresets/`.
+`rs-pug` scans `~/.config/rs-pug/music-local/` by default (add more directories from **Options**), with natural sorting and metadata extraction.
 
+Playlists and library data live in a SQLite database at `~/.config/rs-pug/pug.db`. Legacy JSON files are migrated automatically on first run.
 
-## Local Music
-
-By default, `rs-pug` scans `~/.config/rs-pug/music-local/`. You can change this or add more directories in the **Options** tab. The app supports natural sorting and metadata extraction.
-
-## Playlists & Storage
-
-Data is stored in a SQLite database at `~/.config/rs-pug/pug.db`. Legacy JSON files are automatically migrated on first run.
-
-- **Import path**: `~/.config/rs-pug/import_playlist.json`
-- **Export path**: `~/.config/rs-pug/exports/<playlist_name>.json`
+- Playlist import: `~/.config/rs-pug/import_playlist.json`
+- Playlist export: `~/.config/rs-pug/exports/<playlist_name>.json`
 
 ## Plugins (Lua)
 
-Drop Lua scripts into `~/.config/rs-pug/plugins/`. They are loaded automatically and can react to keys, search queries, and playback events. See `docs.md` for the full API reference.
-
-Lua plugins that change the stock UI are opt-in. Add this to `~/.config/rs-pug/config.toml` to enable the new UI hooks (`on_ui_config`, `on_ui_sections`, `on_ui_update`, and `on_ui_inject`):
+Drop `.lua` files into `~/.config/rs-pug/plugins/` and they're loaded automatically. Plugins can react to keypresses, search queries, and playback events; render live panels; add dynamic tabs; and, opt-in, restructure the stock UI itself (layout, tab bar position, custom sections).
 
 ```toml
 [lua]
-allow-lua-ui-changes = true
+allow-lua-ui-changes = true   # default: false, legacy plugins work either way
 ```
 
-The default is `false`, so legacy plugins using `on_key`, `on_event`, `on_tabs`, or `on_ui_panels` continue to work unchanged. When UI customization is enabled, plugin load/hook/layout issues are captured as non-fatal warnings and shown in the statusbar instead of crashing the app.
-
-## Hot Reload
-
-so yeah theres hot reload now and it works automaticly so you dont have to do anything, have a good day
-## Configuration
-
-Config file path: `~/.config/rs-pug/config.toml`.
-
+See [`docs.md`](./docs.md) for the full API reference, including all hooks, UI patch fields, and complete examples. Lua plugin PRs are especially welcome.
 
 ## Works on
 
-
-Runs anywhere mpv and yt-dlp run - tested on Linux and Termux (Android). WSL2 on Windows should work too.
-
-## License
-
-GPL-2.0
-
-![gif](https://github.com/user-attachments/assets/43e4fc61-cd06-43a3-872c-632059467259)
+Anywhere `mpv` and `yt-dlp` run - tested on Linux and Termux (Android); WSL2 on Windows should also work.
