@@ -36,7 +36,7 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 
 - [`mpv`](https://mpv.io/) (required)
 - [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) (recommended - without it, streaming and downloading are unavailable, but local playback still works)
-- `mpv-mpris` (optional - enables media key / `playerctl` support)
+- MPRIS2 works out of the box, rs-pug ships its own native MPRIS2 daemon, no `mpv-mpris` needed. Disable it with `mpris_enabled = false` in the config if you don't want rs-pug on the session bus (im saying this because before rs-pug needed mpv-mpris)
 
 ## Installation
 
@@ -209,6 +209,18 @@ Playlists and library data live in a SQLite database at `~/.config/rs-pug/pug.db
 
 - Playlist import: `~/.config/rs-pug/import_playlist.json`
 - Playlist export: `~/.config/rs-pug/exports/<playlist_name>.json`
+<<<<<<< HEAD
+=======
+
+### Smart Playlist
+
+On every startup, rs-pug auto-generates and refreshes a single **Smart Playlist** built from three SQLite-backed rules over your local library: most played, recently added, and not-heard-in-a-while tracks (deduped, capped at ~50 songs). It behaves like a normal playlist otherwise, but its contents are replaced on the next launch, so treat it as a rotating mix rather than something to hand-curate. Disable it with:
+
+```toml
+[general]
+smart_playlists_enabled = false
+```
+>>>>>>> 23458b0 (added new features and changed contributing.md)
 
 ## Plugins (Lua)
 

@@ -89,7 +89,6 @@ impl Default for LocalLibraryState {
         }
     }
 }
-use std::time::{Duration, Instant};
 use crate::config::{
     Config, GeneralConfig, KeybindsConfig, LuaConfig, MpvConfig, SearchConfig, Theme,
 };
@@ -98,6 +97,7 @@ use crate::plugins::{
     PluginUiLayoutState,
 };
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Song {
     pub id: String,
@@ -133,6 +133,12 @@ pub struct LocalSong {
     pub mtime: u64,
     #[serde(default)]
     pub added_at: u64,
+    /// How many times you ve actually played this track, which powers the "most played" smart playlist
+    #[serde(default)]
+    pub play_count: u32,
+    /// When you last played this track, which feeds the "not heard in a while" playlist
+    #[serde(default)]
+    pub last_played: Option<i64>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub enum LocalViewMode {
@@ -287,16 +293,36 @@ impl Default for UiLayout {
 }
 pub fn default_main_tabs() -> Vec<MainTab> {
     vec![
-        MainTab { id : "discover".to_owned(), title : "DISCOVER".to_owned(), icon : "♫"
-        .to_owned(), kind : MainTabKind::Stock(Tab::Discover), }, MainTab { id : "albums"
-        .to_owned(), title : "ALBUMS".to_owned(), icon : "◈".to_owned(), kind :
-        MainTabKind::Stock(Tab::Albums), }, MainTab { id : "library".to_owned(), title :
-        "LIBRARY".to_owned(), icon : "◉".to_owned(), kind :
-        MainTabKind::Stock(Tab::Library), }, MainTab { id : "local".to_owned(), title :
-        "LOCAL".to_owned(), icon : "🗀".to_owned(), kind :
-        MainTabKind::Stock(Tab::Local), }, MainTab { id : "options".to_owned(), title :
-        "OPTIONS".to_owned(), icon : "⚙".to_owned(), kind :
-        MainTabKind::Stock(Tab::Options), },
+        MainTab {
+            id: "discover".to_owned(),
+            title: "DISCOVER".to_owned(),
+            icon: "♫".to_owned(),
+            kind: MainTabKind::Stock(Tab::Discover),
+        },
+        MainTab {
+            id: "albums".to_owned(),
+            title: "ALBUMS".to_owned(),
+            icon: "◈".to_owned(),
+            kind: MainTabKind::Stock(Tab::Albums),
+        },
+        MainTab {
+            id: "library".to_owned(),
+            title: "LIBRARY".to_owned(),
+            icon: "◉".to_owned(),
+            kind: MainTabKind::Stock(Tab::Library),
+        },
+        MainTab {
+            id: "local".to_owned(),
+            title: "LOCAL".to_owned(),
+            icon: "🗀".to_owned(),
+            kind: MainTabKind::Stock(Tab::Local),
+        },
+        MainTab {
+            id: "options".to_owned(),
+            title: "OPTIONS".to_owned(),
+            icon: "⚙".to_owned(),
+            kind: MainTabKind::Stock(Tab::Options),
+        },
     ]
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,13 +331,10 @@ pub enum RepeatMode {
     One,
     All,
 }
-pub const EQ_PRESET_NAMES: [&str; 5] = [
-    "Flat",
-    "Bass Boost",
-    "Vocal Boost",
-    "Treble Boost",
-    "Night",
-];
+/// Just an autoupdating smart playlist that rebuilds itself on every startup with your top, new, and forgotten tracks lol
+pub const SMART_PLAYLIST_NAME: &str = "Smart Playlist";
+pub const EQ_PRESET_NAMES: [&str; 5] =
+    ["Flat", "Bass Boost", "Vocal Boost", "Treble Boost", "Night"];
 pub fn eq_preset_bands(app: &App, index: usize) -> [f32; 10] {
     let total = EQ_PRESET_NAMES.len() + app.eq.custom_presets.len();
     let idx = index % total;
@@ -333,7 +356,9 @@ pub fn eq_preset_name(app: &App, index: usize) -> String {
     if idx < EQ_PRESET_NAMES.len() {
         EQ_PRESET_NAMES[idx].to_string()
     } else {
-        app.eq.custom_presets[idx - EQ_PRESET_NAMES.len()].name.clone()
+        app.eq.custom_presets[idx - EQ_PRESET_NAMES.len()]
+            .name
+            .clone()
     }
 }
 impl RepeatMode {
@@ -387,6 +412,7 @@ pub struct App {
     pub opt_plugins_enabled: bool,
     pub opt_plugins_dir: String,
     pub opt_music_dirs: Vec<String>,
+    pub opt_smart_playlists_enabled: bool,
     pub opt_editing: bool,
     pub opt_edit_buffer: String,
     pub key_next: String,
@@ -447,6 +473,7 @@ impl App {
             opt_plugins_enabled: true,
             opt_plugins_dir: crate::config::GeneralConfig::default().plugins_dir,
             opt_music_dirs: Vec::new(),
+            opt_smart_playlists_enabled: true,
             opt_editing: false,
             opt_edit_buffer: String::new(),
             key_next: "n".to_string(),
@@ -486,7 +513,11 @@ impl App {
         self.plugin_ui.warnings.push_back(warning);
     }
     pub fn shown_message(&self) -> &str {
-        if Instant::now() <= self.flash_until { &self.flash_message } else { "" }
+        if Instant::now() <= self.flash_until {
+            &self.flash_message
+        } else {
+            ""
+        }
     }
     pub fn current_selection(&self) -> Option<&Song> {
         self.search.results.get(self.search.selected_result)
@@ -496,13 +527,11 @@ impl App {
     }
     pub fn selected_song_for_context(&self) -> Option<Song> {
         match self.active_tab {
-            Tab::Discover => {
-                match self.focus {
-                    Focus::Results => self.current_selection().cloned(),
-                    Focus::Queue => self.queue_selection().cloned(),
-                    Focus::Search => None,
-                }
-            }
+            Tab::Discover => match self.focus {
+                Focus::Results => self.current_selection().cloned(),
+                Focus::Queue => self.queue_selection().cloned(),
+                Focus::Search => None,
+            },
             Tab::Albums => {
                 let mut current_flat_idx = 0;
                 for (i, album) in self.albums.results.iter().enumerate() {
@@ -512,8 +541,7 @@ impl App {
                         if self.albums.selected_result == current_flat_idx {
                             return None;
                         } else {
-                            let song_idx = self.albums.selected_result - current_flat_idx
-                                - 1;
+                            let song_idx = self.albums.selected_result - current_flat_idx - 1;
                             return album.songs.get(song_idx).cloned();
                         }
                     }
@@ -521,25 +549,19 @@ impl App {
                 }
                 None
             }
-            Tab::Library => {
-                self.playlists
-                    .playlists
-                    .get(self.playlists.selected_playlist)
-                    .and_then(|p| p.songs.get(self.playlists.selected_song).cloned())
-            }
-            Tab::Local => {
-                match self.focus {
-                    Focus::Results => {
-                        let relative_idx = self
-                            .local
-                            .selected_song
-                            .saturating_sub(self.local.offset);
-                        self.local.window.get(relative_idx).map(Song::from)
-                    }
-                    Focus::Queue => self.queue_selection().cloned(),
-                    Focus::Search => None,
+            Tab::Library => self
+                .playlists
+                .playlists
+                .get(self.playlists.selected_playlist)
+                .and_then(|p| p.songs.get(self.playlists.selected_song).cloned()),
+            Tab::Local => match self.focus {
+                Focus::Results => {
+                    let relative_idx = self.local.selected_song.saturating_sub(self.local.offset);
+                    self.local.window.get(relative_idx).map(Song::from)
                 }
-            }
+                Focus::Queue => self.queue_selection().cloned(),
+                Focus::Search => None,
+            },
             Tab::Options => None,
         }
     }
@@ -553,6 +575,7 @@ impl App {
         self.opt_plugins_enabled = cfg.general.plugins_enabled;
         self.opt_plugins_dir = cfg.general.plugins_dir.clone();
         self.opt_music_dirs = cfg.general.music_directories.clone();
+        self.opt_smart_playlists_enabled = cfg.general.smart_playlists_enabled;
         self.theme = cfg.general.theme.clone();
         self.plugin_ui.allow_lua_ui_changes = cfg.lua.allow_lua_ui_changes;
         self.apply_keybinds(&cfg.keybinds);
@@ -566,6 +589,7 @@ impl App {
                 plugins_enabled: self.opt_plugins_enabled,
                 plugins_dir: self.opt_plugins_dir.clone(),
                 music_directories: self.opt_music_dirs.clone(),
+                smart_playlists_enabled: self.opt_smart_playlists_enabled,
                 fft_visualizer_default: self.show_fft,
             },
             search: SearchConfig {
@@ -614,9 +638,7 @@ impl App {
                 MainTabKind::Stock(t) => {
                     self.plugin_ui.active_custom_tab.is_none() && *t == self.active_tab
                 }
-                MainTabKind::Custom(id) => {
-                    self.plugin_ui.active_custom_tab.as_ref() == Some(id)
-                }
+                MainTabKind::Custom(id) => self.plugin_ui.active_custom_tab.as_ref() == Some(id),
             })
             .map(|i| i + 1)
             .unwrap_or(1)

@@ -1,5 +1,24 @@
 use rusqlite::{Connection, Result};
+use std::collections::HashMap;
 use std::path::PathBuf;
+/// Shared column list/order for every query that yields `LocalSong` rows,
+/// so `map_local_song_row` below stays valid for all of them.
+const LOCAL_SONG_SELECT: &str = "SELECT path, title, artist, album, COALESCE(genre, 'Unknown'), year, duration, mtime, COALESCE(added_at, mtime), play_count, last_played FROM local_songs";
+fn map_local_song_row(row: &rusqlite::Row<'_>) -> Result<crate::model::LocalSong> {
+    Ok(crate::model::LocalSong {
+        path: row.get(0)?,
+        title: row.get(1)?,
+        artist: row.get(2)?,
+        album: row.get(3)?,
+        genre: row.get(4)?,
+        year: row.get(5)?,
+        duration: row.get(6)?,
+        mtime: row.get(7)?,
+        added_at: row.get(8)?,
+        play_count: row.get(9)?,
+        last_played: row.get(10)?,
+    })
+}
 pub struct DbStorage {
     conn: Connection,
 }
@@ -27,14 +46,14 @@ impl DbStorage {
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if user_version == 0 {
             self.create_schema()?;
-            self.conn.execute("PRAGMA user_version = 3", [])?;
+            self.conn.execute("PRAGMA user_version = 4", [])?;
         } else if user_version < 2 {
             self.create_app_settings_schema()?;
             self.migrate_local_metadata_columns()?;
-            self.conn.execute("PRAGMA user_version = 3", [])?;
-        } else if user_version < 3 {
+            self.conn.execute("PRAGMA user_version = 4", [])?;
+        } else if user_version < 4 {
             self.migrate_local_metadata_columns()?;
-            self.conn.execute("PRAGMA user_version = 3", [])?;
+            self.conn.execute("PRAGMA user_version = 4", [])?;
         }
         Ok(())
     }
@@ -65,6 +84,17 @@ impl DbStorage {
                     [],
                 )?;
         }
+        if !cols.iter().any(|c| c == "play_count") {
+            self.conn
+                .execute(
+                    "ALTER TABLE local_songs ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+        }
+        if !cols.iter().any(|c| c == "last_played") {
+            self.conn
+                .execute("ALTER TABLE local_songs ADD COLUMN last_played INTEGER", [])?;
+        }
         Ok(())
     }
     fn create_schema(&self) -> Result<()> {
@@ -79,10 +109,14 @@ impl DbStorage {
                 year INTEGER,
                 duration REAL,
                 mtime INTEGER,
-                added_at INTEGER
+                added_at INTEGER,
+                play_count INTEGER NOT NULL DEFAULT 0,
+                last_played INTEGER
             );
             CREATE INDEX idx_local_artist ON local_songs(artist);
             CREATE INDEX idx_local_album ON local_songs(album);
+            CREATE INDEX idx_local_play_count ON local_songs(play_count DESC);
+            CREATE INDEX idx_local_last_played ON local_songs(last_played);
             CREATE TABLE network_songs (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -201,28 +235,8 @@ impl DbStorage {
         Ok(())
     }
     pub fn load_local_songs(&self) -> Result<Vec<crate::model::LocalSong>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT path, title, artist, album, COALESCE(genre, 'Unknown'), year, duration, mtime, COALESCE(added_at, mtime) FROM local_songs",
-            )?;
-        let rows = stmt
-            .query_map(
-                [],
-                |row| {
-                    Ok(crate::model::LocalSong {
-                        path: row.get(0)?,
-                        title: row.get(1)?,
-                        artist: row.get(2)?,
-                        album: row.get(3)?,
-                        genre: row.get(4)?,
-                        year: row.get(5)?,
-                        duration: row.get(6)?,
-                        mtime: row.get(7)?,
-                        added_at: row.get(8)?,
-                    })
-                },
-            )?;
+        let mut stmt = self.conn.prepare(LOCAL_SONG_SELECT)?;
+        let rows = stmt.query_map([], map_local_song_row)?;
         rows.collect()
     }
     pub fn get_local_songs_count(&self) -> Result<usize> {
@@ -236,29 +250,64 @@ impl DbStorage {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<crate::model::LocalSong>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT path, title, artist, album, COALESCE(genre, 'Unknown'), year, duration, mtime, COALESCE(added_at, mtime) FROM local_songs ORDER BY path LIMIT ? OFFSET ?",
-            )?;
-        let rows = stmt
-            .query_map(
-                [limit as i64, offset as i64],
-                |row| {
-                    Ok(crate::model::LocalSong {
-                        path: row.get(0)?,
-                        title: row.get(1)?,
-                        artist: row.get(2)?,
-                        album: row.get(3)?,
-                        genre: row.get(4)?,
-                        year: row.get(5)?,
-                        duration: row.get(6)?,
-                        mtime: row.get(7)?,
-                        added_at: row.get(8)?,
-                    })
-                },
-            )?;
+        let sql = format!("{LOCAL_SONG_SELECT} ORDER BY path LIMIT ? OFFSET ?");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows =
+            stmt.query_map([limit as i64, offset as i64], map_local_song_row)?;
         rows.collect()
+    }
+    /// Local tracks ordered by how often they've been played, for the
+    /// "most played" bucket of the Smart Playlist. Never-played tracks
+    /// (`play_count = 0`) are excluded.
+    pub fn top_played_local_songs(&self, limit: usize) -> Result<Vec<crate::model::LocalSong>> {
+        let sql = format!(
+            "{LOCAL_SONG_SELECT} WHERE play_count > 0 ORDER BY play_count DESC, last_played DESC LIMIT ?"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([limit as i64], map_local_song_row)?;
+        rows.collect()
+    }
+    /// Local tracks ordered by when they were added to the library, for
+    /// the "recently added" bucket of the Smart Playlist.
+    pub fn recently_added_local_songs(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<crate::model::LocalSong>> {
+        let sql = format!("{LOCAL_SONG_SELECT} ORDER BY added_at DESC LIMIT ?");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([limit as i64], map_local_song_row)?;
+        rows.collect()
+    }
+    /// Local tracks that either have never been played, or haven't been
+    /// played since before `stale_before` (a unix timestamp) - the
+    /// "haven't heard in a while" bucket of the Smart Playlist.
+    pub fn stale_local_songs(
+        &self,
+        stale_before: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::model::LocalSong>> {
+        let sql = format!(
+            "{LOCAL_SONG_SELECT} WHERE last_played IS NULL OR last_played < ?1
+             ORDER BY COALESCE(last_played, 0) ASC LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map((stale_before, limit as i64), map_local_song_row)?;
+        rows.collect()
+    }
+    /// Records a play of a local track: bumps `play_count` and stamps
+    /// `last_played` with the current time. Called whenever playback of a
+    /// local file starts.
+    pub fn record_local_play(&self, path: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        self.conn
+            .execute(
+                "UPDATE local_songs SET play_count = play_count + 1, last_played = ?2 WHERE path = ?1",
+                (path, now),
+            )?;
+        Ok(())
     }
     pub fn update_local_song(&mut self, song: &crate::model::LocalSong) -> Result<()> {
         self.conn
@@ -283,23 +332,30 @@ impl DbStorage {
         songs: &[crate::model::LocalSong],
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
+        // The rescan below fully replaces the table contents, so first
+        // snapshot play_count/last_played to carry them over - otherwise a
+        // routine library rescan would silently wipe listening history and
+        // break the Smart Playlist.
+        let preserved: HashMap<String, (u32, Option<i64>)> = {
+            let mut stmt = tx.prepare("SELECT path, play_count, last_played FROM local_songs")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?, row.get::<_, Option<i64>>(2)?))
+            })?;
+            rows.collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|(path, play_count, last_played)| (path, (play_count, last_played)))
+                .collect()
+        };
         tx.execute("DELETE FROM local_songs", [])?;
         {
             let mut stmt = tx
                 .prepare(
-                    "INSERT INTO local_songs (path, title, artist, album, genre, year, duration, mtime, added_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(path) DO UPDATE SET
-                    title = excluded.title,
-                    artist = excluded.artist,
-                    album = excluded.album,
-                    genre = excluded.genre,
-                    year = excluded.year,
-                    duration = excluded.duration,
-                    mtime = excluded.mtime,
-                    added_at = CASE WHEN local_songs.added_at IS NULL OR local_songs.added_at = 0 THEN excluded.added_at ELSE local_songs.added_at END",
+                    "INSERT INTO local_songs (path, title, artist, album, genre, year, duration, mtime, added_at, play_count, last_played)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )?;
             for s in songs {
+                let (play_count, last_played) =
+                    preserved.get(&s.path).copied().unwrap_or((0, None));
                 stmt.execute((
                     &s.path,
                     &s.title,
@@ -310,13 +366,65 @@ impl DbStorage {
                     s.duration,
                     s.mtime,
                     s.added_at,
+                    play_count,
+                    last_played,
                 ))?;
             }
         }
         tx.commit()?;
         Ok(())
     }
+    /// Replaces the contents of a single named playlist without touching
+    /// any others. Used to keep the auto-generated Smart Playlist fresh on
+    /// every startup while leaving user-created playlists alone.
+    pub fn upsert_playlist(&mut self, playlist: &crate::model::Playlist) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO playlists (name) VALUES (?1) ON CONFLICT(name) DO NOTHING",
+            [&playlist.name],
+        )?;
+        let playlist_id: i64 = tx.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            [&playlist.name],
+            |row| row.get(0),
+        )?;
+        tx.execute("DELETE FROM playlist_songs WHERE playlist_id = ?1", [playlist_id])?;
+        {
+            let mut stmt_network = tx.prepare(
+                "INSERT INTO network_songs (id, title, webpage_url, uploader, duration)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                    title = excluded.title,
+                    webpage_url = excluded.webpage_url,
+                    uploader = excluded.uploader,
+                    duration = excluded.duration",
+            )?;
+            let mut stmt_song = tx.prepare(
+                "INSERT INTO playlist_songs (playlist_id, song_id, song_type, position) VALUES (?, ?, ?, ?)",
+            )?;
+            for (pos, song) in playlist.songs.iter().enumerate() {
+                let song_type = if song.id.contains('/') || song.id.contains('\\') {
+                    "local"
+                } else {
+                    "network"
+                };
+                if song_type == "network" {
+                    stmt_network.execute((
+                        &song.id,
+                        &song.title,
+                        &song.webpage_url,
+                        &song.uploader,
+                        song.duration,
+                    ))?;
+                }
+                stmt_song.execute((playlist_id, &song.id, song_type, pos as i64))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn load_playlists(&self) -> Result<Vec<crate::model::Playlist>> {
+
         let mut stmt = self.conn.prepare("SELECT id, name FROM playlists")?;
         let playlist_rows = stmt
             .query_map(
@@ -542,18 +650,19 @@ mod tests {
         let songs = vec![
             LocalSong { path : "/1".to_string(), title : "T1".to_string(), artist : "A1"
             .to_string(), album : "Al1".to_string(), genre : "G1".to_string(), year :
-            Some(2001), duration : 100.0, mtime : 1, added_at : 1, }, LocalSong { path :
+            Some(2001), duration : 100.0, mtime : 1, added_at : 1, play_count: 0,
+            last_played: None, }, LocalSong { path :
             "/2".to_string(), title : "T2".to_string(), artist : "A2".to_string(), album
             : "Al2".to_string(), genre : "G2".to_string(), year : Some(2002), duration :
-            200.0, mtime : 2, added_at : 2, }, LocalSong { path : "/3".to_string(), title
+            200.0, mtime : 2, added_at : 2, play_count: 0, last_played: None, }, LocalSong { path : "/3".to_string(), title
             : "T3".to_string(), artist : "A3".to_string(), album : "Al3".to_string(),
             genre : "G3".to_string(), year : Some(2003), duration : 300.0, mtime : 3,
-            added_at : 3, }, LocalSong { path : "/4".to_string(), title : "T4"
+            added_at : 3, play_count: 0, last_played: None, }, LocalSong { path : "/4".to_string(), title : "T4"
             .to_string(), artist : "A4".to_string(), album : "Al4".to_string(), genre :
             "G4".to_string(), year : Some(2004), duration : 400.0, mtime : 4, added_at :
-            4, }, LocalSong { path : "/5".to_string(), title : "T5".to_string(), artist :
+            4, play_count: 0, last_played: None, }, LocalSong { path : "/5".to_string(), title : "T5".to_string(), artist :
             "A5".to_string(), album : "Al5".to_string(), genre : "G5".to_string(), year :
-            Some(2005), duration : 500.0, mtime : 5, added_at : 5, },
+            Some(2005), duration : 500.0, mtime : 5, added_at : 5, play_count: 0, last_played: None, },
         ];
         let mut db = db;
         db.save_local_songs_bulk(&songs).unwrap();

@@ -130,6 +130,9 @@ pub enum Theme {
 pub struct GeneralConfig {
     #[serde(default = "default_true")]
     pub mpris_enabled: bool,
+    /// Deprecated: MPRIS is now implemented natively in-process (see
+    /// `src/mpris.rs`), so this is no longer used to spawn an external
+    /// helper like `mpv-mpris`. Kept only so old config files still parse.
     #[serde(default)]
     pub mpris_command: Option<String>,
     #[serde(default)]
@@ -142,6 +145,11 @@ pub struct GeneralConfig {
     pub music_directories: Vec<String>,
     #[serde(default)]
     pub fft_visualizer_default: bool,
+    /// Auto-maintain a single "Smart Playlist" (most played + recently
+    /// added + not-heard-in-a-while local tracks), refreshed on every
+    /// startup.
+    #[serde(default = "default_true")]
+    pub smart_playlists_enabled: bool,
 }
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -153,6 +161,7 @@ impl Default for GeneralConfig {
             plugins_dir: default_plugins_dir(),
             music_directories: default_music_directories(),
             fft_visualizer_default: false,
+            smart_playlists_enabled: true,
         }
     }
 }

@@ -1,6 +1,35 @@
 use crate::core::CoreCmd;
-use crate::model::{App, Playlist, Tab, Focus, Song};
+use crate::model::{App, Playlist, Tab, Focus, Song, SMART_PLAYLIST_NAME};
 use tokio::sync::mpsc;
+/// Regenerates the single auto-managed Smart Playlist (most played +
+/// recently added + not-heard-in-a-while local tracks) and persists it.
+/// Intended to be called once on every startup. If the local library
+/// doesn't have enough data yet, this leaves any existing Smart Playlist
+/// alone rather than clobbering it with an empty one.
+pub fn refresh_smart_playlist(app: &mut App) {
+    let smart = match app.storage.generate_smart_playlist() {
+        Ok(smart) => smart,
+        Err(err) => {
+            app.set_flash(format!("Failed to build smart playlist: {err}"), 5);
+            return;
+        }
+    };
+    if smart.songs.is_empty() {
+        return;
+    }
+    if let Err(err) = app.storage.upsert_playlist(&smart) {
+        app.set_flash(format!("Failed to save smart playlist: {err}"), 5);
+        return;
+    }
+    if let Some(existing) =
+        app.playlists.playlists.iter_mut().find(|p| p.name == SMART_PLAYLIST_NAME)
+    {
+        *existing = smart;
+    } else {
+        app.playlists.playlists.insert(0, smart);
+    }
+    ensure_playlist_state(app);
+}
 pub fn save_playlists(app: &mut App) {
     if let Err(err) = app.storage.save_playlists(&app.playlists.playlists) {
         app.set_flash(format!("Failed to save playlists: {err}"), 5);

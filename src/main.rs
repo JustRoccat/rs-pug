@@ -18,6 +18,7 @@ mod fft;
 mod events;
 mod input;
 mod model;
+mod mpris;
 mod playlist;
 mod plugins;
 mod storage;
@@ -121,6 +122,8 @@ async fn main() -> Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
     let (plugin_tx, mut plugin_rx) = mpsc::unbounded_channel();
+    let (mpris_server, mut mpris_action_rx) =
+        mpris::MprisServer::start(config.general.mpris_enabled).await;
     let core = Core::new(config.clone(), Arc::clone(&plugin_manager)).await?;
     tokio::spawn(core.run(cmd_rx, evt_tx.clone(), cmd_tx.clone()));
     let ipc_cmd_tx = cmd_tx.clone();
@@ -195,6 +198,9 @@ async fn main() -> Result<()> {
             app.playlists.expanded = vec![false; app.playlists.playlists.len()];
         }
         Err(e) => app.set_flash(format!("Error loading playlists: {e}"), 5),
+    }
+    if config.general.smart_playlists_enabled {
+        playlist::refresh_smart_playlist(&mut app);
     }
     match app.storage.load_recently_played() {
         Ok(recent) => app.recently_played = recent.into(),
@@ -295,6 +301,60 @@ async fn main() -> Result<()> {
                         .await;
                     let _ = evt_tx_clone.send(CoreEvent::LibraryRefreshDone);
                 });
+            }
+        }
+        while let Ok(action) = mpris_action_rx.try_recv() {
+            match action {
+                mpris::MprisAction::Next => {
+                    actions::dispatch(&mut app, &cmd_tx, actions::Action::Next);
+                }
+                mpris::MprisAction::Previous => {
+                    actions::dispatch(&mut app, &cmd_tx, actions::Action::Prev);
+                }
+                mpris::MprisAction::Play => {
+                    if app.player_state != model::PlayerState::Playing {
+                        let _ = cmd_tx.send(CoreCmd::TogglePause);
+                    }
+                }
+                mpris::MprisAction::Pause => {
+                    if app.player_state == model::PlayerState::Playing {
+                        let _ = cmd_tx.send(CoreCmd::TogglePause);
+                    }
+                }
+                mpris::MprisAction::PlayPause => {
+                    let _ = cmd_tx.send(CoreCmd::TogglePause);
+                }
+                mpris::MprisAction::Stop => {
+                    let _ = cmd_tx.send(CoreCmd::RawMpv(serde_json::json!(["stop"])));
+                }
+                mpris::MprisAction::SeekRelative(offset_micros) => {
+                    let seconds = (offset_micros as f64 / 1_000_000.0).round() as i32;
+                    if seconds != 0 {
+                        let _ = cmd_tx.send(CoreCmd::SeekBy(seconds));
+                    }
+                }
+                mpris::MprisAction::SetPositionAbsolute(position_micros) => {
+                    let seconds = (position_micros as f64 / 1_000_000.0).max(0.0);
+                    let _ = cmd_tx
+                        .send(
+                            CoreCmd::RawMpv(serde_json::json!(["seek", seconds, "absolute"])),
+                        );
+                    mpris_server.notify_seeked(seconds);
+                }
+                mpris::MprisAction::OpenUri(uri) => {
+                    let _ = cmd_tx.send(CoreCmd::PlayUrl { url: uri, title: None });
+                }
+                mpris::MprisAction::SetVolume(volume) => {
+                    let percent = (volume.clamp(0.0, 1.3) * 100.0).round() as u8;
+                    let _ = cmd_tx.send(CoreCmd::SetVolume(percent));
+                }
+                mpris::MprisAction::SetLoopStatus(value) => {
+                    app.repeat_mode = match value.as_str() {
+                        "Track" => model::RepeatMode::One,
+                        "Playlist" => model::RepeatMode::All,
+                        _ => model::RepeatMode::Off,
+                    };
+                }
             }
         }
         if let Ok(plugins) = plugin_manager.try_lock() {
@@ -411,6 +471,18 @@ async fn main() -> Result<()> {
                 plugin_event,
                 ui_state,
             );
+        }
+        {
+            let mpris_status = match app.player_state {
+                model::PlayerState::Playing => mpris::MprisPlaybackStatus::Playing,
+                model::PlayerState::Paused => mpris::MprisPlaybackStatus::Paused,
+                model::PlayerState::Idle | model::PlayerState::Searching => {
+                    mpris::MprisPlaybackStatus::Stopped
+                }
+            };
+            let mpris_track = app.current_song.as_ref().map(mpris::track_from_song);
+            mpris_server.sync(mpris_status, mpris_track, app.playback_pos, app.volume);
+            mpris_server.sync_loop_status(app.repeat_mode);
         }
         if event::poll(tick_rate)? {
             match event::read()? {

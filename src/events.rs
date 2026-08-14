@@ -59,6 +59,12 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
             }
             let history: Vec<_> = app.recently_played.iter().cloned().collect();
             let _ = app.storage.save_recently_played(&history);
+            if song.id.contains('/') || song.id.contains('\\') {
+                // Local track (identified the same way the DB layer tells
+                // local vs. network songs apart): bump its play stats so
+                // the Smart Playlist stays fresh next startup.
+                let _ = app.storage.record_local_play(&song.id);
+            }
             app.set_flash(format!("Now playing: {} ({})", song.title, song.id), 4);
             None
         }

@@ -92,6 +92,56 @@ impl Storage {
     pub fn save_local_library(&self, songs: &[LocalSong]) -> Result<(), String> {
         self.lock_db().save_local_songs_bulk(songs).map_err(|e| e.to_string())
     }
+    /// Records a play of a local track (bumps play_count, stamps
+    /// last_played). No-op (silently ignored) for tracks not in the local
+    /// library, e.g. network/streamed songs.
+    pub fn record_local_play(&self, path: &str) -> Result<(), String> {
+        self.lock_db().record_local_play(path).map_err(|e| e.to_string())
+    }
+    /// Replaces the contents of a single named playlist (e.g. the
+    /// auto-managed Smart Playlist) without touching any others.
+    pub fn upsert_playlist(&self, playlist: &Playlist) -> Result<(), String> {
+        self.lock_db().upsert_playlist(playlist).map_err(|e| e.to_string())
+    }
+    /// Builds the single auto-managed Smart Playlist by combining three
+    /// SQLite-backed rules: most played, recently added, and not-heard-in-
+    /// a-while local tracks, deduplicated and capped at a reasonable size.
+    /// Returns `Ok` with an empty song list if the local library doesn't
+    /// have enough data yet (e.g. a brand new install).
+    pub fn generate_smart_playlist(&self) -> Result<Playlist, String> {
+        const MOST_PLAYED_LIMIT: usize = 20;
+        const RECENTLY_ADDED_LIMIT: usize = 15;
+        const STALE_LIMIT: usize = 15;
+        const STALE_AFTER_DAYS: i64 = 30;
+        let (most_played, recently_added, stale) = {
+            let db = self.lock_db();
+            let most_played =
+                db.top_played_local_songs(MOST_PLAYED_LIMIT).map_err(|e| e.to_string())?;
+            let recently_added = db
+                .recently_added_local_songs(RECENTLY_ADDED_LIMIT)
+                .map_err(|e| e.to_string())?;
+            let stale_before = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64
+                - STALE_AFTER_DAYS * 86_400;
+            let stale = db
+                .stale_local_songs(stale_before, STALE_LIMIT)
+                .map_err(|e| e.to_string())?;
+            (most_played, recently_added, stale)
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut songs = Vec::new();
+        for local in most_played.into_iter().chain(recently_added).chain(stale) {
+            if seen.insert(local.path.clone()) {
+                songs.push(Song::from(&local));
+            }
+        }
+        Ok(Playlist {
+            name: crate::model::SMART_PLAYLIST_NAME.to_owned(),
+            songs,
+        })
+    }
     pub fn load_playlists(&self) -> Result<Vec<Playlist>, String> {
         self.lock_db().load_playlists().map_err(|e| e.to_string())
     }

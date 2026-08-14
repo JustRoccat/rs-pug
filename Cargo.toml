@@ -23,6 +23,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 rustfft = "6.4.1"
 log = "0.4"
 simplelog = "0.12"
+zbus = { version = "4", default-features = false, features = ["tokio"] }
 
 [profile.release]
 opt-level = "z"
