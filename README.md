@@ -209,8 +209,8 @@ Playlists and library data live in a SQLite database at `~/.config/rs-pug/pug.db
 
 - Playlist import: `~/.config/rs-pug/import_playlist.json`
 - Playlist export: `~/.config/rs-pug/exports/<playlist_name>.json`
-<<<<<<< HEAD
-=======
+
+
 
 ### Smart Playlist
 
@@ -220,7 +220,6 @@ On every startup, rs-pug auto-generates and refreshes a single **Smart Playlist*
 [general]
 smart_playlists_enabled = false
 ```
->>>>>>> 23458b0 (added new features and changed contributing.md)
 
 ## Plugins (Lua)
 
