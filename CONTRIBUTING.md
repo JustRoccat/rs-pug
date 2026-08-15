@@ -35,27 +35,41 @@ Thanks for considering a contribution! This project is maintained in spare time,
 - If you're adding a config option, document it in `README.md` (and `docs.md` if it's plugin-facing).
 - Keep PRs focused - unrelated refactors make review slower and are best split out.
 
-## Licensing & Copyright Assignment
+## Licensing & Developer Certificate of Origin (DCO)
 
-### Why Copyright Assignment?
+### Why a DCO instead of copyright assignment?
 
-This project uses the **GNU General Public License v2.0 (GPL-2.0)** to remain strictly open-source and prevent corporate exploitation. However, to ensure long-term maintainability and avoid future legal deadlocks, **all contributions require a copyright assignment**.
+This project uses the **GNU General Public License v2.0 (GPL-2.0)** to remain strictly open-source. To keep the project's provenance clean and avoid legal deadlocks down the line (e.g. an unreachable past contributor blocking a future refactor), every contribution needs a **Developer Certificate of Origin (DCO)** sign-off - the same lightweight system used by the Linux kernel, Kubernetes, and Docker.
 
-Here is why this is necessary:
-* **Unreachable Contributors:** Contributors often change emails, delete accounts, or become inactive. Without full copyright control, a single missing response from a past contributor can permanently block code refactoring, relicensing, or project restructuring years down the line.
-* **Maintainer Flexibility:** It allows the maintainer to re-use or integrate components of this codebase into other projects (under any license) without needing to trace and contact every historical author.
-* **Originality Assurance:** It certifies that submitted code is your original work and does not violate third-party intellectual property.
+Unlike a copyright assignment, a DCO sign-off does **not** transfer ownership of your code to the maintainer. You keep full copyright over your contribution. You're simply certifying that you wrote it (or otherwise have the right to submit it) and that you're licensing it to this project under GPL-2.0, same as everything else here.
 
-*You still keep full rights to use, modify, and distribute your original code outside of this repository.*
+### How to sign off
 
-### Terms of Agreement
+Add a `Signed-off-by` line to your commit message. The easiest way is to commit with `-s`:
 
-By opening a Pull Request against this repository, you explicitly agree to the following terms:
+```bash
+git commit -s -m "Add feature X"
+```
 
-1. **Copyright Assignment:** You transfer full copyright ownership of all your submitted code and contributions in the Pull Request to the project maintainer (`JustRoccat`).
-2. **Rights Retained:** You retain a perpetual, royalty-free, non-exclusive license to use, modify, and distribute your original contribution as you see fit.
-3. **Relicensing Rights:** You grant the project maintainer the unrestricted right to re-license, adapt, or use your contributed code in other projects (under any license, including proprietary or permissive licenses) without requiring additional consent.
-4. **Originality:** You represent that your contribution is your original work, or that you have the full right to submit it under these terms.
+This appends a line like:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+By adding this line, you certify the following (the standard [DCO 1.1](https://developercertificate.org/) text):
+
+> By making a contribution to this project, I certify that:
+>
+> (a) The contribution was created in whole or in part by me and I have the right to submit it under the open source license indicated in the file; or
+>
+> (b) The contribution is based upon previous work that, to the best of my knowledge, is covered under an appropriate open source license and I have the right under that license to submit that work with modifications, whether created in whole or in part by me, under the same open source license (unless I am permitted to submit under a different license), as indicated in the file; or
+>
+> (c) The contribution was provided directly to me by some other person who certified (a), (b) or (c) and I have not modified it.
+>
+> (d) I understand and agree that this project and the contribution are public and that a record of the contribution (including all personal information I submit with it, including my sign-off) is maintained indefinitely and may be redistributed consistent with this project or the open source license(s) involved.
+
+PRs without a `Signed-off-by` line on every commit won't be merged - if you forget, you can amend it after the fact with `git commit --amend -s` (or `git rebase --signoff <branch>` for multiple commits).
 
 ## Reporting bugs
 
