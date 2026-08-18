@@ -3,16 +3,16 @@
 [![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
 [![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
-> No browser, no ads, no Electron. Search YouTube and SoundCloud, queue tracks, play local files - all from your terminal.
+> No browser, no ads, no Electron. Search YouTube, SoundCloud, or your own self-hosted [Sonum](https://github.com/JustRoccat/Sonum) server, queue tracks, play local files - all from your terminal.
 
 ![demo](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 
 > [!WARNING]
 > **YouTube streaming issues:** YouTube is currently tightening its anti-bot and client-verification measures (e.g., SABR/PO-token enforcement, frequent PO token changes, and aggressive HTTP 403 / IP throttling), which might temporarily break or slow down YouTube streaming via `yt-dlp`.
 > 
-> I apologize for any inconvenience this causes, but these changes are entirely on Google's side and out of my control. If you encounter issues, please ensure you are running the latest version of `yt-dlp` (`yt-dlp -U`). Support for custom streaming backends/servers (so you can route traffic through your own instance) is planned for an upcoming update.
+> I apologize for any inconvenience this causes, but these changes are entirely on Google's side and out of my control. If you encounter issues, please ensure you are running the latest version of `yt-dlp` (`yt-dlp -U`), also i added a new streaming server [Sonum](https://github.com/JustRoccat/Sonum) (you have to put your own music).
 
-`rs-pug` is a terminal music player built in Rust on top of `mpv`, `yt-dlp`, and `ratatui`. It streams and downloads from YouTube and SoundCloud, manages a local library and playlists, and can be extended with Lua plugins - all without leaving the terminal.
+`rs-pug` is a terminal music player built in Rust on top of `mpv`, `yt-dlp`, and `ratatui`. It streams and downloads from YouTube and SoundCloud, can pull tracks from a self-hosted [Sonum](https://github.com/JustRoccat/Sonum) server, manages a local library and playlists, and can be extended with Lua plugins - all without leaving the terminal.
 
 > [!IMPORTANT]
 > AUR is no longer maintained by the author. If you'd like to take over as AUR maintainer, please open an issue. `crates.io` continues to be maintained.
@@ -24,7 +24,7 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 
 ## Features
 
-- Search and stream from YouTube and SoundCloud, or play local files, all from one interface
+- Search and stream from YouTube, SoundCloud, or a self-hosted [Sonum](https://github.com/JustRoccat/Sonum) server, or play local files, all from one interface
 - Queue management with multi-select bulk-add
 - Playlists and library backed by SQLite, with automatic migration from legacy JSON
 - Smart Queue: finds similar tracks to keep the music flowing automatically
@@ -216,6 +216,33 @@ Playlists and library data live in a SQLite database at `~/.config/rs-pug/pug.db
 - Playlist export: `~/.config/rs-pug/exports/<playlist_name>.json`
 
 
+
+### Sonum (self-hosted music server)
+
+[Sonum](https://github.com/JustRoccat/Sonum) is a lightweight, self-hosted music streaming server (Rust/Axum). It scans a music folder on a machine of your choosing and exposes it over a plain HTTP/JSON API, with metadata, lyrics, and album art extraction, and auto-rescans when files change. `rs-pug` can talk to a Sonum server as a third search source, alongside YouTube and SoundCloud, which is useful for streaming your library from a home server/NAS to any machine running `rs-pug`.
+
+**How it works:** on startup, `rs-pug` writes a default client config to `~/.config/rs-pug/sonumclient.toml` if it doesn't already exist:
+
+```toml
+host = "127.0.0.1"
+port = 8420
+# api_token = "your-secret-token"
+```
+
+- `host` / `port` should point at wherever your Sonum server is running (defaults match Sonum's own defaults, `127.0.0.1:8420`).
+- `api_token` is optional and only needed if the Sonum server was started with `api_token` set in its own `sonum.conf` - when set, `rs-pug` sends it as `Authorization: Bearer <token>` on every request.
+- **Restart `rs-pug` after editing this file** - unlike `config.toml`, it isn't hot-reloaded.
+
+Once configured, switch **Search source** to **Sonum** from the **Options** tab (`h`/`l` to cycle YouTube → SoundCloud → Sonum), or launch with:
+
+```bash
+rs-pug --source sonum
+```
+
+Searching then queries `GET /tracks?q=<query>&limit=<n>` on the Sonum server; results are mapped into `rs-pug` songs, with playback pointed at the server's `/tracks/:id/stream` endpoint (so `mpv` streams directly from Sonum). The Albums view groups the returned tracks client-side by album/artist, since Sonum's `/tracks` endpoint doesn't have a dedicated album grouping - this means very large libraries may need a higher `limit` to see complete albums in search results.
+
+> [!NOTE]
+> This integration only covers *searching and streaming* from Sonum. Local downloads, playlists, and the local library scanner are unaffected and continue to work with `~/.config/rs-pug/music-local/` as usual.
 
 ### Smart Playlist
 

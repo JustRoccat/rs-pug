@@ -440,9 +440,13 @@ async fn search_songs(
     query: String,
     source: crate::config::SearchSource,
 ) -> Result<Vec<Song>> {
+    if matches!(source, crate::config::SearchSource::Sonum) {
+        return crate::sonum::search_songs(limit, query).await;
+    }
     let needle = match source {
         crate::config::SearchSource::YouTube => format!("ytsearch{limit}:{query}"),
         crate::config::SearchSource::SoundCloud => format!("scsearch{limit}:{query}"),
+        crate::config::SearchSource::Sonum => unreachable!("handled above"),
     };
     let output = Command::new("yt-dlp")
         .arg("--flat-playlist")
@@ -471,6 +475,7 @@ async fn search_songs(
                 crate::config::SearchSource::SoundCloud => {
                     e.webpage_url.clone().unwrap_or_else(|| e.url.clone())
                 }
+                crate::config::SearchSource::Sonum => unreachable!("handled above"),
             };
             Song {
                 id: e.id.clone(),
@@ -488,6 +493,9 @@ async fn search_albums(
     query: String,
     source: crate::config::SearchSource,
 ) -> Result<Vec<crate::model::Album>> {
+    if matches!(source, crate::config::SearchSource::Sonum) {
+        return crate::sonum::search_albums(limit, query).await;
+    }
     let needle = match source {
         crate::config::SearchSource::YouTube => {
             format!("ytsearch{limit}:{query} full album")
@@ -495,6 +503,7 @@ async fn search_albums(
         crate::config::SearchSource::SoundCloud => {
             format!("scsearch{limit}:{query} full album")
         }
+        crate::config::SearchSource::Sonum => unreachable!("handled above"),
     };
     let output = Command::new("yt-dlp")
         .arg("--flat-playlist")
@@ -524,6 +533,7 @@ async fn search_albums(
                     .webpage_url
                     .clone()
                     .unwrap_or_else(|| entry.url.clone()),
+                crate::config::SearchSource::Sonum => unreachable!("handled above"),
             };
             let song = Song {
                 id: entry.id.clone(),

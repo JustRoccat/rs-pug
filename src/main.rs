@@ -21,6 +21,7 @@ mod model;
 mod mpris;
 mod playlist;
 mod plugins;
+mod sonum;
 mod storage;
 mod terminal;
 mod tui;
@@ -105,6 +106,7 @@ async fn main() -> Result<()> {
     }
     terminal::install_panic_hook();
     config::ensure_default_dirs();
+    sonum::ensure_sonum_config();
     let (mut config, config_warning) = load_config_with_diagnostics();
     if let Some(source_arg) = args.source {
         config.search.source = SearchSource::from(source_arg);

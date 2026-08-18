@@ -20,12 +20,14 @@ pub struct Args {
 pub enum SourceArg {
     Youtube,
     Soundcloud,
+    Sonum,
 }
 impl From<SourceArg> for SearchSource {
     fn from(arg: SourceArg) -> Self {
         match arg {
             SourceArg::Youtube => SearchSource::YouTube,
             SourceArg::Soundcloud => SearchSource::SoundCloud,
+            SourceArg::Sonum => SearchSource::Sonum,
         }
     }
 }

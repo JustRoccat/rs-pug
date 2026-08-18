@@ -209,6 +209,7 @@ pub enum SearchSource {
     #[default]
     YouTube,
     SoundCloud,
+    Sonum,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchConfig {

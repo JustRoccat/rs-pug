@@ -31,6 +31,7 @@ fn search_source_label(source: &crate::config::SearchSource) -> String {
     match source {
         crate::config::SearchSource::YouTube => "YouTube".to_string(),
         crate::config::SearchSource::SoundCloud => "SoundCloud".to_string(),
+        crate::config::SearchSource::Sonum => "Sonum".to_string(),
     }
 }
 const VOLT_BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];

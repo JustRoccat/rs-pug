@@ -1012,17 +1012,18 @@ fn get_local_nav_len(app: &App) -> usize {
 fn toggle_search_source(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) {
     app.opt_source = match app.opt_source {
         SearchSource::YouTube => SearchSource::SoundCloud,
-        SearchSource::SoundCloud => SearchSource::YouTube,
+        SearchSource::SoundCloud => SearchSource::Sonum,
+        SearchSource::Sonum => SearchSource::YouTube,
     };
     let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(app.opt_source));
     save_config(&app.build_config());
     app.set_flash(
         format!(
             "Search source: {}",
-            if matches!(app.opt_source, SearchSource::YouTube) {
-                "YouTube"
-            } else {
-                "SoundCloud"
+            match app.opt_source {
+                SearchSource::YouTube => "YouTube",
+                SearchSource::SoundCloud => "SoundCloud",
+                SearchSource::Sonum => "Sonum",
             }
         ),
         2,
