@@ -7,6 +7,11 @@
 
 ![demo](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 
+> [!WARNING]
+> **YouTube streaming issues:** YouTube is currently tightening its anti-bot and client-verification measures (e.g., SABR/PO-token enforcement, frequent PO token changes, and aggressive HTTP 403 / IP throttling), which might temporarily break or slow down YouTube streaming via `yt-dlp`.
+> 
+> I apologize for any inconvenience this causes, but these changes are entirely on Google's side and out of my control. If you encounter issues, please ensure you are running the latest version of `yt-dlp` (`yt-dlp -U`). Support for custom streaming backends/servers (so you can route traffic through your own instance) is planned for an upcoming update.
+
 `rs-pug` is a terminal music player built in Rust on top of `mpv`, `yt-dlp`, and `ratatui`. It streams and downloads from YouTube and SoundCloud, manages a local library and playlists, and can be extended with Lua plugins - all without leaving the terminal.
 
 > [!IMPORTANT]
@@ -209,8 +214,8 @@ Playlists and library data live in a SQLite database at `~/.config/rs-pug/pug.db
 
 - Playlist import: `~/.config/rs-pug/import_playlist.json`
 - Playlist export: `~/.config/rs-pug/exports/<playlist_name>.json`
-<<<<<<< HEAD
-=======
+
+
 
 ### Smart Playlist
 
@@ -220,7 +225,6 @@ On every startup, rs-pug auto-generates and refreshes a single **Smart Playlist*
 [general]
 smart_playlists_enabled = false
 ```
->>>>>>> 23458b0 (added new features and changed contributing.md)
 
 ## Plugins (Lua)
 
