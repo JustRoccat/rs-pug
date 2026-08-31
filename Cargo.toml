@@ -1,6 +1,6 @@
 [package]
 name = "rs-pug"
-version = "1.0.4"
+version = "1.0.3"
 edition = "2024"
 rust-version = "1.85"
 description = "Blazing fast tui music player"
@@ -9,22 +9,22 @@ repository = "https://github.com/JustRoccat/rs-pug"
 
 [dependencies]
 anyhow = "1"
-crossterm = "0.27"
-lofty = "0.21"
-ratatui = "0.26"
+crossterm = "0.29"
+lofty = "0.25"
+ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util"] }
-toml = "0.8"
-ureq = { version = "2", features = ["json"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "net", "io-util"] }
+toml = "1.1"
+ureq = { version = "3", features = ["json"] }
 walkdir = "2.5"
-mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
-rusqlite = { version = "0.31.0", features = ["bundled"] }
-clap = { version = "4.6.1", features = ["derive"] }
+mlua = { version = "0.12", features = ["lua54", "vendored", "serialize", "send"] }
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+clap = { version = "4.6.6", features = ["derive"] }
 rustfft = "6.4.1"
 log = "0.4"
 simplelog = "0.12"
-zbus = { version = "4", default-features = false, features = ["tokio"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [profile.release]
 opt-level = "z"

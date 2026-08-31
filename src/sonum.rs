@@ -107,15 +107,17 @@ struct SonumTrackDto {
 fn fetch_tracks(config: &SonumConfig, query: &str, limit: u8) -> Result<Vec<SonumTrackDto>> {
     let url = format!("{}/tracks", config.base_url());
     let mut request = ureq::get(&url)
-        .query("limit", &limit.to_string())
-        .timeout(Duration::from_secs(8));
+        .query("limit", limit.to_string())
+        .config()
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build();
     if !query.trim().is_empty() {
         request = request.query("q", query);
     }
     if let Some(token) = &config.api_token {
-        request = request.set("Authorization", &format!("Bearer {token}"));
+        request = request.header("Authorization", &format!("Bearer {token}"));
     }
-    let response = request.call().map_err(|err| {
+    let mut response = request.call().map_err(|err| {
         anyhow::anyhow!(
             "failed to reach Sonum server at {} (check host/port in {}): {err}",
             config.base_url(),
@@ -123,7 +125,8 @@ fn fetch_tracks(config: &SonumConfig, query: &str, limit: u8) -> Result<Vec<Sonu
         )
     })?;
     response
-        .into_json::<Vec<SonumTrackDto>>()
+        .body_mut()
+        .read_json::<Vec<SonumTrackDto>>()
         .context("invalid JSON response from Sonum server")
 }
 

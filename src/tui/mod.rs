@@ -89,7 +89,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let pal = palette(&app.theme);
     let anim = pal.get_color("primary");
     let anim2 = pal.get_color("accent2");
-    let size = frame.size();
+    let size = frame.area();
     let tab_position = app.ui_layout.tab_bar_position.as_str();
     let tabs_width = app
         .ui_layout

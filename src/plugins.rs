@@ -22,7 +22,7 @@ fn with_exec_timeout<T>(
                 Ok(VmState::Continue)
             }
         },
-    );
+    )?;
     let result = f();
     lua.remove_hook();
     result

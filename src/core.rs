@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{Context, Result};
 use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, TaggedFileExt};
-use lofty::tag::{Accessor, Tag};
+use lofty::tag::{Accessor, ItemKey, Tag};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::os::unix::fs::MetadataExt;
@@ -627,7 +627,9 @@ fn extract_metadata(path: &std::path::Path) -> LocalSong {
             .and_then(|t| t.genre())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "Unknown".to_string());
-        let year = tag.and_then(|t| t.year());
+        let year = tag
+            .and_then(|t| t.get_string(ItemKey::Year))
+            .and_then(|s| s.get(..4).unwrap_or(s).parse::<u32>().ok());
         let duration = properties.duration().as_secs() as f64;
         LocalSong {
             path: path_str,
@@ -748,9 +750,9 @@ pub fn write_local_tags(song: &LocalSong) -> Result<()> {
     tag.set_album(song.album.clone());
     tag.set_genre(song.genre.clone());
     if let Some(year) = song.year {
-        tag.set_year(year);
+        tag.insert_text(ItemKey::Year, year.to_string());
     } else {
-        tag.remove_year();
+        tag.remove_key(ItemKey::Year);
     }
     tagged_file
         .save_to_path(path, WriteOptions::default())

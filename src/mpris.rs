@@ -3,9 +3,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
-use zbus::object_server::InterfaceRef;
+use zbus::object_server::{InterfaceRef, SignalEmitter};
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
-use zbus::{Connection, SignalContext, interface};
+use zbus::{Connection, interface};
 
 use crate::model::{RepeatMode, Song};
 
@@ -205,7 +205,7 @@ impl PlayerIface {
     }
 
     #[zbus(signal)]
-    async fn seeked(ctxt: &SignalContext<'_>, position: i64) -> zbus::Result<()>;
+    async fn seeked(ctxt: &SignalEmitter<'_>, position: i64) -> zbus::Result<()>;
 
     #[zbus(property)]
     async fn playback_status(&self) -> String {
@@ -435,7 +435,7 @@ impl MprisServer {
         }
         if changed_status || changed_track || changed_volume {
             tokio::spawn(async move {
-                let ctxt = iface.signal_context();
+                let ctxt = iface.signal_emitter();
                 let player = iface.get().await;
                 if changed_status {
                     let _ = player.playback_status_changed(ctxt).await;
@@ -471,7 +471,7 @@ impl MprisServer {
         };
         if changed {
             tokio::spawn(async move {
-                let ctxt = iface.signal_context();
+                let ctxt = iface.signal_emitter();
                 let player = iface.get().await;
                 let _ = player.loop_status_changed(ctxt).await;
             });
@@ -488,7 +488,7 @@ impl MprisServer {
             guard.position_micros = position_micros;
         }
         tokio::spawn(async move {
-            let ctxt = iface.signal_context();
+            let ctxt = iface.signal_emitter();
             let _ = PlayerIface::seeked(ctxt, position_micros).await;
         });
     }

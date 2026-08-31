@@ -6,7 +6,7 @@ pub(super) fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: C
     ];
     const MAX_DB: f32 = 12.0;
     const EQ_BLOCKS: [&str; 8] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "█"];
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
