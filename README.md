@@ -7,11 +7,6 @@
 
 ![demo](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 
-> [!WARNING]
-> **YouTube streaming issues:** YouTube is currently tightening its anti-bot and client-verification measures (e.g., SABR/PO-token enforcement, frequent PO token changes, and aggressive HTTP 403 / IP throttling), which might temporarily break or slow down YouTube streaming via `yt-dlp`.
-> 
-> I apologize for any inconvenience this causes, but these changes are entirely on Google's side and out of my control. If you encounter issues, please ensure you are running the latest version of `yt-dlp` (`yt-dlp -U`), also i added a new streaming server [Sonum](https://github.com/JustRoccat/Sonum) (you have to put your own music).
-
 `rs-pug` is a terminal music player built in Rust on top of `mpv`, `yt-dlp`, and `ratatui`. It streams and downloads from YouTube and SoundCloud, can pull tracks from a self-hosted [Sonum](https://github.com/JustRoccat/Sonum) server, manages a local library and playlists, and can be extended with Lua plugins - all without leaving the terminal.
 
 > [!IMPORTANT]
