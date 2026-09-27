@@ -3,7 +3,7 @@
 [![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
 [![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
-> No browser, no ads, no Electron. Search YouTube, SoundCloud, or your own self-hosted [Sonum](https://github.com/JustRoccat/Sonum) server, queue tracks, play local files, all from your terminal.
+> No browser, no ads, no Electron. Search YouTube, SoundCloud, or your own selfhosted [Sonum](https://github.com/JustRoccat/Sonum) server, queue tracks, play local files, all from your terminal.
 
 ![demo](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 
@@ -19,16 +19,16 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 
 ## Features
 
-- Search and stream from YouTube, SoundCloud, or a self-hosted [Sonum](https://github.com/JustRoccat/Sonum) server, or play local files, all from one interface
-- Queue management with multi-select bulk-add
+- Search and stream from YouTube, SoundCloud, or a self hosted [Sonum](https://github.com/JustRoccat/Sonum) server, or play local files, all from one interface
+- Queue management with multiselect bulkadd
 - Playlists and library backed by SQLite, with automatic migration from legacy JSON
-- Smart Queue: finds similar tracks to keep the music flowing automatically
-- Real-time FFT audio spectrum visualizer (with a synthetic fallback)
-- Minimal mode: pixelated cover art, small FFT strip, title only
+- Smart Queue (im not very proud about this feature): finds similar tracks to keep the music flowing automatically
+- Real time fft audio spectrum visualizer (with a synthetic fallback)
+- Minimal mode: pixelated cover art, small fft strip, title only
 - Cover-tinted Minimal background that follows the current track, toggleable in Options
-- 10-band graphic equalizer with savable presets
-- Fully remappable keybinds, including modifiers and multi-key sequences
-- Built-in and custom themes
+- 10 band graphic equalizer with savable presets
+- Fully remappable keybinds, including modifiers and multi key sequences
+- Built in and custom themes
 - Command palette (`:`) for fuzzy-searching every action
 - Control a running instance over IPC, for use in status bars or keybindings
 - Extensible with Lua plugins: custom keybinds, live panels, and full UI customization
@@ -38,7 +38,7 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 
 - [`mpv`](https://mpv.io/) (required)
 - [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) (recommended, without it streaming and downloading are unavailable, but local playback still works)
-- MPRIS2 works out of the box through a native in-process daemon, no `mpv-mpris` needed. Set `mpris_enabled = false` in the config to keep rs-pug off the session bus.
+- MPRIS2 works out of the box through a native in process daemon, no `mpv-mpris` needed. Set `mpris_enabled = false` in the config to keep rs-pug off the session bus.
 
 ## Installation
 
