@@ -1,792 +1,840 @@
-# rs-pug Lua Plugin API
+# rs-pug Lua Plugin Documentation
 
-This document explains how to build Lua plugins for `rs-pug`, including live plugin panels (`on_ui_panels`) and dynamic plugin tabs (`on_tabs`).
+This document describes the Lua plugin API in `rs-pug`: a terminal music player written in Rust. It targets people writing or maintaining plugins: it contains the full hook reference, data types, execution semantics, and ready-to-copy examples.
 
-## Plugin location
+If you're looking for keybindings, general configuration, EQ, or Sonum, see `docs-usage.md`. This file covers only the plugin system.
 
-Place `.lua` files in:
+## Table of contents
 
-- `~/.config/rs-pug/plugins/`
+1. [Prerequisites](#prerequisites)
+2. [Quick start](#quick-start)
+3. [Execution model](#execution-model)
+4. [Configuration](#configuration)
+5. [Hook reference](#hook-reference)
+6. [Data type reference](#data-type-reference)
+7. [Key labels](#key-labels)
+8. [Merging results from multiple plugins](#merging-results-from-multiple-plugins)
+9. [Diagnostics and error handling](#diagnostics-and-error-handling)
+10. [Security and trust boundaries](#security-and-trust-boundaries)
+11. [Full examples](#full-examples)
+12. [Best practices and limitations](#best-practices-and-limitations)
 
-A plugin should return a table with hooks:
+## Prerequisites
+
+- A working `rs-pug` installation.
+- Basic familiarity with Lua (5.4) syntax.
+- A plugin directory: `~/.config/rs-pug/plugins/` by default (see [Configuration](#configuration)).
+
+`rs-pug` embeds a **Lua 5.4** interpreter via the `mlua` crate (`mlua = { version = "0.12", features = ["lua54", "vendored", "serialize", "send"] }`). You don't need Lua installed on your system: the interpreter is compiled into the binary.
+
+## Quick start
+
+1. Create `~/.config/rs-pug/plugins/hello.lua`:
+
+   ```lua
+   plugin = {}
+
+   function plugin.on_key(key, state)
+     if key == "char:h" then
+       return {
+         consume = true,
+         flash = "Hello from a plugin! Active tab: " .. state.active_tab,
+         flash_seconds = 3,
+       }
+     end
+   end
+
+   return plugin
+   ```
+
+2. Start `rs-pug` (or wait for hot-reload if it's already running: changes in `plugins_dir` are detected automatically).
+3. Press `h` in the UI. A flash message with the active tab name should appear.
+
+Every `.lua` file in the configured directory is treated as a **separate, independent plugin** with its own Lua state. The file must return a table (directly via `return` at the end of the chunk, or by setting the global variable `plugin`, as in the example above): this table is the plugin's entry point. Functions defined in this table are **hooks**: `rs-pug` calls them at the appropriate points in the application's lifecycle.
+
+## Execution model
+
+### Loading
+
+At startup, and on every reload (`reload`), `rs-pug`:
+
+1. Reads every file with a `.lua` extension in `plugins_dir` (non-recursively, `fs::read_dir`). Iteration order **is not guaranteed to be alphabetical**: it depends on the filesystem. If the execution order of multiple plugins matters (see [Merging results](#merging-results-from-multiple-plugins)), don't assume any particular order.
+2. For each file, creates a **new, independent** `Lua` instance (`mlua::Lua::new()`), which by default loads the **full Lua 5.4 standard library** (`string`, `table`, `math`, `os`, `io`, `package`, `coroutine`, `debug`, etc.). Global variables of one plugin are not visible to another.
+3. Executes (`eval`) the file's contents under an execution time limit (see below).
+4. Reads the resulting value: if the chunk returned a table (`return plugin`), that table is used; otherwise `rs-pug` looks for a global variable named `plugin`. If neither exists, the plugin is rejected with a `missing plugin table` error.
+5. Sets two global variables in the plugin's environment:
+   - `ALLOW_LUA_UI_CHANGES` (`boolean`): a copy of the `allow-lua-ui-changes` config flag, readable from inside the script.
+   - `plugin`: the entry-point table (also available after a reload, useful if you want to reference it via `plugin.on_key = function(...) ... end` instead of a table literal).
+6. The plugin name used in logs and warnings is the file name without its extension (`hello.lua` → `hello`).
+
+Load errors (Lua syntax errors, a missing `plugin` table, exceeding the execution time limit while evaluating the top-level chunk) **do not stop** loading the remaining plugins: the offending file is skipped, and the error is added to the warning list (see [Diagnostics](#diagnostics-and-error-handling)).
+
+### Execution time limit
+
+Every hook call (and the chunk evaluation at load time) is subject to a limit:
+
+- **250 ms** of wall-clock time (`PLUGIN_EXEC_TIMEOUT`),
+- checked every **10,000 instructions** of the Lua virtual machine (`PLUGIN_HOOK_INSTRUCTION_INTERVAL`, via `HookTriggers::every_nth_instruction`).
+
+If the limit is exceeded, execution is aborted with `"plugin exceeded execution time limit"`. This applies to **each** hook call individually: it is not a shared budget across calls. Avoid infinite loops, heavy computation, and blocking I/O (`os.execute`, unbuffered `io.read`) inside hooks that are called every frame (`on_ui_update`, `on_ui_sections` via state polling: see below).
+
+### Hot-reload
+
+A change in `config.toml` to `general.plugins_enabled`, `general.plugins_dir`, or `lua.allow-lua-ui-changes` triggers a **full reload** of the plugin manager: every Lua instance is destroyed and re-created, and each plugin's state (global variables, closures) is lost. Modifying a `.lua` file itself inside `plugins_dir` is also detected and triggers the same full reload mechanism used for `config.toml`. After a reload, custom tabs, panels, injected UI sections, and warnings are cleared and rebuilt from scratch.
+
+### How often each hook fires
+
+How frequently a given hook is called differs significantly between hooks: see the "Frequency" column in the [Hook reference](#hook-reference). In short:
+
+- Data-transforming hooks (`on_search_query`, `on_search_results`, `on_song_start`): on a specific user/core action.
+- `on_key`: on every key press that wasn't already handled by built-in logic (see [Key labels](#key-labels): some UI modes, e.g. an open tag editor or the command palette, intercept keys before they reach plugins).
+- `on_event`: on **every** core event (`CoreEvent`), including every playback progress update (`Progress`), i.e. potentially several times per second during playback.
+- `on_tabs`, `on_ui_panels`: polled every render frame whenever `PluginUiState` has changed (see [`PluginUiState`](#pluginuistate)).
+- `on_ui_config`: called once at startup (if `allow_lua_ui_changes = true`) and again after every plugin hot-reload.
+- `on_ui_update`: polled every frame whenever `PluginUiState` has changed, only if `allow_lua_ui_changes = true`.
+- `on_ui_sections`, `on_ui_inject`: polled alongside `on_tabs`/`on_ui_panels`, only if `allow_lua_ui_changes = true`.
+
+## Configuration
+
+All plugin settings live in `~/.config/rs-pug/config.toml` and are hot-reloadable.
+
+```toml
+[general]
+plugins_enabled = true                 # default: true
+plugins_dir = "/home/user/.config/rs-pug/plugins"  # default: ~/.config/rs-pug/plugins
+
+[lua]
+allow-lua-ui-changes = false           # default: false
+```
+
+| Key | Section | Type | Default | Description |
+|---|---|---|---|---|
+| `plugins_enabled` | `[general]` | `bool` | `true` | Enables/disables the whole plugin system. When `false`, no `.lua` file is loaded and no hook is ever called. |
+| `plugins_dir` | `[general]` | `string` | `~/.config/rs-pug/plugins` | Directory scanned for `.lua` files. Non-recursive. |
+| `allow-lua-ui-changes` | `[lua]` | `bool` | `false` | Enables the higher-risk UI hooks: `on_ui_config`, `on_ui_sections`, `on_ui_inject`, `on_ui_update`, and the `ui.layout` field returned from `on_key`/`on_event`. TOML alias: `allow_lua_ui_changes` (underscore) is accepted as a synonym. |
+
+> [!NOTE]
+> When `allow-lua-ui-changes = false`, the hooks `on_ui_config`, `on_ui_sections`, `on_ui_inject`, and `on_ui_update` are **not called at all** (they don't just receive empty data: the call is skipped entirely). Any `ui.layout` patch returned from `on_key`/`on_event` is silently ignored in that case. `on_key`, `on_event`, `on_tabs`, `on_ui_panels`, and the data-transforming hooks work regardless of this flag.
+
+At startup, `rs-pug` exposes `allow_lua_ui_changes` to every plugin's environment as the global variable `ALLOW_LUA_UI_CHANGES`, so a script can conditionally define UI hooks:
 
 ```lua
 plugin = {}
 
-function plugin.on_key(key, state)
-  if key == "char:h" then
-    return { flash = "Hello from Lua" }
+if ALLOW_LUA_UI_CHANGES then
+  function plugin.on_ui_config(state)
+    return { layout = { queue_width_percent = 30 } }
   end
 end
 
 return plugin
 ```
 
-## Available hooks
+## Hook reference
 
-Implement any subset you need.
+All hooks are **optional**: define only the ones you need. A hook value that isn't a function (e.g. a string by mistake) results in a `hook is not a function` warning and is treated as if the hook were absent.
 
-### `on_key(key, state) -> PluginDispatch|nil`
+Table convention: **Input** describes the Lua call arguments in order; **Returns** describes the expected shape of the return value (`nil` is always allowed and means "no change").
 
-Called on every key press.
+### `on_search_query(query)`
 
-### `on_event(event, state) -> PluginDispatch|nil`
-
-Called on core events.
-
-Common `event.kind` values:
-
-- `"started"`
-- `"search_done"`
-- `"album_search_done"`
-- `"progress"`
-- `"error"`
-- `"event"` (fallback)
-
-### `on_search_query(query) -> string|nil`
-
-Modify outgoing search query.
-
-### `on_search_results(songs) -> songs|nil`
-
-Modify search results.
-
-### `on_song_start(song) -> song|nil`
-
-Modify track metadata/URL before playback starts.
-
-### `on_ui_panels(state) -> PluginPanel[]|nil`
-
-Return live panels rendered on the right side of the UI.
-
-### `on_tabs(state) -> PluginTab[]|nil`
-
-Return dynamic plugin tabs.
-
-Each `PluginTab` has:
-
-- `id` (unique identifier)
-- `title` (tab label)
-- `icon` (optional icon: plain text or a Nerd Fonts glyph; hidden entirely when the user turns Icons off in Options)
-
-## PluginUiState (`state`)
-
-The `state` object passed to `on_key`, `on_event`, `on_ui_panels`, and `on_tabs` includes:
-
-- `active_tab`: `discover | albums | library | local | options`
-- `active_plugin_tab`: plugin tab id (string) or `nil` when no plugin tab is active
-- `player_state`: `idle | searching | playing | paused`
-- `volume`: `0..100`
-- `muted`: `true/false`
-- `repeat_mode`: `off | one | all`
-- `search_query`
-- `album_search_query`
-- `queue_len`
-
-## PluginDispatch
-
-Optional return from `on_key`/`on_event`:
-
-- `consume` (bool)
-- `flash` (string)
-- `flash_seconds` (number)
-- `core_actions` (array)
-- `ui` (UI patch)
-
-### Core actions (`core_actions`)
-
-Each action has `type`:
-
-- `{ type = "search", query = "..." }`
-- `{ type = "search_albums", query = "..." }`
-- `{ type = "seek", seconds = 10 }`
-- `{ type = "toggle_pause" }`
-- `{ type = "toggle_mute" }`
-- `{ type = "volume_up" }`
-- `{ type = "volume_down" }`
-- `{ type = "next" }`
-- `{ type = "prev" }`
-- `{ type = "set_volume", value = 50 }`
-- `{ type = "play_url", url = "...", title = "..." }`
-- `{ type = "raw_mpv", command = { ... } }`
-
-### UI patch (`ui`)
-
-- `set_tab`: core tab (`discover|albums|library|options`) or plugin tab id
-- `set_search_query`
-- `set_album_search_query`
-- `set_focus`: `search | results | queue`
-- `set_search_mode`: bool
-- `set_selected_result`: number
-- `set_selected_album_result`: number
-- `set_selected_queue`: number
-
-## PluginPanel
-
-`on_ui_panels` returns an array of panels:
+| | |
+|---|---|
+| **Input** | `query: string`: the raw query typed by the user, before it's sent to the search source. |
+| **Returns** | `string`: the modified query, or `nil` to leave it unchanged. |
+| **Frequency** | Once, right before a search is executed (Discover/Albums, YouTube/SoundCloud/Sonum source). |
+| **Multi-plugin semantics** | Pipeline: one plugin's result becomes the next plugin's input, in load order. |
 
 ```lua
-{
-  {
-    title = "My Panel",
-    items = {
-      { type = "text", text = "hello" },
-      { type = "info", text = "network ok" },
-      { type = "option", key = "Source", value = "YouTube" },
-      { type = "stat", label = "Queue", value = "12" },
-      { type = "separator" }
-    }
-  }
-}
-```
-
-### Item types
-
-- `text`
-- `info`
-- `option` (`key/value`)
-- `stat` (`label/value`)
-- `separator`
-
-### Backward compatibility
-
-Legacy format still works:
-
-```lua
-{ title = "Legacy", lines = { "line 1", "line 2" } }
-```
-
-`lines` are automatically converted to `items` (`text`).
-
-## Plugin tabs
-
-Example:
-
-```lua
-return {
-  on_tabs = function(state)
-    return {
-      { id = "my_settings", title = "My Settings", icon = "★" },
-      { id = "diag", title = "Diagnostics", icon = "!" }
-    }
-  end
-}
-```
-
-Open a plugin tab from dispatch:
-
-```lua
-ui = { set_tab = "my_settings" }
-```
-
-Keyboard navigation:
-
-- `1..N` = visible tabs in the rendered tab order, up to `8`
-- `9` / `0` stay reserved for volume down/up and are not used for tabs
-
-## Examples
-
-### 1) Keybind + action
-
-```lua
-return {
-  on_key = function(key, state)
-    if key == "char:v" then
-      return {
-        consume = true,
-        flash = "Volume: 50%",
-        core_actions = {
-          { type = "set_volume", value = 50 }
-        }
-      }
-    end
-  end
-}
-```
-
-### 2) Live panel with options/stats
-
-```lua
-return {
-  on_ui_panels = function(state)
-    return {
-      {
-        title = "Session",
-        items = {
-          { type = "option", key = "Tab", value = state.active_tab },
-          { type = "option", key = "State", value = state.player_state },
-          { type = "stat", label = "Volume", value = tostring(state.volume) .. "%" },
-          { type = "stat", label = "Queue", value = tostring(state.queue_len) },
-          { type = "separator" },
-          { type = "info", text = "Plugin panel live" }
-        }
-      }
-    }
-  end
-}
-```
-
-### 3) Event-driven diagnostics
-
-```lua
-local last_error = "none"
-
-return {
-  on_event = function(event, state)
-    if event.kind == "error" and event.message then
-      last_error = event.message
-    end
-  end,
-
-  on_ui_panels = function(state)
-    return {
-      {
-        title = "Diagnostics",
-        items = {
-          { type = "text", text = "muted: " .. tostring(state.muted) },
-          { type = "info", text = "last error: " .. last_error }
-        }
-      }
-    }
-  end
-}
-```
-
-### 4) Pseudo-tab flow inside Options
-
-```lua
-local plugin_tab_open = false
-local quality_idx = 1
-local qualities = { "low", "medium", "high" }
-local normalize_audio = true
-
-local function current_quality()
-  return qualities[quality_idx]
+function plugin.on_search_query(query)
+  return query .. " official audio"
 end
+```
 
-return {
-  on_key = function(key, state)
-    if key == "char:t" then
-      plugin_tab_open = not plugin_tab_open
-      return {
-        consume = true,
-        ui = { set_tab = "options" },
-        flash = plugin_tab_open and "Plugin tab: ON" or "Plugin tab: OFF"
-      }
+### `on_search_results(songs)`
+
+| | |
+|---|---|
+| **Input** | `songs: Song[]`: the list of search results (see [`Song`](#song)). |
+| **Returns** | `Song[]`: the modified list (you can filter, sort, add items), or `nil`. |
+| **Frequency** | Once, after search results are received, before display. |
+| **Multi-plugin semantics** | Pipeline, as above. |
+
+```lua
+function plugin.on_search_results(songs)
+  local filtered = {}
+  for _, song in ipairs(songs) do
+    if not song.title:lower():find("live") then
+      table.insert(filtered, song)
     end
-
-    if not plugin_tab_open then
-      return nil
-    end
-
-    if key == "left" then
-      quality_idx = math.max(1, quality_idx - 1)
-      return { consume = true }
-    elseif key == "right" then
-      quality_idx = math.min(#qualities, quality_idx + 1)
-      return { consume = true }
-    elseif key == "char:n" then
-      normalize_audio = not normalize_audio
-      return { consume = true }
-    end
-  end,
-
-  on_ui_panels = function(state)
-    if not plugin_tab_open then
-      return nil
-    end
-
-    return {
-      {
-        title = "Plugin Settings",
-        items = {
-          { type = "info", text = "Pseudo-tab active in Options" },
-          { type = "separator" },
-          { type = "option", key = "Quality", value = current_quality() },
-          { type = "option", key = "Normalize", value = tostring(normalize_audio) },
-          { type = "text", text = "left/right: quality" },
-          { type = "text", text = "n: toggle normalize" },
-          { type = "text", text = "t: close plugin tab" }
-        }
-      }
-    }
   end
-}
+  return filtered
+end
 ```
 
-### 5) Full dynamic tab example (tab + options + panel)
+### `on_song_start(song)`
 
-Save as `~/.config/rs-pug/plugins/radio_tab.lua`:
+| | |
+|---|---|
+| **Input** | `song: Song`: the track that is about to start playing. |
+| **Returns** | `Song`: the modified song (e.g. a different `webpage_url`), or `nil`. |
+| **Frequency** | Once, right before playback of that track begins. |
+| **Multi-plugin semantics** | Pipeline, as above. |
+
+> [!WARNING]
+> If the returned value fails to deserialize into the expected type (e.g. a required `id`/`title`/`webpage_url` field is missing in `on_song_start`/`on_search_results`), or the hook throws an error / exceeds the time limit, that plugin's result is **silently dropped**: the value passed forward is the value from before that plugin ran, **with no entry in the warning list**. See [Diagnostics](#diagnostics-and-error-handling).
+
+### `on_key(key, state)`
+
+| | |
+|---|---|
+| **Input** | `key: string`: a key label (see [Key labels](#key-labels)); `state: PluginUiState`: the [UI state](#pluginuistate) at the moment of the key press. |
+| **Returns** | [`PluginDispatch`](#plugindispatch), or `nil` to do nothing. |
+| **Frequency** | On every key press, provided no modal mode (tag editor, option editing, context menu, delete confirmation, help screen, command palette, search-typing mode) already captured it. |
+| **Shift aliases** | For alphabetic keys, `rs-pug` first tries the label that was actually pressed (e.g. `char:Z` for Shift+z); if no plugin produced an effect (`consume`, `flash`, or `flash_seconds` set), it then tries the case-toggled variant (`char:z`). See [Key labels](#key-labels). |
+| **Multi-plugin semantics** | Every plugin is called; their `PluginDispatch` values are merged: see [Merging results](#merging-results-from-multiple-plugins). |
+
+If the merged `PluginDispatch.consume` is `false` after querying every plugin, the key falls through to `rs-pug`'s built-in key handling (`input::handle_native_key_event`).
 
 ```lua
-local genre_idx = 1
-local genres = { "lofi", "jazz", "synthwave", "ambient" }
-local autoplay = true
-local tab_id = "radio"
-
-local function genre()
-  return genres[genre_idx]
-end
-
-return {
-  on_tabs = function(state)
-    return {
-      { id = tab_id, title = "Radio", icon = "R" }
-    }
-  end,
-
-  on_key = function(key, state)
-    if key == "char:6" then
-      return {
-        consume = true,
-        ui = { set_tab = tab_id },
-        flash = "Opened Radio tab"
-      }
-    end
-
-    if state.active_plugin_tab ~= tab_id then
-      return nil
-    end
-
-    if key == "left" then
-      genre_idx = math.max(1, genre_idx - 1)
-      return { consume = true, flash = "Genre: " .. genre() }
-    elseif key == "right" then
-      genre_idx = math.min(#genres, genre_idx + 1)
-      return { consume = true, flash = "Genre: " .. genre() }
-    elseif key == "char:a" then
-      autoplay = not autoplay
-      return { consume = true, flash = "Autoplay: " .. tostring(autoplay) }
-    elseif key == "enter" then
-      return {
-        consume = true,
-        flash = "Searching radio: " .. genre(),
-        core_actions = {
-          { type = "search", query = genre() .. " radio" }
-        }
-      }
-    end
-  end,
-
-  on_ui_panels = function(state)
-    return {
-      {
-        title = "Radio Control",
-        items = {
-          { type = "option", key = "Genre", value = genre() },
-          { type = "option", key = "Autoplay", value = tostring(autoplay) },
-          { type = "stat", label = "Queue", value = tostring(state.queue_len) },
-          { type = "separator" },
-          { type = "text", text = "left/right: change genre" },
-          { type = "text", text = "a: toggle autoplay" },
-          { type = "text", text = "enter: search station" }
-        }
-      }
-    }
+function plugin.on_key(key, state)
+  if key == "char:n" and state.active_tab == "discover" then
+    return { core_actions = { { type = "next" } }, consume = true }
   end
-}
-```
-
-
-## Panel placement
-
-By default, plugin panels are rendered in the normal plugin tab content area (left/main pane) when your plugin tab is active.
-
-If you want a floating top-right panel, set:
-
-```lua
-{
-  title = "My Overlay",
-  target = "overlay",
-  items = { { type = "text", text = "hello" } }
-}
-```
-
-Supported targets:
-
-- `main` or `results` (default/main list area in active plugin tab)
-- `queue` (right pane list area in active plugin tab)
-- `overlay` (optional floating panel in the top-right corner)
-
-Example (render in right pane instead of overlay):
-
-```lua
-{
-  title = "Plugin Help",
-  target = "queue",
-  items = { { type = "text", text = "Use ↑/↓ and Enter" } }
-}
-```
-
-
-## Plugin manager example (without floating overlay window)
-
-This example renders everything in normal tab panes (left/right lists), not in the top-right floating overlay.
-
-Save as `~/.config/rs-pug/plugins/plugin_manager.lua`:
-
-```lua
-local plugin_list = {
-  {
-    name = "discord_rich_presence.lua",
-    url = "https://raw.githubusercontent.com/JustRoccat/all-rspug/main/plugins/discord_rich_presence.lua",
-  },
-  {
-    name = "hq.lua",
-    url = "https://raw.githubusercontent.com/JustRoccat/all-rspug/main/plugins/hq.lua",
-  },
-}
-
-local selected_idx = 1
-local tab_id = "plugin_manager"
-local install_path = (os.getenv("HOME") or "") .. "/.config/rs-pug/plugins/"
-
-local function install_plugin(plugin)
-  local cmd = string.format("curl -L -s -o '%s%s' '%s'", install_path, plugin.name, plugin.url)
-  os.execute(cmd)
 end
+```
 
-local function build_results_items()
-  local items = {
-    { type = "info", text = "--- RS-PUG PLUGIN MANAGER ---" },
-    { type = "separator" },
-    { type = "text", text = "Available plugins:" },
-    { type = "separator" },
-  }
+### `on_event(event, state)`
 
-  for i, p in ipairs(plugin_list) do
-    local label = (i == selected_idx) and ("[▶] " .. p.name) or ("    " .. p.name)
-    table.insert(items, { type = "text", text = label })
+| | |
+|---|---|
+| **Input** | `event: PluginEvent`: the [core event](#pluginevent); `state: PluginUiState`: the UI state at the moment of the event. |
+| **Returns** | [`PluginDispatch`](#plugindispatch), or `nil`. |
+| **Frequency** | On **every** `CoreEvent` (see the `kind` table under [`PluginEvent`](#pluginevent)): including `progress`, which occurs multiple times per second during playback. Keep this hook's logic lightweight, or filter on `event.kind` at the very start. |
+| **Multi-plugin semantics** | Same as `on_key`: every plugin called, results merged. |
+
+```lua
+function plugin.on_event(event, state)
+  if event.kind == "started" then
+    return { flash = "Now playing: " .. event.message, flash_seconds = 3 }
   end
-
-  return items
 end
+```
 
-local function build_queue_items()
+### `on_tabs(state)`
+
+| | |
+|---|---|
+| **Input** | `state: PluginUiState`. |
+| **Returns** | `PluginTab[]`: a list of extra tabs shown next to the main tabs, or `nil`. |
+| **Frequency** | Polled every frame whenever `state` changed since the previous frame. |
+| **Note** | Works **regardless** of `allow-lua-ui-changes`: this is a lighter-weight way to add tabs than `on_ui_config`. Tabs from different plugins are simply concatenated (no deduplication of ids on your behalf). |
+
+```lua
+function plugin.on_tabs(state)
+  return { { id = "stats", title = "Stats", icon = "*" } }
+end
+```
+
+### `on_ui_panels(state)`
+
+| | |
+|---|---|
+| **Input** | `state: PluginUiState`. |
+| **Returns** | [`PluginPanel[]`](#pluginpanel), or `nil`. |
+| **Frequency** | Polled every frame alongside `on_tabs`. |
+| **Note** | Works **regardless** of `allow-lua-ui-changes`. Panels with `target` `main`/`results`/`queue` are shown in the results/queue panel **only while a plugin tab or a custom tab is active** (not on stock tabs like Discover). Panels with `target = "overlay"` always render as a floating window in the top-right corner, regardless of the active tab. |
+
+```lua
+function plugin.on_ui_panels(state)
   return {
-    { type = "text", text = "Controls:" },
-    { type = "text", text = "↑/↓ : Select plugin" },
-    { type = "text", text = "ENTER: Install plugin" },
-    { type = "text", text = "6: Open Plugins tab" },
+    {
+      title = "Info",
+      target = "overlay",
+      items = {
+        { type = "stat", label = "vol", value = tostring(state.volume) },
+        { type = "stat", label = "queue", value = tostring(state.queue_len) },
+      },
+    },
   }
 end
-
-return {
-  on_tabs = function(state)
-    return {
-      { id = tab_id, title = "Plugins", icon = "P" },
-    }
-  end,
-
-  on_key = function(key, state)
-    if key == "char:6" then
-      return {
-        consume = true,
-        ui = { set_tab = tab_id },
-        flash = "Plugin Manager",
-      }
-    end
-
-    if state.active_plugin_tab ~= tab_id then
-      return nil
-    end
-
-    if key == "up" then
-      selected_idx = math.max(1, selected_idx - 1)
-      return { consume = true }
-    elseif key == "down" then
-      selected_idx = math.min(#plugin_list, selected_idx + 1)
-      return { consume = true }
-    elseif key == "enter" then
-      local plugin = plugin_list[selected_idx]
-      install_plugin(plugin)
-      return {
-        consume = true,
-        flash = "Installed " .. plugin.name .. ". Restart app to load it.",
-      }
-    end
-  end,
-
-  on_ui_panels = function(state)
-    if state.active_plugin_tab ~= tab_id then
-      return nil
-    end
-
-    return {
-      {
-        title = "Plugin List",
-        target = "results",
-        items = build_results_items(),
-      },
-      {
-        title = "Help",
-        target = "queue",
-        items = build_queue_items(),
-      },
-    }
-  end,
-}
 ```
 
-Important: this example uses `target = "results"` and `target = "queue"`, so it renders in normal tab panes. It does **not** use `target = "overlay"`.
+### `on_ui_config(state)`: requires `allow-lua-ui-changes = true`
 
-## Lua UI changes (opt-in)
-
-`rs-pug` keeps the legacy Lua API enabled by default and gates layout-changing hooks behind an explicit config flag:
-
-```toml
-[lua]
-allow-lua-ui-changes = false
-```
-
-Set it to `true` to allow plugins to alter the stock UI. When enabled, startup shows `Lua UI changes enabled`.
-
-### Compatibility table
-
-| Hook / feature | Requires `allow-lua-ui-changes` | Notes |
-| --- | --- | --- |
-| `on_key` | No | Existing dispatch fields keep working. New `ui.layout` fields are ignored when the flag is false. |
-| `on_event` | No | Existing dispatch fields keep working. New `ui.layout` fields are ignored when the flag is false. |
-| `on_tabs` | No | Legacy plugin tabs remain outside the main tab bar; numeric shortcuts are assigned dynamically in visible tab order up to `8`, with `9`/`0` reserved for volume. |
-| `on_ui_panels` | No | Legacy panels, including `target = "overlay"`, remain independent of custom sections. |
-| `on_ui_config` | Yes | Runs once at startup only when enabled. |
-| `on_ui_sections` | Yes | Runs on rerender only when enabled. |
-| `on_ui_update` | Yes | Runs after UI state changes only when enabled. |
-| `on_ui_inject` | Yes | Runs on rerender only when enabled. |
-
-When the flag is false, plugins can still define the new hooks; the runtime silently ignores them without errors.
-
-### Errors and warnings
-
-Lua plugin loading and enabled UI hooks are isolated per plugin. A failing plugin or malformed hook return does not crash the app and does not stop other plugins from running. The runtime records warnings for:
-
-- plugin directory/read/load failures,
-- missing or invalid `plugin` tables,
-- hook values that are not functions,
-- hook call errors,
-- malformed return tables,
-- invalid tab ids, duplicate custom tab ids, invalid section ids/positions, unknown `layout.hide` entries, and clamped layout dimensions.
-
-Warnings are bounded, deduplicated when repeated, and surfaced in the statusbar with a warning marker. When `allow-lua-ui-changes = false`, the new UI hooks and new `ui.layout` dispatch fields are still ignored silently as a compatibility guarantee.
-
-### `PluginUiState` additions
-
-New UI-aware state fields are available to Lua hooks:
-
-- `active_custom_tab`: id of the active `tabs.custom` tab, or `nil`.
-- `active_plugin_tab`: legacy `on_tabs` tab id, unchanged.
-- `active_tab_index`: current main-tab index as an integer.
-- `current_layout`: table with `queue_width_percent`, `visualizer_height`, `tab_bar_position`, `tabs_width`, and `queue_position`.
-- `visible_sections`: ids of currently visible custom sections.
-
-### `on_ui_config`
-
-Runs once at startup when Lua UI changes are enabled. It can patch tabs and layout:
+| | |
+|---|---|
+| **Input** | `state: PluginUiState`. |
+| **Returns** | [`PluginUiConfig`](#pluginuiconfig) (`{ tabs = {...}, layout = {...} }`), or `nil`. |
+| **Frequency** | Once at application startup and again after every plugin hot-reload. **Not** polled every frame: it's a one-time startup configuration of tab structure and layout. For continuous layout updates, use `on_ui_update`. |
+| **Effect** | Replaces the full set of main tabs (`app.main_tabs`) and applies `layout` (same as `on_ui_update`). |
 
 ```lua
 function plugin.on_ui_config(state)
   return {
     tabs = {
       remove = { "local" },
-      order = { "discover", "library", "albums", "options" },
-      rename = {
-        discover = { title = "Find", icon = "⌕" }
-      },
-      custom = {
-        { id = "radio", title = "Radio", icon = "◌", position = 2 }
-      }
+      custom = { { id = "dash", title = "Dashboard", icon = "*", position = 2 } },
     },
-    layout = {
-      queue_width_percent = 35,
-      visualizer_height = 4,
-      show_progress_bar = true,
-      show_volume_bar = true,
-      show_statusbar = true,
-      show_keybind_hints = true,
-      tab_bar_position = "top", -- "top", "bottom", "left", or "right"
-      tabs_width = 22,           -- used by tab_bar_position = "left"/"right"
-      queue_position = "right", -- "left" or "right"
-      hide = { "volume_bar" },
-      custom_sections = {
-        { id = "radio_status", position = "below_player", height = 3, content = "lua" }
-      }
-    }
+    layout = { queue_width_percent = 30, tab_bar_position = "left" },
   }
 end
 ```
 
-Stock tab ids are `discover`, `albums`, `library`, `local`, and `options`. If the active stock tab is removed, the app falls back to the first available main tab. `tabs.custom` tabs live in the main tab bar. Numeric shortcuts are assigned dynamically in visible tab order up to `8`; `9` and `0` remain volume down/up.
+### `on_ui_update(state)`: requires `allow-lua-ui-changes = true`
 
-Custom section positions are `above_player`, `below_player`, `left`, and `right`. Sections with `content = "lua"` can be filled by `on_ui_sections`; missing data renders an empty section.
+| | |
+|---|---|
+| **Input** | `state: PluginUiState`. |
+| **Returns** | [`PluginLayoutConfig`](#pluginlayoutconfig) **or** `PluginUiConfig` (the function auto-detects the shape: if the table contains a `layout` or `tabs` key, it's treated as a `PluginUiConfig` and only its `.layout` field is used; otherwise it's treated as a flat `PluginLayoutConfig`), or `nil`. |
+| **Frequency** | Polled every frame whenever `state` changed: i.e. it reacts to tab changes, volume, repeat mode, search query, etc. in near real time. |
+| **Note** | Does not modify tabs (`tabs`): only `layout`. Use `on_ui_config` to change tabs. |
 
-Layout fields also support `tab_bar_position = "top"`, `"bottom"`, `"left"`, or `"right"`. Left/right positions render a vertical tab sidebar and use `tabs_width`; top/bottom positions render the horizontal tab bar above or below the app. `queue_position = "left"` places the queue before the results panel. Invalid positions are ignored with a Lua warning; `tabs_width` is clamped to a safe range.
+```lua
+function plugin.on_ui_update(state)
+  if state.active_tab == "queue" then
+    return { queue_width_percent = 60 }  -- flat shape
+  end
+  return { layout = { queue_width_percent = 40 } }  -- on_ui_config-style shape
+end
+```
 
-### `on_ui_sections`
+### `on_ui_sections(state)`: requires `allow-lua-ui-changes = true`
 
-Returns a map of custom section ids to item lists:
+| | |
+|---|---|
+| **Input** | `state: PluginUiState`. |
+| **Returns** | A table `{ [section_id]: PluginPanelItem[] }`, or `nil`. |
+| **Frequency** | Polled every frame alongside `on_ui_inject`, `on_tabs`, `on_ui_panels`. |
+| **Effect** | Supplies the **content** displayed inside custom layout sections defined via `layout.custom_sections` (from `on_ui_config`/`on_ui_update`). The table key must match a section's `id`. A section with no matching entry renders as an empty panel titled with its `id`. |
 
 ```lua
 function plugin.on_ui_sections(state)
   return {
-    radio_status = {
-      { type = "header", text = "Radio" },
-      { type = "text", text = "Ready" },
-      { type = "keybind", key = "r", action = "refresh stations" },
-      { type = "progress", label = "buffer", percent = 80 }
-    }
+    hello = {
+      { type = "header", text = "Hello" },
+      { type = "progress", label = "battery", percent = 72 },
+    },
   }
 end
 ```
 
-Supported item types are `text`, `info`, `option`, `stat`, `separator`, `header`, `keybind`, and `progress`.
+### `on_ui_inject(state)`: requires `allow-lua-ui-changes = true`
 
-### `on_ui_inject`
-
-Returns optional lists inserted into stock panels. Returning `nil` injects nothing.
+| | |
+|---|---|
+| **Input** | `state: PluginUiState`. |
+| **Returns** | [`PluginUiInject`](#pluginuiinject) (any subset of the fields `results_top`, `results_bottom`, `queue_top`, `queue_bottom`, `statusbar_extra`), or `nil`. |
+| **Frequency** | Polled every frame alongside `on_ui_sections`. |
+| **Effect** | Inserts `PluginPanelItem` elements at the top/bottom of the results list, top/bottom of the queue, or into the status bar: **regardless** of which tab is active (unlike `on_ui_panels` with `target = "main"/"results"/"queue"`, which only render on plugin/custom tabs). |
 
 ```lua
 function plugin.on_ui_inject(state)
   return {
-    results_top = { { type = "info", text = "Plugin result hint" } },
-    results_bottom = {},
-    queue_top = {},
-    queue_bottom = { { type = "text", text = "End of queue" } },
-    statusbar_extra = { { type = "keybind", key = "R", action = "radio" } }
+    statusbar_extra = {
+      { type = "keybind", key = "h", action = "say hi" },
+    },
   }
 end
 ```
 
-### `on_ui_update`
+## Data type reference
 
-Runs after UI state changes and returns additive layout patches. Only supplied fields are overwritten.
+All types are serialized/deserialized between Rust and Lua through `mlua`/`serde`'s JSON-like data model: in Lua you represent them as plain tables. Field names on the Lua side match the `serde` names exactly (mostly `snake_case`).
+
+### `Song`
+
+| Field | Lua type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes | Track identifier (a URL for streaming sources, a file path for local files). |
+| `title` | `string` | yes | Title shown in the UI. |
+| `webpage_url` | `string` | yes | URL/path used for playback. |
+| `uploader` | `string \| nil` | no | Artist/channel name. |
+| `duration` | `number \| nil` | no | Length in seconds. |
+
+### `PluginUiState`
+
+A snapshot of application state passed to **every** hook that takes a `state` argument. Fields are read-only: you make changes by returning a `PluginDispatch`/`PluginUiConfig`/`PluginLayoutConfig`, not by mutating this table.
+
+| Field | Lua type | Description |
+|---|---|---|
+| `active_tab` | `string` | Id of the active tab: one of `discover`, `albums`, `library`, `local`, `options`, a custom tab id, or a plugin tab id from `on_tabs`. |
+| `active_plugin_tab` | `string \| nil` | Id of the active plugin tab (from `on_tabs`), if one is active. |
+| `active_custom_tab` | `string \| nil` | Id of the active custom tab (from `on_ui_config`), if one is active. |
+| `active_tab_index` | `number` | Position of the active tab in the tab bar (0-based, includes main and plugin tabs). |
+| `current_layout` | [`PluginUiLayoutState`](#pluginuilayoutstate) | Current, effective layout values. |
+| `visible_sections` | `string[]` | Ids of currently visible (non-hidden) custom sections. |
+| `player_state` | `string` | One of the player state labels (e.g. `"playing"`, `"paused"`, `"idle"`, `"searching"`: the exact text comes from `ui_helpers::player_state_label`). |
+| `volume` | `number` | Volume, 0–100. |
+| `muted` | `boolean` | Whether audio is muted. |
+| `repeat_mode` | `string` | `"off"`, `"one"`, or `"all"` (lowercase repeat-mode label). |
+| `search_query` | `string` | Current text in the search field (Discover). |
+| `album_search_query` | `string` | Current text in the album search field. |
+| `queue_len` | `number` | Number of tracks in the queue. |
+
+#### `PluginUiLayoutState`
+
+| Field | Lua type | Description |
+|---|---|---|
+| `queue_width_percent` | `number` | Current width of the queue panel, in percent. |
+| `visualizer_height` | `number` | Current height of the FFT visualizer, in rows. |
+| `tab_bar_position` | `string` | `"top"`, `"bottom"`, `"left"`, or `"right"`. |
+| `tabs_width` | `number` | Width of the tab bar, in columns (applies to `left`/`right` positions). |
+| `queue_position` | `string` | `"left"` or `"right"`. |
+
+### `PluginEvent`
+
+Represents a core event (`CoreEvent`) passed to `on_event`.
+
+| Field | Lua type | Description |
+|---|---|---|
+| `kind` | `string` | See table below. |
+| `message` | `string \| nil` | Context-dependent text message (depends on `kind`). |
+| `value` | `number \| nil` | Context-dependent numeric value (depends on `kind`). |
+
+`CoreEvent` → `kind` / `message` / `value` mapping:
+
+| Core `CoreEvent` | `kind` | `message` | `value` |
+|---|---|---|---|
+| `Started(song)` | `"started"` | track title | - |
+| `SearchDone(songs)` | `"search_done"` | - | number of results |
+| `AlbumSearchDone(albums)` | `"album_search_done"` | - | number of results |
+| `Progress { position, .. }` | `"progress"` | - | playback position, in seconds |
+| `Error(msg)` | `"error"` | error text | - |
+| any other (`Paused`, `Resumed`, `TrackFinished`, `VolumeChanged`, `MuteChanged`, `SearchFailed`, `AlbumSearchFailed`, `LibraryRefreshDone`, `DownloadFinished`) | `"event"` | `nil` | `nil` |
+
+> [!TIP]
+> Events that aren't mapped to a dedicated `kind` still trigger `on_event` (with `kind = "event"` and no extra data): if you need to react specifically to, say, a volume change, check `state.volume` on every call instead of relying on a dedicated `kind`.
+
+### `PluginDispatch`
+
+The value returned from `on_key` and `on_event`. Every field is optional: omit the fields you don't set (or return `nil` for the whole value to do nothing).
+
+| Field | Lua type | Default | Description |
+|---|---|---|---|
+| `consume` | `boolean` | `false` | When `true` (after merging all plugins), the key/event is not passed to `rs-pug`'s built-in handling. Applies to `on_key` only. |
+| `flash` | `string \| nil` | `nil` | Message shown in the status bar. |
+| `flash_seconds` | `number \| nil` | `nil` (effectively 4) | How long `flash` is shown, in seconds. |
+| `core_actions` | [`PluginCoreAction`](#plugincoreaction)`[]` | `{}` | A list of actions to run against the player core. |
+| `ui` | [`PluginUiPatch`](#pluginuipatch) | `{}` | Point changes to UI state. |
 
 ```lua
-function plugin.on_ui_update(state)
-  if state.active_custom_tab == "radio" then
-    return {
-      layout = {
-        queue_width_percent = 30,
-        visualizer_height = 3,
-        show_sections = { "radio_status" }
-      }
-    }
-  end
-  return { layout = { hide_sections = { "radio_status" } } }
-end
+return {
+  consume = true,
+  flash = "Paused",
+  flash_seconds = 2,
+  core_actions = { { type = "toggle_pause" } },
+  ui = { set_focus = "queue" },
+}
 ```
 
-### `ui.layout` dispatch patches
+### `PluginCoreAction`
 
-`on_key` and `on_event` can return live layout patches in `ui.layout` when Lua UI changes are enabled:
+A tagged union (`{ type = "...", ... }`) representing a command sent to the playback core (`mpv`). The `type` field is required and is `snake_case`.
+
+| `type` | Extra fields | Description |
+|---|---|---|
+| `search` | `query: string` | Runs a search as if the query were typed and `Enter` pressed. |
+| `search_albums` | `query: string` | Same as above, for the albums view. |
+| `seek` | `seconds: number` (integer) | Seeks by the given number of seconds (positive = forward). |
+| `toggle_pause` | - | Toggles pause/play. |
+| `toggle_mute` | - | Toggles mute. |
+| `volume_up` | - | Increases volume by the default step. |
+| `volume_down` | - | Decreases volume by the default step. |
+| `next` | - | Next track. |
+| `prev` | - | Previous track. |
+| `set_volume` | `value: number` (0–255, effectively 0–100) | Sets volume to a specific value. |
+| `play_url` | `url: string`, `title: string \| nil` | Plays any URL/path, optionally with a custom title. |
+| `raw_mpv` | `command: any` (any JSON value) | Sends a raw IPC command to `mpv`, unvalidated by `rs-pug`. |
 
 ```lua
-function plugin.on_key(key, state)
-  if key == "L" then
-    return {
-      consume = true,
-      ui = {
-        layout = {
-          queue_width_percent = 45,
-          visualizer_height = 5,
-          tab_bar_position = "right", -- or "left"/"top"/"bottom"
-          tabs_width = 24,
-          queue_position = "left",
-          hide_sections = { "radio_status" },
-          show_sections = { "other_section" }
-        }
-      }
-    }
-  end
-end
+core_actions = {
+  { type = "search", query = "lofi hip hop" },
+  { type = "set_volume", value = 50 },
+  { type = "raw_mpv", command = { "set_property", "speed", 1.5 } },
+}
 ```
 
-Existing `ui` fields such as `set_tab`, `set_search_query`, `set_focus`, and selection setters are unchanged.
+> [!WARNING]
+> `raw_mpv` passes a command straight through to `mpv` via IPC, with no validation from `rs-pug`. A malformed command can destabilize playback for the current session. Only use documented `mpv` JSON IPC commands.
 
+### `PluginUiPatch`
 
-### Minimal opt-in example
+Point changes to UI state returned in the `ui` field of `PluginDispatch`. All fields optional.
 
-`~/.config/rs-pug/config.toml`:
+| Field | Lua type | Description |
+|---|---|---|
+| `set_tab` | `string \| nil` | Switches the active tab. Accepts a stock tab name (`discover`, `albums`, `library`, `local`, `options`), a custom tab id (requires `allow-lua-ui-changes = true`), or a plugin tab id from `on_tabs`. |
+| `set_search_query` | `string \| nil` | Overwrites the search field's contents (Discover). |
+| `set_album_search_query` | `string \| nil` | Overwrites the album search field's contents. |
+| `set_focus` | `string \| nil` | `"search"`, `"results"`, or `"queue"`. |
+| `set_search_mode` | `boolean \| nil` | Turns query-typing mode on/off. |
+| `set_selected_result` | `number \| nil` | 0-based index of the selected search result; clamped to the list's range. |
+| `set_selected_album_result` | `number \| nil` | Same, for the album list (counted together with expanded tracks). |
+| `set_selected_queue` | `number \| nil` | 0-based index of the selected queue entry. |
+| `layout` | [`PluginUiLayoutPatch`](#pluginuilayoutpatch) | A point change to the layout. Only applied when `allow-lua-ui-changes = true`: silently ignored otherwise. |
 
-```toml
-[lua]
-allow-lua-ui-changes = true
-```
+### `PluginUiLayoutPatch`
 
-`~/.config/rs-pug/plugins/minimal_ui.lua`:
+A subset of `PluginLayoutConfig` fields available directly from `on_key`/`on_event` (via `PluginUiPatch.layout`). All fields optional; numeric values are clamped to their allowed range (see [`PluginLayoutConfig`](#pluginlayoutconfig)), with a warning emitted when a value is clamped.
+
+| Field | Lua type |
+|---|---|
+| `queue_width_percent` | `number \| nil` |
+| `visualizer_height` | `number \| nil` |
+| `tab_bar_position` | `string \| nil` |
+| `tabs_width` | `number \| nil` |
+| `queue_position` | `string \| nil` |
+| `hide_sections` | `string[]` |
+| `show_sections` | `string[]` |
+
+### `PluginPanel`
+
+| Field | Lua type | Required | Description |
+|---|---|---|---|
+| `title` | `string` | yes | Panel/window title. |
+| `target` | `string \| nil` | no | One of `"main"`, `"results"`, `"queue"`, `"overlay"`. Missing = treated like `"main"`/`"results"` (shown in the results panel on a plugin/custom tab). |
+| `lines` | `string[]` | no | **Deprecated.** A list of plain text lines. If `items` is empty and `lines` isn't, each line is automatically converted to `{ type = "text", text = <line> }`. |
+| `items` | [`PluginPanelItem`](#pluginpanelitem)`[]` | no | The preferred way to describe a panel's content. |
+
+### `PluginPanelItem`
+
+A tagged union. Used both in `PluginPanel.items` and in `on_ui_sections`/`on_ui_inject` return values.
+
+| `type` | Extra fields | Rendering |
+|---|---|---|
+| `text` | `text: string` | A plain text line. |
+| `info` | `text: string` | A line in the "info" color. |
+| `option` | `key: string`, `value: string` | `"key: value"`, `key` in the warning color. |
+| `stat` | `label: string`, `value: string` | `"label value"`, `value` in the "ok" color. |
+| `separator` | - | A horizontal separator line. |
+| `header` | `text: string` | A bold heading. |
+| `keybind` | `key: string`, `action: string` | `"key → action"`. |
+| `progress` | `label: string \| nil`, `percent: number` | An ASCII progress bar (10 segments) plus a percentage value. `percent` is clamped to 0–100. |
 
 ```lua
+items = {
+  { type = "header", text = "Stats" },
+  { type = "stat", label = "volume", value = tostring(state.volume) },
+  { type = "separator" },
+  { type = "progress", label = "buffer", percent = 87 },
+}
+```
+
+### `PluginTab`
+
+| Field | Lua type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes | Unique tab identifier. |
+| `title` | `string` | yes | Display name. |
+| `icon` | `string \| nil` | no | Icon/glyph shown next to the title. |
+
+### `PluginUiConfig`
+
+Returned from `on_ui_config` (and partly recognized in `on_ui_update`).
+
+```lua
+{
+  tabs = {
+    remove = { "local" },                 -- string[]: main tab ids to remove
+    order = { "options", "discover" },     -- string[]: full new tab order (remaining tabs appended at the end)
+    rename = {                             -- { [id]: { title?, icon? } }
+      discover = { title = "Search", icon = "*" },
+    },
+    custom = {                             -- PluginCustomTab[]
+      { id = "dash", title = "Dashboard", icon = "*", position = 2 },
+    },
+  },
+  layout = { --[[ PluginLayoutConfig, see below ]] },
+}
+```
+
+`PluginCustomTab`: `id: string` (required, non-empty, unique), `title: string` (required), `icon: string | nil`, `position: number | nil` (1-based position; out-of-range values are clamped, with a warning).
+
+> [!NOTE]
+> If `tabs.remove` removes every main tab (and `custom` doesn't replace them), `rs-pug` restores the default tab set and emits a warning: the UI is never left with no tabs at all.
+
+### `PluginLayoutConfig`
+
+Returned directly from `on_ui_update` (flat shape) or as the `.layout` field from `on_ui_config`/`on_ui_update` (nested shape). All fields optional: only fields you set are applied; the rest keep their current value.
+
+| Field | Lua type | Range / clamping | Description |
+|---|---|---|---|
+| `queue_width_percent` | `number \| nil` | 10–90 | Width of the queue panel, in percent. |
+| `visualizer_height` | `number \| nil` | 0–10 | Height of the FFT visualizer, in rows. |
+| `show_progress_bar` | `boolean \| nil` | - | Visibility of the playback progress bar. |
+| `show_volume_bar` | `boolean \| nil` | - | Visibility of the volume bar. |
+| `show_statusbar` | `boolean \| nil` | - | Visibility of the status bar. |
+| `show_keybind_hints` | `boolean \| nil` | - | Visibility of keybinding hints. |
+| `tab_bar_position` | `string \| nil` | `"top"`, `"bottom"`, `"left"`, `"right"` (other values rejected with a warning) | Position of the tab bar. |
+| `tabs_width` | `number \| nil` | 12–40 | Width of the tab bar (for `left`/`right` positions). |
+| `queue_position` | `string \| nil` | `"left"`, `"right"` (other values rejected with a warning) | Which side the queue renders on. |
+| `hide` | `string[]` | `"visualizer"`, `"progress_bar"`, `"volume_bar"`, `"statusbar"`, `"keybind_hints"` (other values ignored with a warning) | Hides fixed UI elements (a shortcut for the corresponding `show_*`/`visualizer_height` fields). |
+| `custom_sections` | [`PluginCustomSection`](#plugincustomsection)`[]` | - | Defines new UI areas, populated by `on_ui_sections`. |
+| `hide_sections` | `string[]` | any custom section `id` | Hides the given custom sections. |
+| `show_sections` | `string[]` | any custom section `id` | Reveals the given sections (removes them from the hidden list). |
+
+> [!NOTE]
+> `hide`/`show_*` on `PluginLayoutConfig` (fixed UI elements: progress bar, volume bar, status bar, hints, visualizer) is a **different mechanism** from `hide_sections`/`show_sections` (your own custom sections from `custom_sections`). Don't mix identifiers between the two.
+
+### `PluginUiInject`
+
+Returned from `on_ui_inject`. All fields are lists of [`PluginPanelItem`](#pluginpanelitem), empty by default.
+
+| Field | Where it renders |
+|---|---|
+| `results_top` | At the top of the search results list (Discover/Albums), regardless of the active tab. |
+| `results_bottom` | At the bottom of the results list. |
+| `queue_top` | At the top of the queue panel. |
+| `queue_bottom` | At the bottom of the queue panel. |
+| `statusbar_extra` | Appended next to the latest warning in the status bar. |
+
+### `PluginCustomSection`
+
+An entry in the `layout.custom_sections` list of `PluginLayoutConfig`.
+
+| Field | Lua type | Required | Default | Description |
+|---|---|---|---|---|
+| `id` | `string` | yes (non-empty, unique) | - | Section identifier. Also used as the key in `on_ui_sections`'s return value and in `hide_sections`/`show_sections`. |
+| `position` | `string` | no | `"below_player"` | One of `"above_player"`, `"below_player"`, `"left"`, `"right"`. Any other value is rejected with a warning. |
+| `width` | `number \| nil` | no | - | Width in columns (for `left`/`right`; if omitted, split evenly among sections at the same position). |
+| `height` | `number \| nil` | no | 3 | Height in rows. |
+| `content` | `string \| nil` | no | - | **Reserved, currently unused by the renderer.** The section's actual content comes exclusively from `on_ui_sections`, returned under a key equal to this section's `id`. |
+
+```lua
+layout = {
+  custom_sections = {
+    { id = "clock", position = "above_player", height = 1 },
+  },
+}
+```
+
+## Key labels
+
+The `key` argument passed to `on_key` is a string generated by `ui_helpers::describe_key_event_with_modifiers`. Full mapping table:
+
+| `KeyCode` | Label | Notes |
+|---|---|---|
+| Alphanumeric character/symbol `c` | `char:c` | Case reflects the key combination actually pressed (Shift changes the case for letters `a`-`z`). |
+| `Enter` | `enter` | |
+| `Esc` | `esc` | |
+| `Tab` | `tab` | |
+| `Backspace` | `backspace` | |
+| `←` | `left` | |
+| `→` | `right` | |
+| `↑` | `up` | |
+| `↓` | `down` | |
+| `PageUp` | `page_up` | |
+| `PageDown` | `page_down` | |
+| `F1`–`F12` | `f1`…`f12` | |
+| any other key code (e.g. `Home`, `End`, `Delete`) | `other` | Indistinguishable from each other: they all map to the same `"other"` label. |
+
+**Ctrl and Alt modifiers are not encoded in the label passed to `on_key`.** `Ctrl+r` and plain `r` produce the same base label `char:r` (the code path that feeds `on_key` only inspects the Shift modifier, via the letter's case). If your plugin needs to distinguish Ctrl/Alt combinations, that's not possible through `on_key` in the current API: consider using `rs-pug`'s built-in key remapping in `config.toml` (`[keybinds]`, see `docs-usage.md`) instead, which encodes modifiers as `C-`/`M-`/`S-` prefixes at the `rs-pug` level, outside the plugin system.
+
+**Shift alias for letters:** for `KeyCode::Char` values that are ASCII letters, `rs-pug` generates a two-element label list: the primary one (actually pressed) and a "toggled"-case one. `dispatch_key_with_aliases` first tries the primary label against every plugin; if **no** plugin produced an effect (`consume`, `flash`, or `flash_seconds`), it then tries the second label. This means a plugin listening on `char:z` (lowercase) will still fire even in contexts where a bare `z` press is already handled elsewhere as a Shift toggle: in practice, **you usually only need to handle one case variant**, and the system will try the other automatically if the first produced no effect.
+
+## Merging results from multiple plugins
+
+When more than one `.lua` file is present in the directory, `rs-pug` calls the given hook on **every** loaded plugin and merges the results. The merge rules differ per hook: this is a common source of bugs when writing several cooperating plugins.
+
+| Hook | Merge strategy |
+|---|---|
+| `on_search_query`, `on_search_results`, `on_song_start` | **Pipeline.** Plugin *N*'s result becomes plugin *N+1*'s input, in file-load order. |
+| `on_key`, `on_event` (`PluginDispatch` scalar fields: `flash`, `flash_seconds`, `ui.set_tab`, `ui.set_search_query`, `ui.set_album_search_query`, `ui.set_focus`, `ui.set_search_mode`, `ui.set_selected_result`, `ui.set_selected_album_result`, `ui.set_selected_queue`) | **First plugin that sets the field wins** (later calls setting the same field no longer overwrite an already-set value). |
+| `on_key`, `on_event` (`consume`) | **Logical OR**: it's enough for one plugin to return `true`. |
+| `on_key`, `on_event` (`core_actions`) | **Concatenation**: actions from every plugin are collected and all executed, in load order. |
+| `on_key`, `on_event` (`ui.layout`, i.e. [`PluginUiLayoutPatch`](#pluginuilayoutpatch)) | **Last plugin that sets the field wins** (the opposite of the rest of `PluginDispatch`!). The `hide_sections`/`show_sections` lists are concatenated. |
+| `on_tabs` | **Concatenation** of every returned list, no `id` deduplication. |
+| `on_ui_panels` | **Concatenation** of every returned list. |
+| `on_ui_config` (`tabs.remove`) | **Sum** (concatenation) of removals from every plugin. |
+| `on_ui_config` (`tabs.order`) | **Last plugin with a non-empty `order` list wins.** |
+| `on_ui_config` (`tabs.rename`) | **Map merge**: on a conflict over the same `id`, **the last plugin wins** (`HashMap::extend`). |
+| `on_ui_config` (`tabs.custom`) | **Concatenation.** |
+| `on_ui_config`/`on_ui_update` (`layout`, scalar fields of [`PluginLayoutConfig`](#pluginlayoutconfig)) | **Last plugin that sets the field wins** (`Some` overwrites a previous `Some`). |
+| `layout.hide`, `layout.hide_sections`, `layout.show_sections`, `layout.custom_sections` | **Concatenation.** |
+| `on_ui_sections` | **Overwrite by key**: if two plugins return an entry for the same `section_id`, **the last one wins** (the whole entry, not a per-item merge). |
+| `on_ui_inject` | **Concatenation** of all five lists across every plugin. |
+
+> [!IMPORTANT]
+> Note the asymmetry: scalar fields in `PluginDispatch.ui` (e.g. `set_tab`) follow "first wins", while `PluginDispatch.ui.layout` and `PluginLayoutConfig` follow "last wins". If you're writing several cooperating plugins, assign clear ownership of each field between them instead of relying on load order (which, again, is not guaranteed: see [Execution model](#execution-model)).
+
+## Diagnostics and error handling
+
+`rs-pug` keeps an internal queue of up to 100 warnings (`PluginWarning`), of which only the **most recent** is ever shown in the UI (in the status bar, until replaced by the next one; deduplication: an identical message in a row is not added again, and the queue keeps up to the 20 most recent unique entries visible in `app.plugin_ui.warnings`). Each entry has a level (`WARN`/`ERROR`) and this format:
+
+```
+Lua ERROR [plugin_name.hook_name]: error text
+```
+
+### Situations that are reported as a warning/error
+
+- A syntax or execution error in the top-level chunk while loading the file (`load failed: ...`).
+- No `plugin` table after evaluating the chunk (`missing plugin table: ...`).
+- A hook exists but isn't a function (`hook is not a function`).
+- A runtime error or exceeding the time limit **inside**: `on_ui_config`, `on_ui_sections`, `on_ui_inject`, `on_ui_update` (`hook call failed: ...`).
+- An invalid returned shape (doesn't match the expected type) from: `on_key`/`on_event` (`invalid dispatch return: ...`), `on_ui_config`/`on_ui_sections`/`on_ui_inject`/`on_ui_update` (`invalid return shape: ...`).
+- Unknown ids in `tabs.remove`/`tabs.rename`/`tabs.order`, a missing/duplicate custom tab `id`, an out-of-range `custom.position` (`on_ui_config`).
+- A numeric value clamped outside its allowed range in the layout layer (`queue_width_percent`, `visualizer_height`, `tabs_width`: see [`PluginLayoutConfig`](#pluginlayoutconfig)).
+- An unknown `tab_bar_position`/`queue_position` value.
+- An unknown element in `layout.hide`.
+- A missing/invalid `position` in `custom_sections`, or a duplicate section `id`.
+- Removing every main tab without replacing them with custom tabs.
+
+### Situations that are silently swallowed (no warning entry)
+
+This is an important implementation asymmetry to be aware of while debugging:
+
+- A runtime error or exceeding the time limit **inside** the hooks: `on_search_query`, `on_search_results`, `on_song_start`, `on_key`, `on_event`, `on_tabs`, `on_ui_panels`: in these hooks, an error simply causes that plugin's result to be skipped, **with no message anywhere in the UI or the warning queue**.
+- A shape mismatch in the value returned from `on_search_query`/`on_search_results`/`on_song_start`: the result is silently discarded, and the value from before that plugin ran is passed forward unchanged.
+
+> [!TIP]
+> If a hook from the second group "isn't working" and no warning ever appears, the most likely cause is a Lua syntax error inside the hook body, a typo in a field name of the returned table, or an infinite loop hitting the 250 ms limit. Run `rs-pug --debug` (logs to `~/.config/rs-pug/rs-pug.log`) and test the hook's logic in a standalone Lua interpreter before wiring it into `rs-pug`, to rule out syntax errors first.
+
+## Security and trust boundaries
+
+- Every plugin runs with **full access to the Lua 5.4 standard library**, including `io` (reading/writing any file the user has permission for) and `os` (including `os.execute`, which runs arbitrary shell commands). `rs-pug` **applies no additional sandbox** beyond the per-call execution time limit.
+- Plugins run with the same system privileges as the `rs-pug` process: i.e. whatever user account is running it.
+- Only install `.lua` files from sources you trust. A `.lua` file dropped into `plugins_dir` is executed automatically at the next startup or hot-reload, with no user confirmation.
+- The 250 ms per-call limit protects the UI from hanging on a runaway script, but it does **not** protect against malicious actions that fit within that window (e.g. a single file write/read, a single `os.execute`).
+- `raw_mpv` (see [`PluginCoreAction`](#plugincoreaction)) forwards an arbitrary JSON structure directly to `mpv`'s IPC, unvalidated: treat it as an extension of the trust surface identical to direct access to `mpv`'s IPC socket.
+
+## Full examples
+
+### 1. A search-transforming plugin (pipeline)
+
+```lua
+-- ~/.config/rs-pug/plugins/search_boost.lua
 plugin = {}
 
-function plugin.on_ui_config(state)
-  return {
-    layout = {
-      custom_sections = {
-        { id = "hello", position = "below_player", height = 3, content = "lua" }
-      }
-    }
-  }
+function plugin.on_search_query(query)
+  -- Append context to every query on the Discover tab.
+  return query .. " lyrics"
 end
 
-function plugin.on_ui_sections(state)
-  return {
-    hello = {
-      { type = "header", text = "Hello from Lua" },
-      { type = "text", text = "UI changes are enabled." }
+function plugin.on_search_results(songs)
+  -- Drop results longer than 10 minutes (likely mixes/compilations).
+  local filtered = {}
+  for _, song in ipairs(songs) do
+    if not song.duration or song.duration <= 600 then
+      table.insert(filtered, song)
+    end
+  end
+  return filtered
+end
+
+return plugin
+```
+
+### 2. A plugin with custom keybindings and core actions
+
+```lua
+-- ~/.config/rs-pug/plugins/quick_seek.lua
+plugin = {}
+
+local SEEK_STEP = 15
+
+function plugin.on_key(key, state)
+  if key == "char:[" then
+    return {
+      consume = true,
+      core_actions = { { type = "seek", seconds = -SEEK_STEP } },
+      flash = "-" .. SEEK_STEP .. "s",
+      flash_seconds = 1,
     }
+  end
+  if key == "char:]" then
+    return {
+      consume = true,
+      core_actions = { { type = "seek", seconds = SEEK_STEP } },
+      flash = "+" .. SEEK_STEP .. "s",
+      flash_seconds = 1,
+    }
+  end
+end
+
+return plugin
+```
+
+### 3. A plugin with an info overlay panel (no `allow-lua-ui-changes` needed)
+
+```lua
+-- ~/.config/rs-pug/plugins/now_playing_overlay.lua
+plugin = {}
+
+function plugin.on_ui_panels(state)
+  return {
+    {
+      title = "Now",
+      target = "overlay",
+      items = {
+        { type = "stat", label = "tab", value = state.active_tab },
+        { type = "stat", label = "state", value = state.player_state },
+        { type = "stat", label = "volume", value = tostring(state.volume) .. "%" },
+        { type = "separator" },
+        { type = "stat", label = "queue", value = tostring(state.queue_len) },
+      },
+    },
   }
 end
 
 return plugin
 ```
 
-### Full opt-in example
+### 4. A plugin that reshapes the layout and adds a tab (requires `allow-lua-ui-changes = true`)
 
 ```lua
+-- ~/.config/rs-pug/plugins/compact_ui.lua
 plugin = {}
+
+if not ALLOW_LUA_UI_CHANGES then
+  return plugin  -- UI changes not permitted in config; don't register UI hooks
+end
 
 function plugin.on_ui_config(state)
   return {
     tabs = {
-      rename = { discover = { title = "Search", icon = "⌕" } },
-      custom = { { id = "dashboard", title = "Dash", icon = "◆", position = 2 } }
+      order = { "discover", "queue-stats", "options" },
+      custom = {
+        { id = "queue-stats", title = "Queue+", icon = "*", position = 2 },
+      },
     },
     layout = {
       queue_width_percent = 35,
-      visualizer_height = 4,
+      show_keybind_hints = false,
       custom_sections = {
-        { id = "dash_stats", position = "right", width = 34, height = 8, content = "lua" },
-        { id = "dash_keys", position = "below_player", height = 3, content = "lua" }
-      }
-    }
+        { id = "clock", position = "above_player", height = 1 },
+      },
+    },
   }
 end
 
 function plugin.on_ui_sections(state)
   return {
-    dash_stats = {
-      { type = "header", text = "Dashboard" },
-      { type = "stat", label = "Queue", value = tostring(state.queue_len) },
-      { type = "progress", label = "Volume", percent = state.volume }
+    clock = {
+      { type = "text", text = os.date("%H:%M:%S") },
     },
-    dash_keys = {
-      { type = "keybind", key = "1-8", action = "visible tabs" },
-      { type = "keybind", key = "9/0", action = "volume down/up" }
-    }
-  }
-end
-
-function plugin.on_ui_inject(state)
-  return {
-    statusbar_extra = { { type = "text", text = "Lua UI active" } }
   }
 end
 
 function plugin.on_ui_update(state)
-  if state.active_custom_tab == "dashboard" then
-    return { layout = { show_sections = { "dash_stats", "dash_keys" } } }
+  -- Shrink the queue panel when it's empty, widen it when it has tracks.
+  if state.queue_len == 0 then
+    return { queue_width_percent = 20 }
   end
-  return { layout = { hide_sections = { "dash_stats" } } }
+  return { queue_width_percent = 35 }
 end
 
 return plugin
 ```
+
+## Best practices and limitations
+
+- **Filter early.** `on_event` fires on every `CoreEvent`, including several times per second during `progress`. Check `event.kind` at the very top of the function before doing anything expensive.
+- **Don't assume file order.** Plugin load order within the directory is not guaranteed. If your plugins must cooperate in a specific order, consider merging them into a single `.lua` file.
+- **Remember the `layout` merge asymmetry.** `PluginDispatch.ui` scalar fields: first wins; `ui.layout`/`PluginLayoutConfig` scalar fields: last wins. See [Merging results](#merging-results-from-multiple-plugins).
+- **Return `nil`, not an empty table, when nothing changes.** For most hooks this is semantically equivalent, but for `on_ui_sections`/`on_ui_config`/`on_ui_update` it more clearly communicates intent and avoids overwriting another plugin's state with an empty value where "last wins" applies.
+- **Validate input shapes if you write a transforming hook.** `Song`, `PluginUiState`, etc. have fixed fields: a typo in a field name while building a new `Song` table in `on_song_start` results in the returned value being **silently** dropped (see [Diagnostics](#diagnostics-and-error-handling)).
+- **Budget your execution time.** 250 ms per call sounds generous, but hooks polled every frame (`on_ui_update`, `on_ui_sections`, `on_tabs`, `on_ui_panels`) are called many times per second whenever state changes: avoid I/O, `os.execute`, or large table allocations inside them.
+- **Keep `content` out of `PluginCustomSection`.** That field is currently unused by the renderer: actual section content must come from `on_ui_sections`.
+- **`Ctrl`/`Alt` aren't distinguishable in `on_key`.** If you need to react to modifier combinations, use `rs-pug`'s built-in key remapping in `config.toml` instead of trying to detect them in Lua.
+- **Test outside `rs-pug` first.** Since runtime errors in many hooks are swallowed silently, you'll find typos and logic bugs faster by running the code fragment in a standalone `lua5.4` interpreter first.
