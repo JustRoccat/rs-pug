@@ -10,12 +10,7 @@ pub(super) fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim
             "Press / to search  ·  Tab to move focus".to_owned(),
         )
     };
-    let state_icon = match app.player_state {
-        PlayerState::Playing => "▶",
-        PlayerState::Paused => "⏸",
-        PlayerState::Searching => "⌛",
-        PlayerState::Idle => "⏹",
-    };
+    let state_icon = crate::icons::state(app.player_state, app.opt_icons);
     let repeat_badge = match app.repeat_mode {
         RepeatMode::Off => String::new(),
         RepeatMode::One => "  ↺¹ ONE".to_owned(),

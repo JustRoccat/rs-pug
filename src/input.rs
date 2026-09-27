@@ -21,6 +21,9 @@ pub enum KeyPluginAction {
     Dispatch { labels: Vec<String> },
 }
 pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
+    if app.minimal {
+        return;
+    }
     match mouse.kind {
         MouseEventKind::ScrollDown => {
             let local_nav_len = get_local_nav_len(app);
@@ -296,6 +299,15 @@ pub fn handle_native_key_event(
         app.key_sequence.clear();
         app.key_sequence_started = None;
     };
+    // Shift+Z toggle
+    let minimal_configured = app.key_minimal_toggle.clone();
+    let is_minimal_toggle =
+        seq.eq_ignore_ascii_case(&minimal_configured) || (seq == "Z" && minimal_configured.eq_ignore_ascii_case("S-Z"));
+    if is_minimal_toggle {
+        clear_sequence(app);
+        app.toggle_minimal();
+        return true;
+    }
     if seq == app.key_next {
         clear_sequence(app);
         if app.queue.len() > 1 {
@@ -357,6 +369,11 @@ pub fn handle_native_key_event(
         return true;
     }
     let is_prefix = |s: &str, p: &str| s.starts_with(p) && s.len() > p.len();
+    let is_minimal_prefix = {
+        let s = minimal_configured.to_ascii_lowercase();
+        let p = seq.to_ascii_lowercase();
+        s.starts_with(&p) && s.len() > p.len()
+    };
     if is_prefix(&app.key_next, &seq)
         || is_prefix(&app.key_prev, &seq)
         || is_prefix(&app.key_mute, &seq)
@@ -365,11 +382,48 @@ pub fn handle_native_key_event(
         || is_prefix(&app.key_seek_back, &seq)
         || is_prefix(&app.key_seek_forward, &seq)
         || is_prefix(&app.key_fft_toggle, &seq)
+        || is_minimal_prefix
     {
         return true;
     }
     app.key_sequence.clear();
     app.key_sequence_started = None;
+    // Minimal keys
+    if app.minimal {
+        match key.code {
+            KeyCode::Esc => {
+                app.toggle_minimal();
+            }
+            KeyCode::Char(' ') => {
+                let _ = cmd_tx.send(CoreCmd::TogglePause);
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                return false;
+            }
+            KeyCode::Char(':') => {
+                app.palette_open = true;
+                app.palette_query.clear();
+                app.palette_selected = 0;
+            }
+            KeyCode::Char('?') => {
+                app.help_open = true;
+            }
+            KeyCode::Char('9') => {
+                let _ = cmd_tx.send(CoreCmd::VolumeDown);
+            }
+            KeyCode::Char('0') => {
+                let _ = cmd_tx.send(CoreCmd::VolumeUp);
+            }
+            KeyCode::Left => {
+                let _ = cmd_tx.send(CoreCmd::SeekBy(-10));
+            }
+            KeyCode::Right => {
+                let _ = cmd_tx.send(CoreCmd::SeekBy(10));
+            }
+            _ => {}
+        }
+        return true;
+    }
     match key.code {
         KeyCode::Char(c @ '1'..='8') => {
             activate_numbered_tab(app, c);
@@ -644,6 +698,10 @@ pub fn handle_native_key_event(
                     eq::cycle_eq_preset(app, cmd_tx, 1);
                 } else if app.options_index == ui_helpers::SPEED_OPTIONS_INDEX {
                     extras::reset_speed(app, cmd_tx);
+                } else if app.options_index == ui_helpers::IMAGE_BG_OPTIONS_INDEX {
+                    toggle_image_background(app);
+                } else if app.options_index == ui_helpers::ICONS_OPTIONS_INDEX {
+                    toggle_icons(app);
                 }
                 return true;
             }
@@ -831,6 +889,8 @@ pub fn handle_native_key_event(
                 app.key_mute = ui_helpers::cycle_keybind_char(&app.key_mute, -1);
             }
             ui_helpers::SPEED_OPTIONS_INDEX => extras::nudge_speed(app, cmd_tx, -1),
+            ui_helpers::IMAGE_BG_OPTIONS_INDEX => toggle_image_background(app),
+            ui_helpers::ICONS_OPTIONS_INDEX => toggle_icons(app),
             _ => {}
         },
         KeyCode::Char('l') | KeyCode::Right if is_core_options(app) => match app.options_index {
@@ -856,6 +916,8 @@ pub fn handle_native_key_event(
                 app.key_mute = ui_helpers::cycle_keybind_char(&app.key_mute, 1);
             }
             ui_helpers::SPEED_OPTIONS_INDEX => extras::nudge_speed(app, cmd_tx, 1),
+            ui_helpers::IMAGE_BG_OPTIONS_INDEX => toggle_image_background(app),
+            ui_helpers::ICONS_OPTIONS_INDEX => toggle_icons(app),
             _ => {}
         },
         KeyCode::Char('p') if is_core_options(app) => {
@@ -976,13 +1038,20 @@ fn tab_defs_for_input(app: &App) -> Vec<(String, String)> {
     let mut defs: Vec<(String, String)> = app
         .main_tabs
         .iter()
-        .map(|tab| (tab.icon.clone(), tab.title.clone()))
+        .map(|tab| {
+            (
+                crate::icons::tab(&tab.icon, app.opt_icons),
+                tab.title.clone(),
+            )
+        })
         .collect();
     defs.extend(app.plugin_ui.tabs.iter().map(|tab| {
-        (
-            tab.icon.clone().unwrap_or_else(|| "◌".to_owned()),
-            tab.title.to_uppercase(),
-        )
+        let icon = match &tab.icon {
+            Some(icon) => crate::icons::tab(icon, app.opt_icons),
+            None if app.opt_icons => "◌".to_owned(),
+            None => String::new(),
+        };
+        (icon, tab.title.to_uppercase())
     }));
     defs
 }
@@ -1008,6 +1077,30 @@ fn get_local_nav_len(app: &App) -> usize {
     } else {
         0
     }
+}
+fn toggle_image_background(app: &mut App) {
+    app.opt_image_background = !app.opt_image_background;
+    app.set_flash(
+        format!(
+            "Image background: {}",
+            if app.opt_image_background { "ON" } else { "OFF" }
+        ),
+        2,
+    );
+}
+fn toggle_icons(app: &mut App) {
+    app.opt_icons = !app.opt_icons;
+    app.set_flash(
+        format!(
+            "Icons: {}",
+            if app.opt_icons {
+                "ON (nerdfonts)"
+            } else {
+                "OFF (plain text)"
+            }
+        ),
+        2,
+    );
 }
 fn toggle_search_source(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) {
     app.opt_source = match app.opt_source {

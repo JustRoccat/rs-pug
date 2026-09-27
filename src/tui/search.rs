@@ -6,18 +6,29 @@ pub(super) fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rec
     } else {
         app.search.query.as_str()
     };
-    let (border_color, title_str) = if app.search_mode {
+    let on = app.opt_icons;
+    let (border_color, title_str): (_, String) = if app.search_mode {
         (
             pal.get_color("info"),
-            " ⌨  SEARCHING — type and press Enter ",
+            if on {
+                format!(" {}  SEARCHING — type and press Enter ", crate::icons::nf::KEYBOARD)
+            } else {
+                " SEARCHING — type and press Enter ".to_owned()
+            },
         )
     } else {
         (
             pal.get_color("dim"),
             if app.active_tab == Tab::Local {
-                " ⌕  SEARCH LOCAL — press / to start "
+                if on {
+                    format!(" {}  SEARCH LOCAL — press / to start ", crate::icons::nf::SEARCH)
+                } else {
+                    " SEARCH LOCAL — press / to start ".to_owned()
+                }
+            } else if on {
+                format!(" {}  SEARCH — press / to start ", crate::icons::nf::SEARCH)
             } else {
-                " ⌕  SEARCH — press / to start "
+                " SEARCH — press / to start ".to_owned()
             },
         )
     };

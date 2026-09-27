@@ -67,7 +67,7 @@ Each `PluginTab` has:
 
 - `id` (unique identifier)
 - `title` (tab label)
-- `icon` (optional icon)
+- `icon` (optional icon: plain text or a Nerd Fonts glyph; hidden entirely when the user turns Icons off in Options)
 
 ## PluginUiState (`state`)
 
@@ -331,7 +331,7 @@ end
 return {
   on_tabs = function(state)
     return {
-      { id = tab_id, title = "Radio", icon = "📻" }
+      { id = tab_id, title = "Radio", icon = "R" }
     }
   end,
 
@@ -474,7 +474,7 @@ end
 return {
   on_tabs = function(state)
     return {
-      { id = tab_id, title = "Plugins", icon = "🔌" },
+      { id = tab_id, title = "Plugins", icon = "P" },
     }
   end,
 
@@ -567,7 +567,7 @@ Lua plugin loading and enabled UI hooks are isolated per plugin. A failing plugi
 - malformed return tables,
 - invalid tab ids, duplicate custom tab ids, invalid section ids/positions, unknown `layout.hide` entries, and clamped layout dimensions.
 
-Warnings are bounded, deduplicated when repeated, and surfaced in the statusbar with a `⚠` marker. When `allow-lua-ui-changes = false`, the new UI hooks and new `ui.layout` dispatch fields are still ignored silently as a compatibility guarantee.
+Warnings are bounded, deduplicated when repeated, and surfaced in the statusbar with a warning marker. When `allow-lua-ui-changes = false`, the new UI hooks and new `ui.layout` dispatch fields are still ignored silently as a compatibility guarantee.
 
 ### `PluginUiState` additions
 

@@ -133,10 +133,8 @@ pub struct LocalSong {
     pub mtime: u64,
     #[serde(default)]
     pub added_at: u64,
-    /// How many times you ve actually played this track, which powers the "most played" smart playlist
     #[serde(default)]
     pub play_count: u32,
-    /// When you last played this track, which feeds the "not heard in a while" playlist
     #[serde(default)]
     pub last_played: Option<i64>,
 }
@@ -296,31 +294,31 @@ pub fn default_main_tabs() -> Vec<MainTab> {
         MainTab {
             id: "discover".to_owned(),
             title: "DISCOVER".to_owned(),
-            icon: "♫".to_owned(),
+            icon: crate::icons::nf::MUSIC.to_owned(),
             kind: MainTabKind::Stock(Tab::Discover),
         },
         MainTab {
             id: "albums".to_owned(),
             title: "ALBUMS".to_owned(),
-            icon: "◈".to_owned(),
+            icon: crate::icons::nf::GRID.to_owned(),
             kind: MainTabKind::Stock(Tab::Albums),
         },
         MainTab {
             id: "library".to_owned(),
             title: "LIBRARY".to_owned(),
-            icon: "◉".to_owned(),
+            icon: crate::icons::nf::LIST.to_owned(),
             kind: MainTabKind::Stock(Tab::Library),
         },
         MainTab {
             id: "local".to_owned(),
             title: "LOCAL".to_owned(),
-            icon: "🗀".to_owned(),
+            icon: crate::icons::nf::FOLDER.to_owned(),
             kind: MainTabKind::Stock(Tab::Local),
         },
         MainTab {
             id: "options".to_owned(),
             title: "OPTIONS".to_owned(),
-            icon: "⚙".to_owned(),
+            icon: crate::icons::nf::GEAR.to_owned(),
             kind: MainTabKind::Stock(Tab::Options),
         },
     ]
@@ -330,6 +328,19 @@ pub enum RepeatMode {
     Off,
     One,
     All,
+}
+// Newtype: no Debug
+pub struct CoverProtocol(pub ratatui_image::protocol::Protocol);
+impl std::fmt::Debug for CoverProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CoverProtocol(..)")
+    }
+}
+impl std::ops::Deref for CoverProtocol {
+    type Target = ratatui_image::protocol::Protocol;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 /// Just an autoupdating smart playlist that rebuilds itself on every startup with your top, new, and forgotten tracks lol
 pub const SMART_PLAYLIST_NAME: &str = "Smart Playlist";
@@ -381,6 +392,16 @@ impl RepeatMode {
 pub struct App {
     pub fft_state: Option<std::sync::Arc<std::sync::Mutex<crate::fft::FftState>>>,
     pub show_fft: bool,
+    pub minimal: bool,
+    pub cover_key: String,
+    pub cover_bytes: Option<Vec<u8>>,
+    pub cover_bitmap: Option<image::DynamicImage>,
+    pub cover_protocol: Option<CoverProtocol>,
+    pub cover_proto_key: (String, u16, u16),
+    pub cover_loading: bool,
+    pub cover_palette: Option<[[u8; 3]; 3]>,
+    pub opt_image_background: bool,
+    pub opt_icons: bool,
     pub player_state: PlayerState,
     pub focus: Focus,
     pub search_mode: bool,
@@ -423,6 +444,7 @@ pub struct App {
     pub key_seek_back: String,
     pub key_seek_forward: String,
     pub key_fft_toggle: String,
+    pub key_minimal_toggle: String,
     pub key_sequence: String,
     pub key_sequence_started: Option<Instant>,
     pub anim_tick: u64,
@@ -442,6 +464,16 @@ impl App {
         Self {
             fft_state: None,
             show_fft: false,
+            minimal: false,
+            cover_key: String::new(),
+            cover_bytes: None,
+            cover_bitmap: None,
+            cover_protocol: None,
+            cover_proto_key: (String::new(), 0, 0),
+            cover_loading: false,
+            cover_palette: None,
+            opt_image_background: true,
+            opt_icons: true,
             player_state: PlayerState::Idle,
             focus: Focus::Results,
             search_mode: false,
@@ -484,6 +516,7 @@ impl App {
             key_seek_back: "[".to_string(),
             key_seek_forward: "]".to_string(),
             key_fft_toggle: "C-v".to_string(),
+            key_minimal_toggle: "S-Z".to_string(),
             key_sequence: String::new(),
             key_sequence_started: None,
             anim_tick: 0,
@@ -502,6 +535,27 @@ impl App {
     pub fn set_flash(&mut self, msg: impl Into<String>, seconds: u64) {
         self.flash_message = msg.into();
         self.flash_until = Instant::now() + Duration::from_secs(seconds);
+    }
+    pub fn toggle_minimal(&mut self) {
+        self.minimal = !self.minimal;
+        if self.minimal {
+            self.search_mode = false;
+            self.palette_open = false;
+            self.palette_query.clear();
+            self.palette_selected = 0;
+            self.help_open = false;
+            self.playlists.context_open = false;
+            self.playlists.confirm_delete = false;
+            self.local.tag_editor_open = false;
+            self.opt_editing = false;
+            self.key_sequence.clear();
+            self.key_sequence_started = None;
+            self.set_flash("minimal on (Shift+Z exits)", 3);
+        } else {
+            self.key_sequence.clear();
+            self.key_sequence_started = None;
+            self.set_flash("minimal off", 2);
+        }
     }
     pub fn push_plugin_warning(&mut self, warning: String) {
         if self.plugin_ui.warnings.back() == Some(&warning) {
@@ -576,6 +630,8 @@ impl App {
         self.opt_plugins_dir = cfg.general.plugins_dir.clone();
         self.opt_music_dirs = cfg.general.music_directories.clone();
         self.opt_smart_playlists_enabled = cfg.general.smart_playlists_enabled;
+        self.opt_image_background = cfg.general.image_background;
+        self.opt_icons = cfg.general.icons;
         self.theme = cfg.general.theme.clone();
         self.plugin_ui.allow_lua_ui_changes = cfg.lua.allow_lua_ui_changes;
         self.apply_keybinds(&cfg.keybinds);
@@ -590,6 +646,8 @@ impl App {
                 plugins_dir: self.opt_plugins_dir.clone(),
                 music_directories: self.opt_music_dirs.clone(),
                 smart_playlists_enabled: self.opt_smart_playlists_enabled,
+                image_background: self.opt_image_background,
+                icons: self.opt_icons,
                 fft_visualizer_default: self.show_fft,
             },
             search: SearchConfig {
@@ -608,6 +666,7 @@ impl App {
                 seek_back: self.key_seek_back.clone(),
                 seek_forward: self.key_seek_forward.clone(),
                 fft_toggle: self.key_fft_toggle.clone(),
+                minimal_toggle: self.key_minimal_toggle.clone(),
             },
             lua: LuaConfig {
                 allow_lua_ui_changes: self.plugin_ui.allow_lua_ui_changes,
@@ -652,6 +711,7 @@ impl App {
         self.key_seek_back = keybinds.seek_back.clone();
         self.key_seek_forward = keybinds.seek_forward.clone();
         self.key_fft_toggle = keybinds.fft_toggle.clone();
+        self.key_minimal_toggle = keybinds.minimal_toggle.clone();
     }
 }
 fn format_duration(seconds: f64) -> String {

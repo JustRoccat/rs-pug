@@ -18,9 +18,21 @@ pub(super) fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: C
     let block = Block::default()
         .title(Span::styled(
             if app.eq.enabled {
-                " ▶ EQUALIZER  (ON) "
+                format!(
+                    " {} EQUALIZER  (ON) ",
+                    crate::icons::state(
+                        crate::model::PlayerState::Playing,
+                        app.opt_icons
+                    )
+                )
             } else {
-                " ⏹ EQUALIZER  (OFF) "
+                format!(
+                    " {} EQUALIZER  (OFF) ",
+                    crate::icons::state(
+                        crate::model::PlayerState::Idle,
+                        app.opt_icons
+                    )
+                )
             },
             Style::default()
                 .fg(title_color)

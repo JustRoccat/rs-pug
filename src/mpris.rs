@@ -69,9 +69,6 @@ impl Default for MprisSharedState {
 
 type SharedState = Arc<Mutex<MprisSharedState>>;
 
-/// Stuff coming from media keys, playerctl, or widgets to control the app
-/// We just drain it right in the main loop, same as hotreoad and plugins.
-#[derive(Debug)]
 pub enum MprisAction {
     Next,
     Previous,
@@ -331,7 +328,7 @@ pub struct MprisServer {
 }
 
 impl MprisServer {
-    /// Tries to hook up MPRIS2 Never fails outright, errors just log a warning and return a dummy server as if it were disabled
+    // Connect MPRIS2
     pub async fn start(enabled: bool) -> (Self, mpsc::UnboundedReceiver<MprisAction>) {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let state: SharedState = Arc::new(Mutex::new(MprisSharedState::default()));
@@ -389,7 +386,6 @@ impl MprisServer {
         conn.object_server().at(path, RootIface).await?;
         let base_name = "org.mpris.MediaPlayer2.rs_pug";
         if conn.request_name(base_name).await.is_err() {
-            // Another instance is running, so MPRIS gives this one a unique suffix to avoid clashing with the main player name
             let fallback = format!("{base_name}.instance{}", std::process::id());
             conn.request_name(fallback.as_str()).await?;
         }

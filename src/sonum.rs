@@ -3,7 +3,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, time::Duration};
 
-/// pulls in the Sonum client config from sonumclient.toml
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SonumConfig {
     #[serde(default = "default_host")]
@@ -80,7 +79,6 @@ pub fn ensure_sonum_config() {
     let _ = fs::write(&path, default_conf_contents());
 }
 
-/// reads sonumclient.toml defaults to localhost:8420 (no token) if missing or bad
 pub fn load_sonum_config() -> SonumConfig {
     let path = sonum_config_path();
     match fs::read_to_string(&path) {

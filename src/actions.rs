@@ -18,6 +18,9 @@ pub enum Action {
     SpeedDown,
     SpeedReset,
     ToggleEq,
+    ToggleMinimal,
+    ToggleImageBackground,
+    ToggleIcons,
     GoToTab(Tab),
     Quit,
 }
@@ -44,6 +47,9 @@ pub fn all_commands() -> Vec<PaletteCommand> {
         PaletteCommand { name: "speed down", hint: "-0.05x playback speed", action: Action::SpeedDown },
         PaletteCommand { name: "speed reset", hint: "back to 1.00x", action: Action::SpeedReset },
         PaletteCommand { name: "equalizer", hint: "toggle on/off", action: Action::ToggleEq },
+        PaletteCommand { name: "minimal", hint: "toggle minimal view (Shift+Z)", action: Action::ToggleMinimal },
+        PaletteCommand { name: "image background", hint: "toggle minimal cover tint", action: Action::ToggleImageBackground },
+        PaletteCommand { name: "icons", hint: "toggle nerdfonts icons", action: Action::ToggleIcons },
         PaletteCommand { name: "go to discover", hint: "switch tab", action: Action::GoToTab(Tab::Discover) },
         PaletteCommand { name: "go to albums", hint: "switch tab", action: Action::GoToTab(Tab::Albums) },
         PaletteCommand { name: "go to library", hint: "playlists", action: Action::GoToTab(Tab::Library) },
@@ -129,6 +135,33 @@ pub fn dispatch(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, action: 
                 crate::eq::send_eq_update(cmd_tx, [0.0f32; 10]);
                 app.set_flash("Equalizer OFF", 2);
             }
+        }
+        Action::ToggleMinimal => {
+            app.toggle_minimal();
+        }
+        Action::ToggleImageBackground => {
+            app.opt_image_background = !app.opt_image_background;
+            app.set_flash(
+                format!(
+                    "Image background: {}",
+                    if app.opt_image_background { "ON" } else { "OFF" }
+                ),
+                2,
+            );
+        }
+        Action::ToggleIcons => {
+            app.opt_icons = !app.opt_icons;
+            app.set_flash(
+                format!(
+                    "Icons: {}",
+                    if app.opt_icons {
+                        "ON (nerdfonts)"
+                    } else {
+                        "OFF (plain text)"
+                    }
+                ),
+                2,
+            );
         }
         Action::GoToTab(tab) => {
             app.active_tab = tab;

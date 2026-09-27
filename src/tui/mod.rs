@@ -18,14 +18,21 @@ mod plugins_panel;
 mod queue;
 mod search;
 mod tabs;
-use help::{draw_custom_sections, draw_help};
+mod minimal;
+use help::{draw_custom_sections, draw_help, has_status_content};
 use library::draw_content;
 use overlays::draw_overlays;
 use playback::{draw_now_playing, draw_progress};
 use search::draw_search;
 use tabs::{draw_tabs, draw_tabs_vertical};
+use minimal::draw_minimal;
 fn palette(theme: &Theme) -> Palette {
     crate::config::load_palette(theme)
+}
+
+// Cover area
+pub fn minimal_cover_area(term_w: u16, term_h: u16) -> Rect {
+    minimal::minimal_layout(Rect::new(0, 0, term_w, term_h)).cover
 }
 fn search_source_label(source: &crate::config::SearchSource) -> String {
     match source {
@@ -90,6 +97,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let anim = pal.get_color("primary");
     let anim2 = pal.get_color("accent2");
     let size = frame.area();
+    if app.minimal {
+        draw_minimal(frame, app, &pal, anim, size);
+        draw_overlays(frame, app, &pal, anim, size);
+        return;
+    }
     let tab_position = app.ui_layout.tab_bar_position.as_str();
     let tabs_width = app
         .ui_layout
@@ -139,7 +151,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.ui_layout.show_progress_bar {
         constraints.push(Constraint::Length(3));
     }
-    if app.ui_layout.show_statusbar || app.ui_layout.show_keybind_hints {
+    if has_status_content(app) {
         constraints.push(Constraint::Length(3));
     }
     let vertical = Layout::vertical(constraints).split(main_area);
@@ -166,7 +178,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_progress(frame, app, &pal, anim, vertical[row]);
         row += 1;
     }
-    if app.ui_layout.show_statusbar || app.ui_layout.show_keybind_hints {
+    if has_status_content(app) {
         draw_help(frame, app, &pal, vertical[row]);
     }
     draw_overlays(frame, app, &pal, anim, size);
@@ -194,13 +206,20 @@ fn tab_defs_and_active(app: &App) -> (Vec<(String, String)>, usize) {
     let mut defs: Vec<(String, String)> = app
         .main_tabs
         .iter()
-        .map(|tab| (tab.icon.clone(), tab.title.clone()))
+        .map(|tab| {
+            (
+                crate::icons::tab(&tab.icon, app.opt_icons),
+                tab.title.clone(),
+            )
+        })
         .collect();
     for t in &app.plugin_ui.tabs {
-        defs.push((
-            t.icon.clone().unwrap_or_else(|| "◌".to_string()),
-            t.title.to_uppercase(),
-        ));
+        let icon = match &t.icon {
+            Some(icon) => crate::icons::tab(icon, app.opt_icons),
+            None if app.opt_icons => "◌".to_string(),
+            None => String::new(),
+        };
+        defs.push((icon, t.title.to_uppercase()));
     }
     let active = if let Some(active_id) = &app.plugin_ui.active_tab {
         app.plugin_ui
@@ -302,18 +321,6 @@ fn dim_item(text: &'static str, pal: &Palette) -> ListItem<'static> {
         text,
         Style::default().fg(pal.get_color("muted")),
     ))
-}
-fn tab_key_hint(app: &App) -> String {
-    let count = (app.main_tabs.len() + app.plugin_ui.tabs.len()).clamp(1, 8);
-    format!("1-{count}")
-}
-fn key_span(text: impl Into<String>, pal: &Palette) -> Span<'static> {
-    Span::styled(
-        text.into(),
-        Style::default()
-            .fg(pal.get_color("warn"))
-            .add_modifier(Modifier::BOLD),
-    )
 }
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup = Layout::vertical([

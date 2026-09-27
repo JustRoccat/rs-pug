@@ -1,8 +1,6 @@
 use rusqlite::{Connection, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-/// Shared column list/order for every query that yields `LocalSong` rows,
-/// so `map_local_song_row` below stays valid for all of them.
 const LOCAL_SONG_SELECT: &str = "SELECT path, title, artist, album, COALESCE(genre, 'Unknown'), year, duration, mtime, COALESCE(added_at, mtime), play_count, last_played FROM local_songs";
 fn map_local_song_row(row: &rusqlite::Row<'_>) -> Result<crate::model::LocalSong> {
     Ok(crate::model::LocalSong {
@@ -256,9 +254,6 @@ impl DbStorage {
             stmt.query_map([limit as i64, offset as i64], map_local_song_row)?;
         rows.collect()
     }
-    /// Local tracks ordered by how often they've been played, for the
-    /// "most played" bucket of the Smart Playlist. Never-played tracks
-    /// (`play_count = 0`) are excluded.
     pub fn top_played_local_songs(&self, limit: usize) -> Result<Vec<crate::model::LocalSong>> {
         let sql = format!(
             "{LOCAL_SONG_SELECT} WHERE play_count > 0 ORDER BY play_count DESC, last_played DESC LIMIT ?"
@@ -267,8 +262,6 @@ impl DbStorage {
         let rows = stmt.query_map([limit as i64], map_local_song_row)?;
         rows.collect()
     }
-    /// Local tracks ordered by when they were added to the library, for
-    /// the "recently added" bucket of the Smart Playlist.
     pub fn recently_added_local_songs(
         &self,
         limit: usize,
@@ -278,9 +271,6 @@ impl DbStorage {
         let rows = stmt.query_map([limit as i64], map_local_song_row)?;
         rows.collect()
     }
-    /// Local tracks that either have never been played, or haven't been
-    /// played since before `stale_before` (a unix timestamp) - the
-    /// "haven't heard in a while" bucket of the Smart Playlist.
     pub fn stale_local_songs(
         &self,
         stale_before: i64,
@@ -294,9 +284,6 @@ impl DbStorage {
         let rows = stmt.query_map((stale_before, limit as i64), map_local_song_row)?;
         rows.collect()
     }
-    /// Records a play of a local track: bumps `play_count` and stamps
-    /// `last_played` with the current time. Called whenever playback of a
-    /// local file starts.
     pub fn record_local_play(&self, path: &str) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -332,10 +319,7 @@ impl DbStorage {
         songs: &[crate::model::LocalSong],
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
-        // The rescan below fully replaces the table contents, so first
-        // snapshot play_count/last_played to carry them over - otherwise a
-        // routine library rescan would silently wipe listening history and
-        // break the Smart Playlist.
+        // Keep play counts
         let preserved: HashMap<String, (u32, Option<i64>)> = {
             let mut stmt = tx.prepare("SELECT path, play_count, last_played FROM local_songs")?;
             let rows = stmt.query_map([], |row| {
@@ -374,9 +358,6 @@ impl DbStorage {
         tx.commit()?;
         Ok(())
     }
-    /// Replaces the contents of a single named playlist without touching
-    /// any others. Used to keep the auto-generated Smart Playlist fresh on
-    /// every startup while leaving user-created playlists alone.
     pub fn upsert_playlist(&mut self, playlist: &crate::model::Playlist) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute(

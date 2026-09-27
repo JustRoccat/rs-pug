@@ -168,8 +168,14 @@ pub(super) fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: C
     if app.local.scanning {
         let area = centered_rect(40, 14, size);
         frame.render_widget(Clear, area);
+        let gear = crate::icons::gear(app.opt_icons);
+        let label = if gear.is_empty() {
+            "Scanning library... ".to_owned()
+        } else {
+            format!(" {gear}  Scanning library... ")
+        };
         frame.render_widget(
-            Paragraph::new(" ⚙  Scanning library... ")
+            Paragraph::new(label)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)

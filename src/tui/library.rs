@@ -111,6 +111,20 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                     app.playback_speed
                 ),
             ),
+            (
+                "⊞",
+                format!(
+                    "Image background  {}  (Minimal tint · h/l toggle)",
+                    if app.opt_image_background { "ON" } else { "OFF" }
+                ),
+            ),
+            (
+                "⊞",
+                format!(
+                    "Icons  {}  (nerdfonts · h/l toggle)",
+                    if app.opt_icons { "ON" } else { "OFF" }
+                ),
+            ),
         ];
         rows.into_iter()
             .enumerate()
@@ -179,16 +193,19 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 }];
                 if open {
                     items.extend(p.songs.iter().map(|song| {
-                        ListItem::new(Line::from(vec![
-                            Span::styled(
-                                "      ♪  ".to_string(),
-                                Style::default().fg(pal.get_color("accent2")),
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            format!(
+                                "      {}  ",
+                                crate::icons::song_bullet(app.opt_icons)
                             ),
-                            Span::styled(
-                                song.title.as_str(),
-                                Style::default().fg(pal.get_color("text")),
-                            ),
-                        ]))
+                            Style::default().fg(pal.get_color("accent2")),
+                        ),
+                        Span::styled(
+                            song.title.as_str(),
+                            Style::default().fg(pal.get_color("text")),
+                        ),
+                    ]))
                     }));
                 }
                 items
@@ -248,7 +265,10 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                                 Span::styled("▶ ", Style::default().fg(anim))
                             } else {
                                 Span::styled(
-                                    "      ♪  ".to_string(),
+                                    format!(
+                                        "      {}  ",
+                                        crate::icons::song_bullet(app.opt_icons)
+                                    ),
                                     Style::default().fg(pal.get_color("accent2")),
                                 )
                             },
@@ -314,29 +334,51 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         app.main_tabs
             .iter()
             .find(|tab| &tab.id == id)
-            .map(|tab| format!(" ✦  {} {} ", tab.icon, tab.title))
+            .map(|tab| {
+                let icon = crate::icons::tab(&tab.icon, app.opt_icons);
+                if icon.is_empty() {
+                    format!(" {} ", tab.title)
+                } else {
+                    format!(" ✦  {icon} {} ", tab.title)
+                }
+            })
     });
     let title = if let Some(title) = custom_title {
         title
     } else {
+        let on = app.opt_icons;
         match app.active_tab {
-            Tab::Discover => " ♫  RESULTS ".to_owned(),
-            Tab::Albums => " ◈  ALBUM RESULTS ".to_owned(),
-            Tab::Library => " ◉  PLAYLISTS ".to_owned(),
+            Tab::Discover => crate::icons::section("RESULTS", crate::icons::nf::MUSIC, on),
+            Tab::Albums => crate::icons::section("ALBUM RESULTS", crate::icons::nf::GRID, on),
+            Tab::Library => crate::icons::section("PLAYLISTS", crate::icons::nf::LIST, on),
             Tab::Options => {
                 if let Some(active_id) = &app.plugin_ui.active_tab {
                     if let Some(tab) = app.plugin_ui.tabs.iter().find(|t| &t.id == active_id) {
                         let icon = tab.icon.as_deref().unwrap_or("◌");
-                        format!(" ⚙  SETTINGS — {} {} ", icon, tab.title.to_uppercase())
+                        let icon = crate::icons::tab(icon, on);
+                        let icon = if icon.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{icon} ")
+                        };
+                        format!(" SETTINGS — {icon}{} ", tab.title.to_uppercase())
                     } else {
-                        " ⚙  SETTINGS ".to_owned()
+                        crate::icons::section("SETTINGS", crate::icons::nf::GEAR, on)
                     }
                 } else {
-                    " ⚙  SETTINGS ".to_owned()
+                    crate::icons::section("SETTINGS", crate::icons::nf::GEAR, on)
                 }
             }
             Tab::Local => {
-                let mut t = format!(" 🗀  LOCAL LIBRARY — sort: {} ", app.local.sort_mode.label());
+                let mut t = format!(
+                    "{} LOCAL LIBRARY — sort: {} ",
+                    if on {
+                        format!(" {} ", crate::icons::nf::FOLDER)
+                    } else {
+                        String::new()
+                    },
+                    app.local.sort_mode.label()
+                );
                 let filters: Vec<String> = [
                     app.local
                         .filter_genre
@@ -358,18 +400,23 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                     t.push_str(&format!(" — filters: {}", filters.join(", ")));
                 }
                 if app.local.view_mode == crate::model::LocalViewMode::Organized {
+                    let folder = if on {
+                        format!(" {}  ", crate::icons::nf::FOLDER)
+                    } else {
+                        " ".to_string()
+                    };
                     match app.local.nav_level {
                         crate::model::LocalNavLevel::Artists => t.push_str(" ❯ Artists"),
                         crate::model::LocalNavLevel::Albums => {
                             if let Some(artist) = &app.local.nav_artist {
-                                t = format!(" 🗀  LOCAL LIBRARY ❯ {} ❯ Albums", artist);
+                                t = format!("{folder}LOCAL LIBRARY ❯ {} ❯ Albums", artist);
                             }
                         }
                         crate::model::LocalNavLevel::Songs => {
                             if let Some(artist) = &app.local.nav_artist {
                                 if let Some(album) = &app.local.nav_album {
                                     t = format!(
-                                        " 🗀  LOCAL LIBRARY ❯ {} ❯ {} ❯ Songs",
+                                        "{folder}LOCAL LIBRARY ❯ {} ❯ {} ❯ Songs",
                                         artist, album
                                     );
                                 }

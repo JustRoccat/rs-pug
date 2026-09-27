@@ -1,110 +1,38 @@
 use super::*;
 
+// Status row
+pub(super) fn has_status_content(app: &App) -> bool {
+    app.ui_layout.show_statusbar
+        && (!app.plugin_ui.warnings.is_empty()
+            || !app.plugin_ui.inject.statusbar_extra.is_empty())
+}
+
 pub(super) fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {
-    macro_rules! key {
-        ($text:expr) => {
-            key_span($text, pal)
-        };
-    }
-    let sep = || -> Span<'static> { Span::styled(":", Style::default().fg(pal.get_color("dim"))) };
-    let act = |a: &'static str| -> Span<'static> {
-        Span::styled(a, Style::default().fg(pal.get_color("muted")))
-    };
     let gap = || -> Span<'static> { Span::raw("  ") };
-    let mut spans = if app.ui_layout.show_keybind_hints {
-        vec![
-            key!(tab_key_hint(app)),
-            sep(),
-            act("tabs"),
-            gap(),
-            key!("/"),
-            sep(),
-            act("search"),
-            gap(),
-            key!("Tab"),
-            sep(),
-            act("focus"),
-            gap(),
-            key!("Enter"),
-            sep(),
-            act("play"),
-            gap(),
-            key!("Space"),
-            sep(),
-            act("pause"),
-            gap(),
-            key!("n"),
-            sep(),
-            act("next"),
-            gap(),
-            key!("d"),
-            sep(),
-            act("remove"),
-            gap(),
-            key!("9/0"),
-            sep(),
-            act("vol"),
-            gap(),
-            key!("c"),
-            sep(),
-            act("menu"),
-            gap(),
-            key!("a/x"),
-            sep(),
-            act("playlists"),
-            gap(),
-            key!("q"),
-            sep(),
-            act("quit"),
-        ]
-    } else {
-        Vec::new()
-    };
-    if app.ui_layout.show_keybind_hints {
-        spans.push(gap());
-        spans.push(key!(":"));
-        spans.push(sep());
-        spans.push(act("palette"));
+    let mut spans = Vec::new();
+    if let Some(warning) = app.plugin_ui.warnings.back() {
+        spans.push(Span::styled(
+            crate::icons::warn(app.opt_icons),
+            Style::default()
+                .fg(pal.get_color("warn"))
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            warning.as_str(),
+            Style::default().fg(pal.get_color("warn")),
+        ));
     }
-    if app.ui_layout.show_keybind_hints
-        && app.focus == Focus::Results
-        && (app.active_tab == Tab::Discover
-            || (app.active_tab == Tab::Local
-                && app.local.view_mode == crate::model::LocalViewMode::Flat))
-    {
-        spans.push(gap());
-        spans.push(key!("b"));
-        spans.push(sep());
-        spans.push(act(if app.multi_select.is_empty() {
-            "mark"
-        } else {
-            "mark  (Enter: add all)"
-        }));
-    }
-    if app.ui_layout.show_statusbar {
-        if let Some(warning) = app.plugin_ui.warnings.back() {
+    for item in &app.plugin_ui.inject.statusbar_extra {
+        if !spans.is_empty() {
             spans.push(gap());
-            spans.push(Span::styled(
-                "⚠",
-                Style::default()
-                    .fg(pal.get_color("warn"))
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                warning.as_str(),
-                Style::default().fg(pal.get_color("warn")),
-            ));
         }
-        for item in &app.plugin_ui.inject.statusbar_extra {
-            spans.push(gap());
-            spans.extend(panel_item_line(item, pal).spans);
-        }
+        spans.extend(panel_item_line(item, pal).spans);
     }
     let widget = Paragraph::new(Line::from(spans)).block(
         Block::default()
             .title(Span::styled(
-                " KEYBINDS ",
+                " STATUS ",
                 Style::default().fg(pal.get_color("dim")),
             ))
             .borders(Borders::ALL)

@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque, fs, path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use anyhow::Result;
 use clap::Parser;
@@ -11,6 +11,8 @@ mod actions;
 mod cli;
 mod config;
 mod core;
+mod cover;
+mod icons;
 mod db;
 mod eq;
 mod extras;
@@ -231,6 +233,8 @@ async fn main() -> Result<()> {
     let tick_rate = Duration::from_millis(33);
     let (hr_result_tx, mut hr_result_rx) = mpsc::unbounded_channel::<HotReloadResult>();
     let (hr_paths_tx, hr_paths_rx) = mpsc::unbounded_channel::<HotReloadPaths>();
+    let (cover_tx, mut cover_rx) = mpsc::unbounded_channel::<cover::CoverResult>();
+    let (proto_tx, mut proto_rx) = mpsc::unbounded_channel::<ProtoResult>();
     spawn_hot_reload_task(config.clone(), hr_result_tx, hr_paths_rx);
     let mut startup_ui_config_scheduled = false;
     let mut startup_ui_config_done = !app.plugin_ui.allow_lua_ui_changes;
@@ -240,6 +244,8 @@ async fn main() -> Result<()> {
     let mut queued_plugin_keys = VecDeque::new();
     let mut last_ui_state: Option<PluginUiState> = None;
     let mut last_ui_surface_state: Option<PluginUiState> = None;
+    let mut last_cover_build = Instant::now() - Duration::from_secs(60);
+    let mut proto_inflight: Option<(String, u16, u16)> = None;
     loop {
         while let Ok(hr) = hr_result_rx.try_recv() {
             let mut should_reload_plugins = hr.plugins_changed;
@@ -460,6 +466,120 @@ async fn main() -> Result<()> {
             ui_surface_pending = true;
         }
         app.anim_tick = app.anim_tick.wrapping_add(1);
+        // Cover orchestration
+        let want_cover = app
+            .current_song
+            .as_ref()
+            .map(cover::song_key)
+            .unwrap_or_default();
+        if want_cover != app.cover_key {
+            app.cover_key = want_cover.clone();
+            app.cover_bytes = None;
+            app.cover_bitmap = None;
+            app.cover_palette = None;
+            app.cover_protocol = None;
+            app.cover_loading = !want_cover.is_empty();
+            proto_inflight = None;
+            if let Some(song) = app.current_song.clone() {
+                if !want_cover.is_empty() {
+                    let tx = cover_tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let bytes = cover::load_blocking(&song);
+                        let bitmap =
+                            bytes.as_ref().and_then(|b| cover::decode_cover(b));
+                        let palette = bitmap.as_ref().map(cover::palette3);
+                        let _ = tx.send(cover::CoverResult {
+                            key: want_cover,
+                            bytes,
+                            bitmap,
+                            palette,
+                        });
+                    });
+                }
+            }
+        }
+        while let Ok(cover) = cover_rx.try_recv() {
+            if cover.key == app.cover_key {
+                app.cover_bytes = cover.bytes;
+                app.cover_bitmap = cover.bitmap;
+                app.cover_palette = cover.palette;
+                app.cover_protocol = None;
+                app.cover_loading = false;
+            }
+        }
+        if app.minimal && app.cover_bitmap.is_some() {
+            let (term_w, term_h) =
+                crossterm::terminal::size().unwrap_or((0, 0));
+            // Async art build
+            let cover = tui::minimal_cover_area(term_w, term_h);
+            let size = ratatui::layout::Size::new(
+                cover.width.saturating_sub(2),
+                cover.height.saturating_sub(2),
+            );
+            let key = (app.cover_key.clone(), size.width, size.height);
+            let song_changed = app.cover_proto_key.0 != app.cover_key;
+            let throttled = !song_changed
+                && app.cover_protocol.is_some()
+                && last_cover_build.elapsed() < Duration::from_millis(200);
+            if size.width >= 10
+                && size.height >= 5
+                && !throttled
+                && proto_inflight != Some(key.clone())
+                && (app.cover_protocol.is_none() || app.cover_proto_key != key)
+            {
+                if let Some(bitmap) = app.cover_bitmap.clone() {
+                    let tx = proto_tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let picker =
+                            ratatui_image::picker::Picker::halfblocks();
+                        let font = picker.font_size();
+                        let filled = cover::upscale_to_fill(
+                            bitmap,
+                            size.width,
+                            size.height,
+                            font.width,
+                            font.height,
+                        );
+                        let protocol = picker
+                            .new_protocol(
+                                filled,
+                                size,
+                                ratatui_image::Resize::Fit(None),
+                            )
+                            .ok()
+                            .map(crate::model::CoverProtocol);
+                        let _ = tx.send(ProtoResult {
+                            key,
+                            protocol,
+                        });
+                    });
+                    proto_inflight = Some((
+                        app.cover_key.clone(),
+                        size.width,
+                        size.height,
+                    ));
+                    last_cover_build = Instant::now();
+                }
+            }
+        }
+        while let Ok(proto) = proto_rx.try_recv() {
+            if proto.key.0 == app.cover_key {
+                match proto.protocol {
+                    Some(p) => {
+                        app.cover_protocol = Some(p);
+                        app.cover_proto_key = proto.key.clone();
+                    }
+                    None => {
+                        app.cover_bitmap = None;
+                        app.cover_bytes = None;
+                        app.cover_palette = None;
+                    }
+                }
+            }
+            if proto_inflight.as_ref() == Some(&proto.key) {
+                proto_inflight = None;
+            }
+        }
         terminal.draw(|frame| tui::draw(frame, &app))?;
         while let Ok(event) = evt_rx.try_recv() {
             let plugin_event = events::plugin_event_from_core_event(&event);
@@ -684,6 +804,11 @@ struct HotReloadResult {
 struct HotReloadPaths {
     plugins_dir: String,
     music_dirs: Vec<String>,
+}
+// Protocol result
+struct ProtoResult {
+    key: (String, u16, u16),
+    protocol: Option<crate::model::CoverProtocol>,
 }
 struct HotReloadState {
     config_snapshot: PathsSnapshot,

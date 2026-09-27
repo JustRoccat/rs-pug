@@ -14,6 +14,18 @@ impl Storage {
     fn lock_db(&self) -> std::sync::MutexGuard<'_, DbStorage> {
         self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+    #[allow(dead_code)]
+    pub fn open_at(path: PathBuf) -> Result<Self, String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut db = DbStorage::open(path).map_err(|e| e.to_string())?;
+        Self::migrate_from_json(&mut db)?;
+        Self::migrate_last_scanned_dirs(&mut db);
+        Ok(Self {
+            db: Arc::new(Mutex::new(db)),
+        })
+    }
     pub fn init() -> Result<Self, String> {
         let dir = Self::config_dir().map_err(|e| e.to_string())?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -92,22 +104,12 @@ impl Storage {
     pub fn save_local_library(&self, songs: &[LocalSong]) -> Result<(), String> {
         self.lock_db().save_local_songs_bulk(songs).map_err(|e| e.to_string())
     }
-    /// Records a play of a local track (bumps play_count, stamps
-    /// last_played). No-op (silently ignored) for tracks not in the local
-    /// library, e.g. network/streamed songs.
     pub fn record_local_play(&self, path: &str) -> Result<(), String> {
         self.lock_db().record_local_play(path).map_err(|e| e.to_string())
     }
-    /// Replaces the contents of a single named playlist (e.g. the
-    /// auto-managed Smart Playlist) without touching any others.
     pub fn upsert_playlist(&self, playlist: &Playlist) -> Result<(), String> {
         self.lock_db().upsert_playlist(playlist).map_err(|e| e.to_string())
     }
-    /// Builds the single auto-managed Smart Playlist by combining three
-    /// SQLite-backed rules: most played, recently added, and not-heard-in-
-    /// a-while local tracks, deduplicated and capped at a reasonable size.
-    /// Returns `Ok` with an empty song list if the local library doesn't
-    /// have enough data yet (e.g. a brand new install).
     pub fn generate_smart_playlist(&self) -> Result<Playlist, String> {
         const MOST_PLAYED_LIMIT: usize = 20;
         const RECENTLY_ADDED_LIMIT: usize = 15;

@@ -101,7 +101,10 @@ pub(super) fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim
                             } else {
                                 ListItem::new(Line::from(vec![
                                     Span::styled(
-                                        "  ♪ ".to_string(),
+                                        format!(
+                                            "  {} ",
+                                            crate::icons::song_bullet(app.opt_icons)
+                                        ),
                                         Style::default().fg(pal.get_color("dim")),
                                     ),
                                     Span::styled(

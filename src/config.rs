@@ -130,9 +130,7 @@ pub enum Theme {
 pub struct GeneralConfig {
     #[serde(default = "default_true")]
     pub mpris_enabled: bool,
-    /// Deprecated: MPRIS is now implemented natively in-process (see
-    /// `src/mpris.rs`), so this is no longer used to spawn an external
-    /// helper like `mpv-mpris`. Kept only so old config files still parse.
+    // Legacy compat
     #[serde(default)]
     pub mpris_command: Option<String>,
     #[serde(default)]
@@ -145,11 +143,12 @@ pub struct GeneralConfig {
     pub music_directories: Vec<String>,
     #[serde(default)]
     pub fft_visualizer_default: bool,
-    /// Auto-maintain a single "Smart Playlist" (most played + recently
-    /// added + not-heard-in-a-while local tracks), refreshed on every
-    /// startup.
     #[serde(default = "default_true")]
     pub smart_playlists_enabled: bool,
+    #[serde(default = "default_true")]
+    pub image_background: bool,
+    #[serde(default = "default_true")]
+    pub icons: bool,
 }
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -162,6 +161,8 @@ impl Default for GeneralConfig {
             music_directories: default_music_directories(),
             fft_visualizer_default: false,
             smart_playlists_enabled: true,
+            image_background: true,
+            icons: true,
         }
     }
 }
@@ -188,6 +189,8 @@ pub struct KeybindsConfig {
     pub seek_forward: String,
     #[serde(default = "default_fft_toggle_key")]
     pub fft_toggle: String,
+    #[serde(default = "default_minimal_toggle_key")]
+    pub minimal_toggle: String,
 }
 impl Default for KeybindsConfig {
     fn default() -> Self {
@@ -200,6 +203,7 @@ impl Default for KeybindsConfig {
             seek_back: default_seek_back_key(),
             seek_forward: default_seek_forward_key(),
             fft_toggle: default_fft_toggle_key(),
+            minimal_toggle: default_minimal_toggle_key(),
         }
     }
 }
@@ -332,6 +336,9 @@ fn default_seek_forward_key() -> String {
 }
 fn default_fft_toggle_key() -> String {
     "C-v".to_string()
+}
+fn default_minimal_toggle_key() -> String {
+    "S-Z".to_string()
 }
 fn default_plugins_dir() -> String {
     if let Ok(home) = std::env::var("HOME") {
@@ -505,9 +512,10 @@ mod tests {
         assert!(sanitize_preset_filename("   ").is_err());
     }
     #[test]
-    fn save_eq_preset_does_not_escape_presets_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("HOME", dir.path());
+    fn save_eq_preset_does_not_escape_presets_dir() {        let dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
         let preset = EqPreset {
             name: "../../evil".to_string(),
             bands: [0.0; 10],

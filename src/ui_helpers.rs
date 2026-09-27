@@ -70,9 +70,11 @@ pub enum LocalNavItems<'a> {
     Albums(Vec<String>),
     Songs(Vec<&'a crate::model::LocalSong>),
 }
-pub const MAX_OPTIONS_INDEX: usize = 12;
+pub const MAX_OPTIONS_INDEX: usize = 14;
 pub const KEY_MUTE_OPTIONS_INDEX: usize = 11;
 pub const SPEED_OPTIONS_INDEX: usize = 12;
+pub const IMAGE_BG_OPTIONS_INDEX: usize = 13;
+pub const ICONS_OPTIONS_INDEX: usize = 14;
 impl<'a> LocalNavItems<'a> {
     pub fn len(&self) -> usize {
         match self {
