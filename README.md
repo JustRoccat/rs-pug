@@ -6,6 +6,7 @@
 > No browser, no ads, no Electron. Search YouTube, SoundCloud, or your own selfhosted [Sonum](https://github.com/JustRoccat/Sonum) server, queue tracks, play local files, all from your terminal.
 
 ![demo](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
+![demo](https://github.com/user-attachments/assets/b12c3e5c-60b8-4727-b3fe-e2f8f693367c)
 
 `rs-pug` is a terminal music player built in Rust on top of `mpv`, `yt-dlp`, and `ratatui`. It streams and downloads from YouTube and SoundCloud, pulls tracks from a self-hosted [Sonum](https://github.com/JustRoccat/Sonum) server, manages a local library and playlists, and extends with Lua plugins, all without leaving the terminal.
 
@@ -71,3 +72,5 @@ Drop `.lua` files into `~/.config/rs-pug/plugins/`, see [`docs.md`](./docs.md) f
 ## Works on
 
 Anywhere `mpv` and `yt-dlp` run: Linux and Termux (Android) tested, WSL2 on Windows should also work.
+![demo](https://github.com/user-attachments/assets/623cd445-79f5-4b5c-b598-0068cf02f7d6)
+![demo](https://github.com/user-attachments/assets/4a035353-7a5e-428d-82c4-c86ffee9eb07)
