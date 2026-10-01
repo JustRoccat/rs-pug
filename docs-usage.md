@@ -135,6 +135,12 @@ Each command connects to the running instance's IPC socket and exits immediately
 
 Pass `--debug` to write logs to `~/.config/rs-pug/rs-pug.log`, useful when filing a bug report.
 
+Pass `--validate` to check `config.toml` without starting the app: it prints the active file, the resolved search source, all custom sources, and any warnings, then exits 0 when clean or 1 when something was skipped or fell back:
+
+```bash
+rs-pug --validate
+```
+
 ## Configuration
 
 Config file: `~/.config/rs-pug/config.toml`. It hot-reloads, so most edits apply without a restart (the Sonum client config below is the exception).
@@ -212,6 +218,66 @@ Searching then queries `GET /tracks?q=<query>&limit=<n>` on the Sonum server; re
 
 > [!NOTE]
 > This integration covers *searching, streaming, and cover art* from Sonum (covers come from `GET /tracks/:id/art`, honoring `api_token`). Local downloads, playlists, and the local library scanner are unaffected and continue to work with `~/.config/rs-pug/music-local/` as usual.
+
+### Custom search sources
+
+Besides YouTube, SoundCloud, and Sonum, `rs-pug` can search through user-defined sources declared in `~/.config/rs-pug/config.toml`. They appear in the **Options** tab cycle, in the search prompt, and in `--source`.
+
+```toml
+[search]
+source = "youtube"
+
+[[search.custom_sources]]
+name = "YouTube (newest)"
+type = "ytdlp"
+prefix = "ytsearchdate"          # becomes "{prefix}{limit}:{query}"
+
+[[search.custom_sources]]
+name = "Audius"
+type = "command"
+command = ["/home/you/.config/rs-pug/scripts/audius-search.py", "{query}", "{limit}"]
+timeout_secs = 15                # optional, default 15, 0 means default, max 120
+```
+
+where `audius-search.py` queries the public Audius search API and prints the matching tracks as a JSON array:
+
+```python
+#!/usr/bin/env python3
+"""Usage: audius-search.py QUERY LIMIT."""
+import json, sys, urllib.parse, urllib.request
+
+query, limit = sys.argv[1], max(1, int(sys.argv[2]))
+url = (
+    "https://discoveryprovider.audius.co/v1/tracks/search?query="
+    + urllib.parse.quote_plus(query)
+    + f"&limit={limit}"
+)
+req = urllib.request.Request(url, headers={"User-Agent": "rs-pug/1.0"})
+with urllib.request.urlopen(req, timeout=20) as response:
+    data = json.load(response)
+songs = []
+for track in data.get("data") or []:
+    user = track.get("user") or {}
+    songs.append({
+        "id": str(track.get("id")),
+        "title": track.get("title"),
+        "webpage_url": "https://audius.co" + track.get("permalink"),
+        "uploader": user.get("handle"),
+        "duration": track.get("duration"),
+    })
+print(json.dumps(songs[:limit]))
+```
+
+Python above is just an example: `command` can be anything executable (shell, Ruby, Node, a compiled binary, `curl` against an API that already returns the right shape) as long as it prints the JSON array to stdout.
+
+- `ytdlp` reuses the yt-dlp search path with your prefix. Song URLs are built from `webpage_url` with `url` as fallback. Album search appends `full album` like the built-in sources. The prefix must be a search scheme your yt-dlp understands (`ytsearch`, `scsearch`, and a few others; check with `yt-dlp --list-extractors | grep -i search`). Anything else fails at search time with the yt-dlp error. When in doubt, test first: `yt-dlp --flat-playlist --dump-single-json -- "{prefix}3:test"`.
+- `command` runs `command` directly as argv, never through a shell. `{query}` and `{limit}` are substituted per argument. Stdout must be a JSON array of songs with `id`, `title`, `webpage_url` (required) and `uploader`, `duration` (optional, `duration` in seconds). Stdout over 8 MiB is rejected, results are truncated to the search limit, entries with empty `id`/`title`/`webpage_url` are skipped, and album search returns a "not supported" error. A non-zero exit, a timeout (the process is killed), or invalid JSON shows an error naming the source.
+- Since there is no shell, pipelines need an explicit `sh -c`, with `{limit}`/`{query}` passed as positional parameters, e.g. `command = ["sh", "-c", "yt-dlp ... \"$0\" ... \"$1\" | jq ...", "{limit}", "{query}"]`.
+- Names are matched trimmed and case-insensitive (Unicode lowercase). Empty, duplicate, or built-in-clashing names, empty `prefix`/`command`, unknown types, and entries beyond 255 are skipped with a warning. A saved `source` that no longer exists falls back to YouTube with a warning.
+- Cycle order in Options is YouTube -> SoundCloud -> Sonum -> customs. `--source` accepts custom names too (unknown names error out listing the available ones), and `rs-pug --validate` checks the whole setup without starting the app. Like the rest of `config.toml`, custom sources hot-reload.
+
+> [!WARNING]
+> `command` sources run programs with your privileges. Only point them at scripts you trust.
 
 ### Smart Playlist
 

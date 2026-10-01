@@ -34,12 +34,11 @@ fn palette(theme: &Theme) -> Palette {
 pub fn minimal_cover_area(term_w: u16, term_h: u16) -> Rect {
     minimal::minimal_layout(Rect::new(0, 0, term_w, term_h)).cover
 }
-fn search_source_label(source: &crate::config::SearchSource) -> String {
-    match source {
-        crate::config::SearchSource::YouTube => "YouTube".to_string(),
-        crate::config::SearchSource::SoundCloud => "SoundCloud".to_string(),
-        crate::config::SearchSource::Sonum => "Sonum".to_string(),
-    }
+fn search_source_label(
+    source: &crate::config::SearchSource,
+    customs: &[crate::config::CustomSource],
+) -> String {
+    crate::config::source_label(*source, customs)
 }
 const VOLT_BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 fn spectrum_spans(app: &App, pal: &Palette, width: usize) -> Vec<Span<'static>> {

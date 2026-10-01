@@ -33,6 +33,7 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 - Control a running instance over IPC, for use in status bars or keybindings
 - Extensible with Lua plugins: custom keybinds, live panels, and full UI customization
 - Hot reload: configuration and theme changes apply automatically
+- Add any streaming source you want.
 
 ## Requirements
 
@@ -62,7 +63,7 @@ Run `rs-pug` to launch the TUI. The app scans `~/.config/rs-pug/music-local/` fo
 
 Full guide (keys, remapping, EQ, visualizer, Minimal, IPC, themes, Sonum, storage): [`docs-usage.md`](./docs-usage.md).
 
-Config file: `~/.config/rs-pug/config.toml`.
+Config file: `~/.config/rs-pug/config.toml`. 
 
 ## Plugins
 

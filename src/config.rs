@@ -207,27 +207,330 @@ impl Default for KeybindsConfig {
         }
     }
 }
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SearchSource {
     #[default]
     YouTube,
     SoundCloud,
     Sonum,
+    Custom(u8),
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SearchConfig {
-    #[serde(default = "default_limit")]
-    pub limit: u8,
+pub const MAX_CUSTOM_SOURCES: usize = 255;
+pub const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 15;
+pub const MAX_COMMAND_TIMEOUT_SECS: u64 = 120;
+fn default_command_timeout() -> u64 {
+    DEFAULT_COMMAND_TIMEOUT_SECS
+}
+pub fn normalize_command_timeout(value: Option<u64>) -> u64 {
+    match value {
+        None | Some(0) => DEFAULT_COMMAND_TIMEOUT_SECS,
+        Some(n) => n.min(MAX_COMMAND_TIMEOUT_SECS),
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CustomSource {
+    pub name: String,
+    #[serde(flatten)]
+    pub kind: CustomSourceKind,
+}
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum CustomSourceKind {
+    Ytdlp {
+        prefix: String,
+    },
+    Command {
+        command: Vec<String>,
+        #[serde(default = "default_command_timeout")]
+        timeout_secs: u64,
+    },
+}
+#[derive(Debug, Clone, Deserialize, Default)]
+struct RawCustomSource {
     #[serde(default)]
+    name: Option<toml::Value>,
+    #[serde(default, rename = "type")]
+    kind: Option<toml::Value>,
+    #[serde(default)]
+    prefix: Option<toml::Value>,
+    #[serde(default)]
+    command: Option<toml::Value>,
+    #[serde(default)]
+    timeout_secs: Option<toml::Value>,
+}
+#[derive(Debug, Clone)]
+pub struct SearchConfig {
+    pub limit: u8,
     pub source: SearchSource,
+    pub custom_sources: Vec<CustomSource>,
 }
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
             limit: default_limit(),
             source: SearchSource::default(),
+            custom_sources: Vec::new(),
         }
+    }
+}
+pub fn normalize_source_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+pub fn source_names_equal(a: &str, b: &str) -> bool {
+    normalize_source_name(a) == normalize_source_name(b)
+}
+fn is_builtin_name(normalized: &str) -> bool {
+    matches!(normalized, "youtube" | "soundcloud" | "sonum")
+}
+pub fn available_source_names(customs: &[CustomSource]) -> Vec<String> {
+    let mut names = vec![
+        "youtube".to_owned(),
+        "soundcloud".to_owned(),
+        "sonum".to_owned(),
+    ];
+    names.extend(customs.iter().map(|c| c.name.clone()));
+    names
+}
+pub fn resolve_source_name(raw: Option<&str>, customs: &[CustomSource]) -> SearchSource {
+    let Some(name) = raw else {
+        return SearchSource::YouTube;
+    };
+    let normalized = normalize_source_name(name);
+    if normalized.is_empty() {
+        return SearchSource::YouTube;
+    }
+    if normalized == "youtube" {
+        return SearchSource::YouTube;
+    }
+    if normalized == "soundcloud" {
+        return SearchSource::SoundCloud;
+    }
+    if normalized == "sonum" {
+        return SearchSource::Sonum;
+    }
+    customs
+        .iter()
+        .position(|c| source_names_equal(&c.name, name))
+        .map(|i| SearchSource::Custom(i as u8))
+        .unwrap_or(SearchSource::YouTube)
+}
+pub fn source_persist_name(source: SearchSource, customs: &[CustomSource]) -> String {
+    match source {
+        SearchSource::YouTube => "youtube".to_owned(),
+        SearchSource::SoundCloud => "soundcloud".to_owned(),
+        SearchSource::Sonum => "sonum".to_owned(),
+        SearchSource::Custom(i) => customs
+            .get(i as usize)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "youtube".to_owned()),
+    }
+}
+pub fn source_label(source: SearchSource, customs: &[CustomSource]) -> String {
+    match source {
+        SearchSource::YouTube => "YouTube".to_owned(),
+        SearchSource::SoundCloud => "SoundCloud".to_owned(),
+        SearchSource::Sonum => "Sonum".to_owned(),
+        SearchSource::Custom(i) => customs
+            .get(i as usize)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "Unknown".to_owned()),
+    }
+}
+pub fn next_source(current: SearchSource, len: usize) -> SearchSource {
+    match current {
+        SearchSource::YouTube => SearchSource::SoundCloud,
+        SearchSource::SoundCloud => SearchSource::Sonum,
+        SearchSource::Sonum => {
+            if len > 0 {
+                SearchSource::Custom(0)
+            } else {
+                SearchSource::YouTube
+            }
+        }
+        SearchSource::Custom(i) => {
+            let next = i as usize + 1;
+            if next < len {
+                SearchSource::Custom(next as u8)
+            } else {
+                SearchSource::YouTube
+            }
+        }
+    }
+}
+pub fn custom_source_for(source: SearchSource, customs: &[CustomSource]) -> Option<&CustomSource> {
+    match source {
+        SearchSource::Custom(i) => customs.get(i as usize),
+        _ => None,
+    }
+}
+fn validate_one_raw(
+    raw: &RawCustomSource,
+    seen: &mut std::collections::HashSet<String>,
+    warnings: &mut Vec<String>,
+) -> Option<CustomSource> {
+    let name = raw
+        .name
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if name.is_empty() {
+        warnings.push("skipping custom source with empty name".to_owned());
+        return None;
+    }
+    let normalized = normalize_source_name(&name);
+    if is_builtin_name(&normalized) {
+        warnings.push(format!(
+            "skipping custom source '{name}': name clashes with built-in"
+        ));
+        return None;
+    }
+    if !seen.insert(normalized) {
+        warnings.push(format!("skipping duplicate custom source '{name}'"));
+        return None;
+    }
+    let kind = raw
+        .kind
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    match kind.as_str() {
+        "ytdlp" => {
+            let prefix = raw
+                .prefix
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            if prefix.is_empty() {
+                warnings.push(format!("skipping custom source '{name}': empty prefix"));
+                return None;
+            }
+            Some(CustomSource {
+                name,
+                kind: CustomSourceKind::Ytdlp { prefix },
+            })
+        }
+        "command" => {
+            let command = raw
+                .command
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if command.is_empty() {
+                warnings.push(format!("skipping custom source '{name}': empty command"));
+                return None;
+            }
+            let timeout = raw
+                .timeout_secs
+                .as_ref()
+                .and_then(|v| v.as_integer())
+                .and_then(|n| u64::try_from(n).ok());
+            Some(CustomSource {
+                name,
+                kind: CustomSourceKind::Command {
+                    command,
+                    timeout_secs: normalize_command_timeout(timeout),
+                },
+            })
+        }
+        _ => {
+            warnings.push(format!("skipping custom source '{name}': unknown type"));
+            None
+        }
+    }
+}
+pub fn validate_raw_custom_sources(
+    value: Option<&toml::Value>,
+) -> (Vec<CustomSource>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let Some(value) = value else {
+        return (Vec::new(), warnings);
+    };
+    let Some(arr) = value.as_array() else {
+        warnings.push("ignoring search.custom_sources: expected array".to_owned());
+        return (Vec::new(), warnings);
+    };
+    let mut customs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in arr {
+        if customs.len() >= MAX_CUSTOM_SOURCES {
+            warnings.push(format!(
+                "ignoring custom sources beyond {MAX_CUSTOM_SOURCES}"
+            ));
+            break;
+        }
+        let raw: RawCustomSource = match entry.clone().try_into() {
+            Ok(raw) => raw,
+            Err(_) => {
+                warnings.push("skipping custom source with invalid shape".to_owned());
+                continue;
+            }
+        };
+        if let Some(custom) = validate_one_raw(&raw, &mut seen, &mut warnings) {
+            customs.push(custom);
+        }
+    }
+    (customs, warnings)
+}
+fn normalize_timeout_in_place(customs: &mut [CustomSource]) {
+    for custom in customs {
+        if let CustomSourceKind::Command { timeout_secs, .. } = &mut custom.kind {
+            *timeout_secs = normalize_command_timeout(Some(*timeout_secs));
+        }
+    }
+}
+impl<'de> serde::Deserialize<'de> for SearchConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Helper {
+            #[serde(default = "default_limit")]
+            limit: u8,
+            #[serde(default)]
+            source: Option<toml::Value>,
+            #[serde(default)]
+            custom_sources: Option<toml::Value>,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        let (customs, _) = validate_raw_custom_sources(helper.custom_sources.as_ref());
+        let source_str = helper.source.as_ref().and_then(|v| v.as_str());
+        Ok(Self {
+            limit: helper.limit,
+            source: resolve_source_name(source_str, &customs),
+            custom_sources: customs,
+        })
+    }
+}
+impl serde::Serialize for SearchConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Helper<'a> {
+            limit: u8,
+            source: String,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            custom_sources: &'a Vec<CustomSource>,
+        }
+        Helper {
+            limit: self.limit,
+            source: source_persist_name(self.source, &self.custom_sources),
+            custom_sources: &self.custom_sources,
+        }
+        .serialize(serializer)
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -253,7 +556,7 @@ pub fn ensure_default_dirs() {
         let _ = fs::create_dir_all(eq_presets_dir);
     }
 }
-pub fn load_config_with_diagnostics() -> (Config, Option<String>) {
+pub fn load_config_with_diagnostics() -> (Config, Option<String>, Option<PathBuf>) {
     let paths = config_paths();
     let mut warning: Option<String> = None;
     for path in &paths {
@@ -262,7 +565,19 @@ pub fn load_config_with_diagnostics() -> (Config, Option<String>) {
             Err(_) => continue,
         };
         match toml::from_str::<Config>(&raw) {
-            Ok(cfg) => return (cfg, None),
+            Ok(mut cfg) => {
+                normalize_timeout_in_place(&mut cfg.search.custom_sources);
+                let search_warnings = collect_search_warnings(&raw, &mut cfg);
+                for w in &search_warnings {
+                    log::warn!("config at {}: {w}", path.display());
+                }
+                let message = if search_warnings.is_empty() {
+                    None
+                } else {
+                    Some(search_warnings.join("; "))
+                };
+                return (cfg, message, Some(path.clone()));
+            }
             Err(err) => {
                 log::warn!("failed to parse config at {}: {err}", path.display());
                 if warning.is_none() {
@@ -274,7 +589,40 @@ pub fn load_config_with_diagnostics() -> (Config, Option<String>) {
             }
         }
     }
-    (Config::default(), warning)
+    (Config::default(), warning, None)
+}
+fn collect_search_warnings(raw: &str, cfg: &mut Config) -> Vec<String> {
+    let value: toml::Value = match toml::from_str(raw) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let search = value.get("search");
+    let customs_value = search.and_then(|s| s.get("custom_sources"));
+    let (customs, mut warnings) = validate_raw_custom_sources(customs_value);
+    cfg.search.custom_sources = customs.clone();
+    let source_str = search
+        .and_then(|s| s.get("source"))
+        .and_then(|v| v.as_str());
+    if let Some(name) = source_str {
+        let normalized = normalize_source_name(name);
+        let known = is_builtin_name(&normalized)
+            || customs.iter().any(|c| source_names_equal(&c.name, name));
+        if !known && !normalized.is_empty() {
+            warnings.push(format!(
+                "unknown search source '{name}', falling back to YouTube"
+            ));
+        }
+        cfg.search.source = resolve_source_name(Some(name), &customs);
+    }
+    cfg.search.custom_sources = customs;
+    if let SearchSource::Custom(i) = cfg.search.source {
+        if cfg.search.custom_sources.get(i as usize).is_none() {
+            warnings
+                .push("saved search source no longer exists, falling back to YouTube".to_owned());
+            cfg.search.source = SearchSource::YouTube;
+        }
+    }
+    warnings
 }
 pub fn save_config(config: &Config) {
     let path = user_config_path();
@@ -510,6 +858,152 @@ mod tests {
     fn sanitize_preset_filename_rejects_empty() {
         assert!(sanitize_preset_filename("").is_err());
         assert!(sanitize_preset_filename("   ").is_err());
+    }
+    fn custom_sources_from_toml(toml: &str) -> (Vec<CustomSource>, Vec<String>) {
+        let value: toml::Value = toml::from_str(toml).unwrap();
+        validate_raw_custom_sources(value.get("search").and_then(|s| s.get("custom_sources")))
+    }
+    #[test]
+    fn custom_source_names_match_unicode_case_insensitive_trimmed() {
+        assert!(source_names_equal("  Привет ", "привет"));
+        assert!(source_names_equal("YouTube (Newest)", "youtube (newest)"));
+        assert!(!source_names_equal("a", "b"));
+    }
+    #[test]
+    fn resolve_source_name_finds_builtins_and_customs() {
+        let customs = vec![CustomSource {
+            name: "My Script".to_owned(),
+            kind: CustomSourceKind::Ytdlp {
+                prefix: "ytsearchdate".to_owned(),
+            },
+        }];
+        assert_eq!(
+            resolve_source_name(Some("youtube"), &customs),
+            SearchSource::YouTube
+        );
+        assert_eq!(
+            resolve_source_name(Some("  SOUNDCLOUD "), &customs),
+            SearchSource::SoundCloud
+        );
+        assert_eq!(
+            resolve_source_name(Some("my script"), &customs),
+            SearchSource::Custom(0)
+        );
+        assert_eq!(
+            resolve_source_name(Some("  MY SCRIPT "), &customs),
+            SearchSource::Custom(0)
+        );
+        assert_eq!(
+            resolve_source_name(Some("nope"), &customs),
+            SearchSource::YouTube
+        );
+        assert_eq!(resolve_source_name(None, &customs), SearchSource::YouTube);
+    }
+    #[test]
+    fn validate_custom_sources_skips_bad_entries() {
+        let (customs, warnings) = custom_sources_from_toml(
+            r#"
+[search]
+[[search.custom_sources]]
+name = ""
+type = "ytdlp"
+prefix = "ytsearchdate"
+[[search.custom_sources]]
+name = "YouTube"
+type = "ytdlp"
+prefix = "x"
+[[search.custom_sources]]
+name = "dup"
+type = "ytdlp"
+prefix = "a"
+[[search.custom_sources]]
+name = "DUP"
+type = "ytdlp"
+prefix = "b"
+[[search.custom_sources]]
+name = "empty-prefix"
+type = "ytdlp"
+prefix = "  "
+[[search.custom_sources]]
+name = "empty-cmd"
+type = "command"
+command = []
+[[search.custom_sources]]
+name = "ok"
+type = "command"
+command = ["/bin/echo", "{query}"]
+"#,
+        );
+        assert_eq!(customs.len(), 2);
+        assert_eq!(customs[0].name, "dup");
+        assert_eq!(customs[1].name, "ok");
+        assert_eq!(warnings.len(), 5);
+    }
+    #[test]
+    fn normalize_command_timeout_defaults_and_clamps() {
+        assert_eq!(normalize_command_timeout(None), 15);
+        assert_eq!(normalize_command_timeout(Some(0)), 15);
+        assert_eq!(normalize_command_timeout(Some(5)), 5);
+        assert_eq!(normalize_command_timeout(Some(500)), 120);
+    }
+    #[test]
+    fn next_source_cycles_through_customs() {
+        assert_eq!(
+            next_source(SearchSource::YouTube, 0),
+            SearchSource::SoundCloud
+        );
+        assert_eq!(next_source(SearchSource::Sonum, 0), SearchSource::YouTube);
+        assert_eq!(next_source(SearchSource::Sonum, 2), SearchSource::Custom(0));
+        assert_eq!(
+            next_source(SearchSource::Custom(0), 2),
+            SearchSource::Custom(1)
+        );
+        assert_eq!(
+            next_source(SearchSource::Custom(1), 2),
+            SearchSource::YouTube
+        );
+        assert_eq!(
+            next_source(SearchSource::Custom(9), 2),
+            SearchSource::YouTube
+        );
+    }
+    #[test]
+    fn source_persist_name_uses_declared_name() {
+        let customs = vec![CustomSource {
+            name: "My Script".to_owned(),
+            kind: CustomSourceKind::Ytdlp {
+                prefix: "x".to_owned(),
+            },
+        }];
+        assert_eq!(
+            source_persist_name(SearchSource::Custom(0), &customs),
+            "My Script"
+        );
+        assert_eq!(
+            source_persist_name(SearchSource::Custom(9), &customs),
+            "youtube"
+        );
+        assert_eq!(
+            source_persist_name(SearchSource::SoundCloud, &customs),
+            "soundcloud"
+        );
+    }
+    #[test]
+    fn search_config_round_trips_custom_source() {
+        let raw = r#"
+[search]
+source = "My Script"
+[[search.custom_sources]]
+name = "My Script"
+type = "ytdlp"
+prefix = "ytsearchdate"
+"#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        assert_eq!(cfg.search.source, SearchSource::Custom(0));
+        let serialized = toml::to_string(&cfg.search).unwrap();
+        assert!(serialized.contains("My Script"));
+        let reparsed: SearchConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.source, SearchSource::Custom(0));
     }
     #[test]
     fn save_eq_preset_does_not_escape_presets_dir() {        let dir = tempfile::tempdir().unwrap();

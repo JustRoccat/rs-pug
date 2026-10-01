@@ -36,7 +36,10 @@ pub(super) fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rec
         let prompt = if app.active_tab == Tab::Local {
             "search local files...".to_string()
         } else {
-            format!("search {}...", search_source_label(&app.opt_source))
+            format!(
+                "search {}...",
+                search_source_label(&app.opt_source, &app.opt_custom_sources)
+            )
         };
         Line::from(Span::styled(
             prompt,

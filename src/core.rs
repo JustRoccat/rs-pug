@@ -40,7 +40,10 @@ pub enum CoreCmd {
     ToggleMute,
     Next,
     Prev,
-    UpdateSearchSource(crate::config::SearchSource),
+    UpdateSearchSource(
+        crate::config::SearchSource,
+        std::sync::Arc<Vec<crate::config::CustomSource>>,
+    ),
     DownloadSong { song: Song, path: String },
     Quit,
     HandleSearchDone(Vec<Song>),
@@ -67,6 +70,7 @@ pub enum CoreEvent {
 
 pub struct Core {
     config: Config,
+    custom_sources: std::sync::Arc<Vec<crate::config::CustomSource>>,
     mpv_child: Child,
     history: VecDeque<Song>,
     volume: u8,
@@ -91,9 +95,11 @@ impl Core {
             .spawn()
             .map_err(|err| anyhow::anyhow!("failed to start mpv (is `mpv` installed?): {err}"))?;
         wait_for_mpv_socket(config.mpv.socket.as_str()).await?;
+        let custom_sources = std::sync::Arc::new(config.search.custom_sources.clone());
         let core = Self {
             plugins,
             config,
+            custom_sources,
             mpv_child,
             history: VecDeque::new(),
             volume: 70,
@@ -126,10 +132,11 @@ impl Core {
                             let limit = self.config.search.limit.max(1);
                             let query = self.transform_search_query(query);
                             let source = self.config.search.source;
+                            let customs = std::sync::Arc::clone(&self.custom_sources);
                             let cmd_tx = cmd_tx.clone();
                             let tx = tx.clone();
                             tokio::spawn(async move {
-                                match search_songs(limit, query, source).await {
+                                match search_songs(limit, query, source, &customs).await {
                                     Ok(songs) => { let _ = cmd_tx.send(CoreCmd::HandleSearchDone(songs)); }
                                     Err(err) => { let _ = tx.send(CoreEvent::SearchFailed(format!("{err:#}"))); }
                                 }
@@ -140,10 +147,11 @@ impl Core {
                             let limit = self.config.search.limit.max(1);
                             let query = self.transform_search_query(query);
                             let source = self.config.search.source;
+                            let customs = std::sync::Arc::clone(&self.custom_sources);
                             let cmd_tx = cmd_tx.clone();
                             let tx = tx.clone();
                             tokio::spawn(async move {
-                                match search_albums(limit, query, source).await {
+                                match search_albums(limit, query, source, &customs).await {
                                     Ok(albums) => { let _ = cmd_tx.send(CoreCmd::HandleAlbumSearchDone(albums)); }
                                     Err(err) => { let _ = tx.send(CoreEvent::AlbumSearchFailed(format!("{err:#}"))); }
                                 }
@@ -153,10 +161,11 @@ impl Core {
                         CoreCmd::Play(song) => self.play(song, &tx).await,
                         CoreCmd::SmartQueue(song) => {
                             let source = self.config.search.source;
+                            let customs = std::sync::Arc::clone(&self.custom_sources);
                             let tx = tx.clone();
                             let cmd_tx = cmd_tx.clone();
                             tokio::spawn(async move {
-                                if let Err(err) = perform_smart_queue(song, source, cmd_tx).await {
+                                if let Err(err) = perform_smart_queue(song, source, &customs, cmd_tx).await {
                                     let _ = tx.send(CoreEvent::Error(format!("{err:#}")));
                                 }
                             });
@@ -206,6 +215,7 @@ impl Core {
                                     .arg("title:%(title)s")
                                     .arg("-o")
                                     .arg(output_template)
+                                    .arg("--")
                                     .arg(&song.webpage_url)
                                     .output()
                                     .await;
@@ -223,8 +233,9 @@ impl Core {
                             });
                             Ok(())
                         }
-                        CoreCmd::UpdateSearchSource(source) => {
+                        CoreCmd::UpdateSearchSource(source, customs) => {
                             self.config.search.source = source;
+                            self.custom_sources = customs;
                             Ok(())
                         }
                         CoreCmd::HandleSearchDone(songs) => {
@@ -427,9 +438,110 @@ async fn wait_for_mpv_socket(socket: &str) -> Result<()> {
         }
     }
 }
+const COMMAND_STDOUT_CAP: usize = 8 * 1024 * 1024;
+fn truncate_stderr(output: &[u8]) -> String {
+    String::from_utf8_lossy(output)
+        .trim()
+        .chars()
+        .take(240)
+        .collect()
+}
+async fn run_ytdlp_flat(needle: &str) -> Result<FlatSearch> {
+    let output = Command::new("yt-dlp")
+        .arg("--flat-playlist")
+        .arg("--dump-single-json")
+        .arg("--")
+        .arg(needle)
+        .output()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to run yt-dlp (is `yt-dlp` installed?): {err}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "yt-dlp returned non-zero status: {}",
+            truncate_stderr(&output.stderr)
+        );
+    }
+    serde_json::from_slice(&output.stdout).context("failed parsing yt-dlp flat json output")
+}
+fn youtube_watch_url(id: &str) -> String {
+    format!("https://www.youtube.com/watch?v={id}")
+}
+fn flat_entry_url(entry: &FlatEntry) -> String {
+    // flat results from yt-dlp may omit webpage_url, url is the fallback
+    entry
+        .webpage_url
+        .clone()
+        .unwrap_or_else(|| entry.url.clone())
+}
+fn substitute_arg(arg: &str, query: &str, limit: u8) -> String {
+    arg.replace("{query}", query)
+        .replace("{limit}", &limit.to_string())
+}
+fn filter_command_songs(songs: Vec<Song>, limit: u8) -> Vec<Song> {
+    let mut kept = Vec::new();
+    let mut skipped = 0;
+    for song in songs {
+        if song.id.trim().is_empty()
+            || song.title.trim().is_empty()
+            || song.webpage_url.trim().is_empty()
+        {
+            skipped += 1;
+            continue;
+        }
+        kept.push(song);
+        if kept.len() >= limit.max(1) as usize {
+            break;
+        }
+    }
+    if skipped > 0 {
+        log::warn!("command source skipped {skipped} entries with empty id/title/url");
+    }
+    kept
+}
+async fn run_command_source(
+    name: &str,
+    command: &[String],
+    timeout_secs: u64,
+    limit: u8,
+    query: &str,
+) -> Result<Vec<Song>> {
+    let substituted = command
+        .iter()
+        .map(|arg| substitute_arg(arg, query, limit))
+        .collect::<Vec<_>>();
+    let Some((program, args)) = substituted.split_first() else {
+        anyhow::bail!("source '{name}': empty command");
+    };
+    let child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|err| anyhow::anyhow!("source '{name}': failed to run command: {err}"))?;
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let output = tokio::time::timeout(timeout, child.wait_with_output())
+        .await
+        .map_err(|_| anyhow::anyhow!("source '{name}': command timed out after {timeout_secs}s"))?
+        .map_err(|err| anyhow::anyhow!("source '{name}': failed reading command output: {err}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "source '{name}': command returned non-zero status: {}",
+            truncate_stderr(&output.stderr)
+        );
+    }
+    if output.stdout.len() > COMMAND_STDOUT_CAP {
+        anyhow::bail!("source '{name}': command output exceeded 8 MiB");
+    }
+    let songs: Vec<Song> = serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("source '{name}': invalid JSON from command"))?;
+    Ok(filter_command_songs(songs, limit))
+}
 async fn perform_smart_queue(
     current: Song,
     source: crate::config::SearchSource,
+    customs: &std::sync::Arc<Vec<crate::config::CustomSource>>,
     cmd_tx: mpsc::UnboundedSender<CoreCmd>,
 ) -> Result<()> {
     let query = current
@@ -437,7 +549,7 @@ async fn perform_smart_queue(
         .as_ref()
         .map(|u| format!("{u} {}", current.title))
         .unwrap_or_else(|| current.title.clone());
-    let candidates = search_songs(8, query, source).await?;
+    let candidates = search_songs(8, query, source, customs).await?;
     let maybe_next = candidates
         .into_iter()
         .find(|song| song.id != current.id && song.title != current.title);
@@ -452,84 +564,108 @@ async fn search_songs(
     limit: u8,
     query: String,
     source: crate::config::SearchSource,
+    customs: &std::sync::Arc<Vec<crate::config::CustomSource>>,
 ) -> Result<Vec<Song>> {
-    if matches!(source, crate::config::SearchSource::Sonum) {
-        return crate::sonum::search_songs(limit, query).await;
-    }
-    let needle = match source {
-        crate::config::SearchSource::YouTube => format!("ytsearch{limit}:{query}"),
-        crate::config::SearchSource::SoundCloud => format!("scsearch{limit}:{query}"),
-        crate::config::SearchSource::Sonum => unreachable!("handled above"),
-    };
-    let output = Command::new("yt-dlp")
-        .arg("--flat-playlist")
-        .arg("--dump-single-json")
-        .arg(needle)
-        .output()
-        .await
-        .map_err(|err| anyhow::anyhow!("failed to run yt-dlp (is `yt-dlp` installed?): {err}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "yt-dlp returned non-zero status: {}",
-            stderr.trim().chars().take(240).collect::<String>()
-        );
-    }
-    let parsed: FlatSearch =
-        serde_json::from_slice(&output.stdout).context("failed parsing yt-dlp flat json output")?;
-    let songs = parsed
-        .entries
-        .into_iter()
-        .map(|e| {
-            let webpage_url = match source {
-                crate::config::SearchSource::YouTube => {
-                    format!("https://www.youtube.com/watch?v={}", e.id)
-                }
-                crate::config::SearchSource::SoundCloud => {
-                    e.webpage_url.clone().unwrap_or_else(|| e.url.clone())
-                }
-                crate::config::SearchSource::Sonum => unreachable!("handled above"),
+    use crate::config::{CustomSourceKind, SearchSource};
+    match source {
+        SearchSource::Sonum => crate::sonum::search_songs(limit, query).await,
+        SearchSource::YouTube => {
+            let parsed = run_ytdlp_flat(&format!("ytsearch{limit}:{query}")).await?;
+            Ok(parsed
+                .entries
+                .into_iter()
+                .map(|e| Song {
+                    id: e.id.clone(),
+                    title: e.title,
+                    webpage_url: youtube_watch_url(&e.id),
+                    uploader: e.uploader,
+                    duration: None,
+                })
+                .collect())
+        }
+        SearchSource::SoundCloud => {
+            let parsed = run_ytdlp_flat(&format!("scsearch{limit}:{query}")).await?;
+            Ok(parsed
+                .entries
+                .into_iter()
+                .map(|e| {
+                    let webpage_url = flat_entry_url(&e);
+                    Song {
+                        id: e.id.clone(),
+                        title: e.title,
+                        webpage_url,
+                        uploader: e.uploader,
+                        duration: None,
+                    }
+                })
+                .collect())
+        }
+        SearchSource::Custom(i) => {
+            let Some(custom) = customs.get(i as usize) else {
+                anyhow::bail!("unknown custom source");
             };
-            Song {
-                id: e.id.clone(),
-                title: e.title,
-                webpage_url,
-                uploader: e.uploader,
-                duration: None,
+            match &custom.kind {
+                CustomSourceKind::Ytdlp { prefix } => {
+                    let parsed = run_ytdlp_flat(&format!("{prefix}{limit}:{query}"))
+                        .await
+                        .with_context(|| format!("source '{}'", custom.name))?;
+                    Ok(parsed
+                        .entries
+                        .into_iter()
+                        .map(|e| {
+                            let webpage_url = flat_entry_url(&e);
+                            Song {
+                                id: e.id.clone(),
+                                title: e.title,
+                                webpage_url,
+                                uploader: e.uploader,
+                                duration: None,
+                            }
+                        })
+                        .collect())
+                }
+                CustomSourceKind::Command {
+                    command,
+                    timeout_secs,
+                } => run_command_source(&custom.name, command, *timeout_secs, limit, &query).await,
             }
-        })
-        .collect();
-    Ok(songs)
+        }
+    }
 }
 async fn search_albums(
     limit: u8,
     query: String,
     source: crate::config::SearchSource,
+    customs: &std::sync::Arc<Vec<crate::config::CustomSource>>,
 ) -> Result<Vec<crate::model::Album>> {
-    if matches!(source, crate::config::SearchSource::Sonum) {
-        return crate::sonum::search_albums(limit, query).await;
-    }
-    let needle = match source {
-        crate::config::SearchSource::YouTube => {
-            format!("ytsearch{limit}:{query} full album")
+    use crate::config::{CustomSourceKind, SearchSource};
+    let (prefix, youtube_style) = match source {
+        SearchSource::Sonum => return crate::sonum::search_albums(limit, query).await,
+        SearchSource::YouTube => ("ytsearch".to_owned(), true),
+        SearchSource::SoundCloud => ("scsearch".to_owned(), false),
+        SearchSource::Custom(i) => {
+            let Some(custom) = customs.get(i as usize) else {
+                anyhow::bail!("unknown custom source");
+            };
+            match &custom.kind {
+                CustomSourceKind::Ytdlp { prefix } => (prefix.clone(), false),
+                CustomSourceKind::Command { .. } => {
+                    anyhow::bail!("album search is not supported for source '{}'", custom.name);
+                }
+            }
         }
-        crate::config::SearchSource::SoundCloud => {
-            format!("scsearch{limit}:{query} full album")
-        }
-        crate::config::SearchSource::Sonum => unreachable!("handled above"),
     };
-    let output = Command::new("yt-dlp")
-        .arg("--flat-playlist")
-        .arg("--dump-single-json")
-        .arg(needle)
-        .output()
-        .await
-        .map_err(|err| anyhow::anyhow!("failed to run yt-dlp: {err}"))?;
-    if !output.status.success() {
-        anyhow::bail!("yt-dlp returned non-zero status");
-    }
-    let parsed: FlatSearch =
-        serde_json::from_slice(&output.stdout).context("failed parsing yt-dlp search output")?;
+    let parsed = run_ytdlp_flat(&format!("{prefix}{limit}:{query} full album")).await;
+    let parsed = match source {
+        SearchSource::Custom(i) => {
+            let name = customs
+                .get(i as usize)
+                .map(|c| c.name.as_str())
+                .unwrap_or("custom");
+            parsed.with_context(|| format!("source '{name}'"))?
+        }
+        _ => parsed?,
+    };
     let mut albums = Vec::new();
     for entry in parsed.entries {
         let title_lower = entry.title.to_lowercase();
@@ -538,15 +674,10 @@ async fn search_albums(
                 .uploader
                 .clone()
                 .unwrap_or_else(|| "Unknown Artist".to_string());
-            let webpage_url = match source {
-                crate::config::SearchSource::YouTube => {
-                    format!("https://www.youtube.com/watch?v={}", entry.id)
-                }
-                crate::config::SearchSource::SoundCloud => entry
-                    .webpage_url
-                    .clone()
-                    .unwrap_or_else(|| entry.url.clone()),
-                crate::config::SearchSource::Sonum => unreachable!("handled above"),
+            let webpage_url = if youtube_style {
+                youtube_watch_url(&entry.id)
+            } else {
+                flat_entry_url(&entry)
             };
             let song = Song {
                 id: entry.id.clone(),
@@ -717,6 +848,59 @@ mod tests {
             "Should have found songs in symlinked directory. Found: {}",
             songs.len()
         );
+    }
+    #[test]
+    fn substitute_arg_replaces_query_and_limit() {
+        assert_eq!(substitute_arg("{query}", "hello world", 20), "hello world");
+        assert_eq!(substitute_arg("n={limit}", "x", 8), "n=8");
+        assert_eq!(substitute_arg("{query}-{query}-{limit}", "a", 3), "a-a-3");
+        assert_eq!(substitute_arg("plain", "a", 3), "plain");
+    }
+    #[test]
+    fn filter_command_songs_skips_empty_and_truncates() {
+        let songs = vec![
+            Song {
+                id: "".to_owned(),
+                title: "t".to_owned(),
+                webpage_url: "u".to_owned(),
+                uploader: None,
+                duration: None,
+            },
+            Song {
+                id: "1".to_owned(),
+                title: "  ".to_owned(),
+                webpage_url: "u".to_owned(),
+                uploader: None,
+                duration: None,
+            },
+            Song {
+                id: "1".to_owned(),
+                title: "a".to_owned(),
+                webpage_url: "http://x".to_owned(),
+                uploader: Some("u".to_owned()),
+                duration: Some(12.0),
+            },
+            Song {
+                id: "2".to_owned(),
+                title: "b".to_owned(),
+                webpage_url: "http://y".to_owned(),
+                uploader: None,
+                duration: None,
+            },
+        ];
+        let kept = filter_command_songs(songs, 1);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "1");
+    }
+    #[test]
+    fn command_stdout_parses_as_songs() {
+        let raw = br#"[{"id":"1","title":"a","webpage_url":"http://x","uploader":"u","duration":11.5},{"id":"2","title":"b","webpage_url":"http://y"}]"#;
+        let songs: Vec<Song> = serde_json::from_slice(raw).unwrap();
+        assert_eq!(songs.len(), 2);
+        assert_eq!(songs[0].uploader.as_deref(), Some("u"));
+        assert_eq!(songs[1].duration, None);
+        let bad = br#"[{"title":"missing id"}]"#;
+        assert!(serde_json::from_slice::<Vec<Song>>(bad).is_err());
     }
     #[test]
     fn test_scan_local_library_deduplicates_symlinks() {

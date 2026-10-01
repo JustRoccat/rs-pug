@@ -29,7 +29,7 @@ mod terminal;
 mod tui;
 mod ui_helpers;
 mod utils;
-use config::{load_config_with_diagnostics, SearchSource};
+use config::load_config_with_diagnostics;
 use core::{Core, CoreCmd, CoreEvent};
 use input::KeyPluginAction;
 use model::App;
@@ -109,9 +109,24 @@ async fn main() -> Result<()> {
     terminal::install_panic_hook();
     config::ensure_default_dirs();
     sonum::ensure_sonum_config();
-    let (mut config, config_warning) = load_config_with_diagnostics();
+    let (mut config, config_warning, config_path) = load_config_with_diagnostics();
     if let Some(source_arg) = args.source {
-        config.search.source = SearchSource::from(source_arg);
+        match cli::resolve_cli_source(&source_arg, &config.search.custom_sources) {
+            Ok(source) => config.search.source = source,
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(2);
+            }
+        }
+    }
+    if args.validate {
+        let (report, code) = cli::validate_report(
+            &config,
+            config_warning.as_deref(),
+            config_path.as_deref(),
+        );
+        print!("{report}");
+        std::process::exit(code);
     }
     let plugin_manager = Arc::new(
         Mutex::new(
@@ -252,10 +267,24 @@ async fn main() -> Result<()> {
             if hr.config_changed {
                 let old = config.clone();
                 let prev_opt_theme = app.opt_theme.clone();
-                let (reloaded, warning) = load_config_with_diagnostics();
+                let (reloaded, warning, _) = load_config_with_diagnostics();
                 config = reloaded;
                 app.apply_config(&config);
                 app.opt_theme = prev_opt_theme;
+                if config::custom_source_for(app.opt_source, &app.opt_custom_sources).is_none()
+                    && matches!(app.opt_source, config::SearchSource::Custom(_))
+                {
+                    app.opt_source = config::SearchSource::YouTube;
+                    config.search.source = config::SearchSource::YouTube;
+                    app.set_flash(
+                        "Saved search source no longer exists, falling back to YouTube",
+                        6,
+                    );
+                }
+                let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(
+                    app.opt_source,
+                    std::sync::Arc::clone(&app.opt_custom_sources),
+                ));
                 if let Some(warning) = warning {
                     app.set_flash(warning, 6);
                 }

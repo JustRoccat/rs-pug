@@ -426,6 +426,7 @@ pub struct App {
     pub options_index: usize,
     pub opt_search_limit: u8,
     pub opt_source: crate::config::SearchSource,
+    pub opt_custom_sources: std::sync::Arc<Vec<crate::config::CustomSource>>,
     pub opt_socket: String,
     pub opt_theme: Theme,
     pub opt_mpris_enabled: bool,
@@ -498,6 +499,7 @@ impl App {
             options_index: 0,
             opt_search_limit: 20,
             opt_source: crate::config::SearchSource::YouTube,
+            opt_custom_sources: std::sync::Arc::new(Vec::new()),
             opt_socket: "/tmp/rs-pug.sock".to_owned(),
             opt_theme: Theme::Dark,
             opt_mpris_enabled: true,
@@ -622,6 +624,7 @@ impl App {
     pub fn apply_config(&mut self, cfg: &Config) {
         self.opt_search_limit = cfg.search.limit.max(1);
         self.opt_source = cfg.search.source;
+        self.opt_custom_sources = std::sync::Arc::new(cfg.search.custom_sources.clone());
         self.opt_socket = cfg.mpv.socket.clone();
         self.opt_theme = cfg.general.theme.clone();
         self.opt_mpris_enabled = cfg.general.mpris_enabled;
@@ -653,6 +656,7 @@ impl App {
             search: SearchConfig {
                 limit: self.opt_search_limit.max(1),
                 source: self.opt_source,
+                custom_sources: self.opt_custom_sources.as_ref().clone(),
             },
             mpv: MpvConfig {
                 socket: self.opt_socket.clone(),

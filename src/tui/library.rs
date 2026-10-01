@@ -65,7 +65,10 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         let rows: Vec<(&str, String)> = vec![
             (
                 "⊞",
-                format!("Search source  {}", search_source_label(&app.opt_source)),
+                format!(
+                    "Search source  {}",
+                    search_source_label(&app.opt_source, &app.opt_custom_sources)
+                ),
             ),
             ("⊞", format!("Search limit   {}", app.opt_search_limit)),
             ("⊞", format!("MPV socket     {}", app.opt_socket)),

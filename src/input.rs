@@ -1,4 +1,4 @@
-use crate::config::{save_config, EqPreset, SearchSource};
+use crate::config::{EqPreset, save_config};
 use crate::actions;
 use crate::core::CoreCmd;
 use crate::eq;
@@ -1103,21 +1103,16 @@ fn toggle_icons(app: &mut App) {
     );
 }
 fn toggle_search_source(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) {
-    app.opt_source = match app.opt_source {
-        SearchSource::YouTube => SearchSource::SoundCloud,
-        SearchSource::SoundCloud => SearchSource::Sonum,
-        SearchSource::Sonum => SearchSource::YouTube,
-    };
-    let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(app.opt_source));
+    app.opt_source = crate::config::next_source(app.opt_source, app.opt_custom_sources.len());
+    let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(
+        app.opt_source,
+        std::sync::Arc::clone(&app.opt_custom_sources),
+    ));
     save_config(&app.build_config());
     app.set_flash(
         format!(
             "Search source: {}",
-            match app.opt_source {
-                SearchSource::YouTube => "YouTube",
-                SearchSource::SoundCloud => "SoundCloud",
-                SearchSource::Sonum => "Sonum",
-            }
+            crate::config::source_label(app.opt_source, &app.opt_custom_sources)
         ),
         2,
     );
