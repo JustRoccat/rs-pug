@@ -3,7 +3,7 @@
 [![dependency status](https://deps.rs/repo/github/JustRoccat/rs-pug/status.svg)](https://deps.rs/repo/github/JustRoccat/rs-pug)
 [![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 
-> No browser, no ads, no Electron. Search YouTube, SoundCloud, or your own selfhosted [Sonum](https://github.com/JustRoccat/Sonum) server, queue tracks, play local files, all from your terminal.
+> You name it, we stream it!
 
 ![demo](https://github.com/user-attachments/assets/d0ee7dcf-a751-4942-adeb-0d738d66095e)
 ![demo](https://github.com/user-attachments/assets/b12c3e5c-60b8-4727-b3fe-e2f8f693367c)
