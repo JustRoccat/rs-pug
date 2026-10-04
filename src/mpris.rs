@@ -208,7 +208,7 @@ impl PlayerIface {
     async fn playback_status(&self) -> String {
         self.state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .playback_status
             .as_str()
             .to_owned()
@@ -216,12 +216,12 @@ impl PlayerIface {
 
     #[zbus(property)]
     async fn loop_status(&self) -> String {
-        self.state.lock().unwrap().loop_status.clone()
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).loop_status.clone()
     }
 
     #[zbus(property)]
     async fn set_loop_status(&self, value: String) -> zbus::Result<()> {
-        self.state.lock().unwrap().loop_status = value.clone();
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).loop_status = value.clone();
         let _ = self.action_tx.send(MprisAction::SetLoopStatus(value));
         Ok(())
     }
@@ -238,7 +238,7 @@ impl PlayerIface {
 
     #[zbus(property)]
     async fn metadata(&self) -> HashMap<String, OwnedValue> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let mut map = HashMap::new();
         if let Some(track) = &state.track {
             let path = track_object_path(&track.id);
@@ -262,20 +262,20 @@ impl PlayerIface {
 
     #[zbus(property)]
     async fn volume(&self) -> f64 {
-        self.state.lock().unwrap().volume
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).volume
     }
 
     #[zbus(property)]
     async fn set_volume(&self, value: f64) -> zbus::Result<()> {
         let clamped = value.clamp(0.0, 1.3);
-        self.state.lock().unwrap().volume = clamped;
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).volume = clamped;
         let _ = self.action_tx.send(MprisAction::SetVolume(clamped));
         Ok(())
     }
 
     #[zbus(property(emits_changed_signal = "false"))]
     async fn position(&self) -> i64 {
-        self.state.lock().unwrap().position_micros
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).position_micros
     }
 
     #[zbus(property)]
@@ -412,7 +412,7 @@ impl MprisServer {
         let mut changed_track = false;
         let mut changed_volume = false;
         {
-            let mut guard = self.state.lock().unwrap();
+            let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
             guard.position_micros = position_micros;
             if guard.playback_status != playback_status {
                 guard.playback_status = playback_status;
@@ -457,7 +457,7 @@ impl MprisServer {
         }
         .to_owned();
         let changed = {
-            let mut guard = self.state.lock().unwrap();
+            let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if guard.loop_status != value {
                 guard.loop_status = value.clone();
                 true
@@ -480,7 +480,7 @@ impl MprisServer {
         };
         let position_micros = (position_seconds.max(0.0) * 1_000_000.0) as i64;
         {
-            let mut guard = self.state.lock().unwrap();
+            let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
             guard.position_micros = position_micros;
         }
         tokio::spawn(async move {

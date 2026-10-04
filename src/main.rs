@@ -168,8 +168,8 @@ async fn main() -> Result<()> {
                                 let _ = tx.send(CoreCmd::Next);
                             } else if cmd == "PREV" {
                                 let _ = tx.send(CoreCmd::Prev);
-                            } else if cmd.starts_with("PLAY ") {
-                                let path = cmd.strip_prefix("PLAY ").unwrap().to_string();
+                            } else if let Some(path) = cmd.strip_prefix("PLAY ") {
+                                let path = path.to_string();
                                 let song = crate::model::Song {
                                     id: path.clone(),
                                     title: path.clone(),
