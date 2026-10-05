@@ -214,7 +214,7 @@ Once configured, switch **Search source** to **Sonum** from the **Options** tab 
 rs-pug --source sonum
 ```
 
-Searching then queries `GET /tracks?q=<query>&limit=<n>` on the Sonum server; results are mapped into `rs-pug` songs, with playback pointed at the server's `/tracks/:id/stream` endpoint (so `mpv` streams directly from Sonum). The Albums view groups the returned tracks client-side by album/artist, since Sonum's `/tracks` endpoint doesn't have a dedicated album grouping. This means very large libraries may need a higher `limit` to see complete albums in search results.
+Searching then queries `GET /tracks?q=<query>&limit=<n>` on the Sonum server; results are mapped into `rs-pug` songs, with playback pointed at the server's `/tracks/:id/stream` endpoint (so `mpv` streams directly from Sonum). The Albums view queries Sonum's `GET /albums` endpoint (same `q`/`limit` params, grouping by album and album-artist server-side) and resolves each album's tracks in disc/track-number order. YouTube album search lists actual playlists (playlist-filtered search); a playlist's tracks load on demand with `e`, `Enter`, or `Tab` (30s timeout each), so searching stays fast. SoundCloud has no playlist search in `yt-dlp`, so it keeps single `full album` videos. Custom search sources hide the Albums tab entirely, since album search isn't supported for them.
 
 > [!NOTE]
 > This integration covers *searching, streaming, and cover art* from Sonum (covers come from `GET /tracks/:id/art`, honoring `api_token`). Local downloads, playlists, and the local library scanner are unaffected and continue to work with `~/.config/rs-pug/music-local/` as usual.

@@ -211,6 +211,24 @@ pub fn remove_selected_playlist_song(app: &mut App) {
         }
     }
 }
+pub fn ensure_album_state(app: &mut App) {
+    if app.albums.expanded.len() < app.albums.results.len() {
+        app.albums.expanded.extend(std::iter::repeat_n(
+            false,
+            app.albums.results.len() - app.albums.expanded.len(),
+        ));
+    } else if app.albums.expanded.len() > app.albums.results.len() {
+        app.albums.expanded.truncate(app.albums.results.len());
+    }
+    if let Some(a) = app.albums.results.get(app.albums.selected_result) {
+        app.albums.selected_song = app
+            .albums
+            .selected_song
+            .min(a.songs.len().saturating_sub(1));
+    } else {
+        app.albums.selected_song = 0;
+    }
+}
 pub fn ensure_playlist_state(app: &mut App) {
     if app.playlists.expanded.len() < app.playlists.playlists.len() {
         app.playlists

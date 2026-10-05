@@ -1,5 +1,5 @@
-use crate::config::{EqPreset, save_config};
 use crate::actions;
+use crate::config::{EqPreset, save_config};
 use crate::core::CoreCmd;
 use crate::eq;
 use crate::events;
@@ -301,8 +301,8 @@ pub fn handle_native_key_event(
     };
     // Shift+Z toggle
     let minimal_configured = app.key_minimal_toggle.clone();
-    let is_minimal_toggle =
-        seq.eq_ignore_ascii_case(&minimal_configured) || (seq == "Z" && minimal_configured.eq_ignore_ascii_case("S-Z"));
+    let is_minimal_toggle = seq.eq_ignore_ascii_case(&minimal_configured)
+        || (seq == "Z" && minimal_configured.eq_ignore_ascii_case("S-Z"));
     if is_minimal_toggle {
         clear_sequence(app);
         app.toggle_minimal();
@@ -446,8 +446,7 @@ pub fn handle_native_key_event(
                 && app.playlists.selected_playlist < app.playlists.playlists.len() =>
         {
             app.playlists.confirm_delete = true;
-            app.playlists.delete_name = app.playlists.playlists
-                [app.playlists.selected_playlist]
+            app.playlists.delete_name = app.playlists.playlists[app.playlists.selected_playlist]
                 .name
                 .clone();
         }
@@ -457,6 +456,14 @@ pub fn handle_native_key_event(
                 .expanded
                 .get_mut(app.playlists.selected_playlist)
             {
+                *open = !*open;
+            }
+        }
+        KeyCode::Char('e') if app.active_tab == Tab::Albums => {
+            if request_album_expand(app, cmd_tx, false) {
+                return true;
+            }
+            if let Some(open) = app.albums.expanded.get_mut(app.albums.selected_result) {
                 *open = !*open;
             }
         }
@@ -564,6 +571,8 @@ pub fn handle_native_key_event(
                     if !app.albums.results.is_empty() {
                         app.albums.selected_result = (app.albums.selected_result + 1)
                             .min(app.albums.results.len().saturating_sub(1));
+                        app.albums.selected_song = 0;
+                        playlist::ensure_album_state(app);
                     }
                 } else if app.active_tab == Tab::Local {
                     if app.local.view_mode == LocalViewMode::Flat {
@@ -594,6 +603,14 @@ pub fn handle_native_key_event(
                             playlist::ensure_playlist_state(app);
                         }
                     }
+                } else if app.active_tab == Tab::Albums {
+                    if let Some(album) = app.albums.results.get(app.albums.selected_result) {
+                        if !album.songs.is_empty() {
+                            app.albums.selected_song = (app.albums.selected_song + 1)
+                                .min(album.songs.len().saturating_sub(1));
+                            playlist::ensure_album_state(app);
+                        }
+                    }
                 } else if !app.queue.is_empty() {
                     app.selected_queue =
                         (app.selected_queue + 1).min(app.queue.len().saturating_sub(1));
@@ -612,6 +629,8 @@ pub fn handle_native_key_event(
                     playlist::ensure_playlist_state(app);
                 } else if app.active_tab == Tab::Albums {
                     app.albums.selected_result = app.albums.selected_result.saturating_sub(1);
+                    app.albums.selected_song = 0;
+                    playlist::ensure_album_state(app);
                 } else if app.active_tab == Tab::Local {
                     if app.local.view_mode == LocalViewMode::Flat {
                         app.local.selected_song = app.local.selected_song.saturating_sub(1);
@@ -626,6 +645,9 @@ pub fn handle_native_key_event(
                 if app.active_tab == Tab::Library {
                     app.playlists.selected_song = app.playlists.selected_song.saturating_sub(1);
                     playlist::ensure_playlist_state(app);
+                } else if app.active_tab == Tab::Albums {
+                    app.albums.selected_song = app.albums.selected_song.saturating_sub(1);
+                    playlist::ensure_album_state(app);
                 } else {
                     app.selected_queue = app.selected_queue.saturating_sub(1);
                 }
@@ -648,6 +670,9 @@ pub fn handle_native_key_event(
                 Focus::Search | Focus::Results => Focus::Queue,
                 Focus::Queue => Focus::Results,
             };
+            if app.active_tab == Tab::Albums && app.focus == Focus::Queue {
+                request_album_expand(app, cmd_tx, false);
+            }
         }
         KeyCode::Enter => {
             if is_core_options(app) {
@@ -706,7 +731,9 @@ pub fn handle_native_key_event(
                 return true;
             }
             match app.focus {
-                Focus::Results if app.active_tab == Tab::Discover && !app.multi_select.is_empty() => {
+                Focus::Results
+                    if app.active_tab == Tab::Discover && !app.multi_select.is_empty() =>
+                {
                     extras::bulk_queue_marked_discover(app, cmd_tx);
                 }
                 Focus::Results if app.active_tab == Tab::Discover => {
@@ -717,11 +744,16 @@ pub fn handle_native_key_event(
                     }
                 }
                 Focus::Results if app.active_tab == Tab::Albums => {
+                    if request_album_expand(app, cmd_tx, true) {
+                        return true;
+                    }
                     if let Some(album) = app.albums.results.get(app.albums.selected_result) {
-                        if let Some(song) = album.songs.first() {
-                            app.queue.push_back(song.clone());
-                            app.selected_queue = app.queue.len().saturating_sub(1);
-                            let _ = cmd_tx.send(CoreCmd::Play(song.clone()));
+                        app.queue.clear();
+                        for s in &album.songs {
+                            app.queue.push_back(s.clone());
+                        }
+                        if let Some(first) = app.queue.front().cloned() {
+                            let _ = cmd_tx.send(CoreCmd::Play(first));
                         }
                     }
                 }
@@ -750,6 +782,23 @@ pub fn handle_native_key_event(
                                     .selected_song
                                     .min(playlist.songs.len().saturating_sub(1));
                                 for s in playlist.songs.iter().skip(start) {
+                                    app.queue.push_back(s.clone());
+                                }
+                                if let Some(song) = app.queue.front().cloned() {
+                                    app.selected_queue = 0;
+                                    let _ = cmd_tx.send(CoreCmd::Play(song));
+                                }
+                            }
+                        }
+                    } else if app.active_tab == Tab::Albums {
+                        if let Some(album) = app.albums.results.get(app.albums.selected_result) {
+                            if !album.songs.is_empty() {
+                                app.queue.clear();
+                                let start = app
+                                    .albums
+                                    .selected_song
+                                    .min(album.songs.len().saturating_sub(1));
+                                for s in album.songs.iter().skip(start) {
                                     app.queue.push_back(s.clone());
                                 }
                                 if let Some(song) = app.queue.front().cloned() {
@@ -853,16 +902,13 @@ pub fn handle_native_key_event(
                 playlist::remove_selected_playlist_song(app);
                 playlist::ensure_playlist_state(app);
                 playlist::save_playlists(app);
-            } else if app.focus == Focus::Queue {
+            } else if app.focus == Focus::Queue && app.active_tab != Tab::Albums {
                 playlist::remove_selected_queue_song(app);
             }
         }
         KeyCode::Char('i') if app.active_tab == Tab::Library && app.focus == Focus::Results => {
             playlist::import_playlist_action(app);
             playlist::ensure_playlist_state(app);
-        }
-        KeyCode::Char('e') if app.active_tab == Tab::Library && app.focus == Focus::Results => {
-            playlist::export_selected_playlist_action(app);
         }
         KeyCode::Char('h') | KeyCode::Left if is_core_options(app) => match app.options_index {
             0 => {
@@ -1083,7 +1129,11 @@ fn toggle_image_background(app: &mut App) {
     app.set_flash(
         format!(
             "Image background: {}",
-            if app.opt_image_background { "ON" } else { "OFF" }
+            if app.opt_image_background {
+                "ON"
+            } else {
+                "OFF"
+            }
         ),
         2,
     );
@@ -1104,6 +1154,7 @@ fn toggle_icons(app: &mut App) {
 }
 fn toggle_search_source(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) {
     app.opt_source = crate::config::next_source(app.opt_source, app.opt_custom_sources.len());
+    app.sync_albums_tab();
     let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(
         app.opt_source,
         std::sync::Arc::clone(&app.opt_custom_sources),
@@ -1116,6 +1167,34 @@ fn toggle_search_source(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>) 
         ),
         2,
     );
+}
+fn request_album_expand(
+    app: &mut App,
+    cmd_tx: &mpsc::UnboundedSender<CoreCmd>,
+    autoplay: bool,
+) -> bool {
+    if app.albums.expanding_index.is_some() {
+        app.set_flash("Expanding playlist...", 3);
+        return true;
+    }
+    let Some(album) = app.albums.results.get(app.albums.selected_result) else {
+        return false;
+    };
+    if !album.songs.is_empty() {
+        return false;
+    }
+    let Some(url) = album.playlist_url.clone() else {
+        return false;
+    };
+    app.albums.expanding_index = Some(app.albums.selected_result);
+    app.albums.play_after_expand = autoplay;
+    let _ = cmd_tx.send(CoreCmd::ExpandAlbum {
+        index: app.albums.selected_result,
+        url,
+        artist: album.artist.clone(),
+    });
+    app.set_flash("Expanding playlist...", 3);
+    true
 }
 fn context_menu_len(app: &App) -> usize {
     if app.active_tab == Tab::Library && app.focus == Focus::Results {

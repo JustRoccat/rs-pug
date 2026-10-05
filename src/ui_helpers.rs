@@ -209,31 +209,22 @@ pub fn scroll_selection(app: &mut App, delta: isize, local_nav_len: usize) {
         Tab::Albums => {
             match app.focus {
                 Focus::Results => {
-                    let total_items: usize = app
-                        .albums
-                        .results
-                        .iter()
-                        .enumerate()
-                        .map(|(i, a)| {
-                            1
-                                + if app.albums.expanded.get(i).copied().unwrap_or(false) {
-                                    a.songs.len()
-                                } else {
-                                    0
-                                }
-                        })
-                        .sum();
-                    if total_items > 0 {
+                    let len = app.albums.results.len();
+                    if len > 0 {
                         app.albums.selected_result = ((app.albums.selected_result
                             as isize + delta)
-                            .clamp(0, total_items as isize - 1)) as usize;
+                            .clamp(0, len as isize - 1)) as usize;
+                        app.albums.selected_song = 0;
                     }
                 }
                 Focus::Queue => {
-                    let len = app.queue.len();
-                    if len > 0 {
-                        app.selected_queue = ((app.selected_queue as isize + delta)
-                            .clamp(0, len as isize - 1)) as usize;
+                    if let Some(a) = app.albums.results.get(app.albums.selected_result) {
+                        let len = a.songs.len();
+                        if len > 0 {
+                            app.albums.selected_song = ((app.albums.selected_song
+                                as isize + delta)
+                                .clamp(0, len as isize - 1)) as usize;
+                        }
                     }
                 }
                 Focus::Search => {}

@@ -141,6 +141,60 @@ pub(super) fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim
                 }));
             }
             items
+        } else if app.active_tab == Tab::Albums {
+            let needs_expand = app
+                .albums
+                .results
+                .get(app.albums.selected_result)
+                .map(|a| a.needs_expand())
+                .unwrap_or(false);
+            let expanding = app.albums.expanding_index.is_some();
+            let mut items: Vec<ListItem> = app
+                .albums
+                .results
+                .get(app.albums.selected_result)
+                .map(|a| {
+                    a.songs
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, song)| {
+                            let is_sel = idx == app.albums.selected_song && focused;
+                            if is_sel {
+                                ListItem::new(Line::from(vec![
+                                    Span::styled("▶ ", Style::default().fg(anim)),
+                                    Span::styled(
+                                        song.title.as_str(),
+                                        Style::default().fg(anim).add_modifier(Modifier::BOLD),
+                                    ),
+                                ]))
+                            } else {
+                                ListItem::new(Line::from(vec![
+                                    Span::styled(
+                                        format!(
+                                            "  {} ",
+                                            crate::icons::song_bullet(app.opt_icons)
+                                        ),
+                                        Style::default().fg(pal.get_color("dim")),
+                                    ),
+                                    Span::styled(
+                                        song.title.as_str(),
+                                        Style::default().fg(pal.get_color("text")),
+                                    ),
+                                ]))
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            items.push(dim_item("", pal));
+            if expanding {
+                items.push(dim_item("Expanding playlist...", pal));
+            } else if needs_expand {
+                items.push(dim_item("e expand playlist", pal));
+            } else {
+                items.push(dim_item("Enter play  c menu", pal));
+            }
+            items
         } else {
             app.queue
                 .iter()
@@ -194,6 +248,7 @@ pub(super) fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim
     }
     let queue_title = match app.active_tab {
         Tab::Library => " PLAYLIST SONGS ",
+        Tab::Albums => " ALBUM SONGS ",
         Tab::Options => " HELP ",
         _ => " QUEUE ",
     };
@@ -205,6 +260,8 @@ pub(super) fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim
     let mut state = ListState::default();
     let selected_idx = if app.active_tab == Tab::Library {
         app.playlists.selected_song
+    } else if app.active_tab == Tab::Albums {
+        app.albums.selected_song
     } else {
         app.selected_queue
     };

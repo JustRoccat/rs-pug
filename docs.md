@@ -470,7 +470,7 @@ Point changes to UI state returned in the `ui` field of `PluginDispatch`. All fi
 | `set_focus` | `string \| nil` | `"search"`, `"results"`, or `"queue"`. |
 | `set_search_mode` | `boolean \| nil` | Turns query-typing mode on/off. |
 | `set_selected_result` | `number \| nil` | 0-based index of the selected search result; clamped to the list's range. |
-| `set_selected_album_result` | `number \| nil` | Same, for the album list (counted together with expanded tracks). |
+| `set_selected_album_result` | `number \| nil` | Same, for the album list. |
 | `set_selected_queue` | `number \| nil` | 0-based index of the selected queue entry. |
 | `layout` | [`PluginUiLayoutPatch`](#pluginuilayoutpatch) | A point change to the layout. Only applied when `allow-lua-ui-changes = true`: silently ignored otherwise. |
 

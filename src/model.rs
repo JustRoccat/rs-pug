@@ -9,7 +9,10 @@ pub struct AlbumState {
     pub search_query: String,
     pub results: Vec<Album>,
     pub selected_result: usize,
+    pub selected_song: usize,
     pub expanded: Vec<bool>,
+    pub expanding_index: Option<usize>,
+    pub play_after_expand: bool,
 }
 #[derive(Debug, Default)]
 pub struct PlaylistState {
@@ -113,6 +116,15 @@ pub struct Album {
     pub name: String,
     pub artist: String,
     pub songs: Vec<Song>,
+
+    #[serde(default)]
+    pub playlist_url: Option<String>,
+}
+
+impl Album {
+    pub fn needs_expand(&self) -> bool {
+        self.songs.is_empty() && self.playlist_url.is_some()
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Playlist {
@@ -588,23 +600,11 @@ impl App {
                 Focus::Queue => self.queue_selection().cloned(),
                 Focus::Search => None,
             },
-            Tab::Albums => {
-                let mut current_flat_idx = 0;
-                for (i, album) in self.albums.results.iter().enumerate() {
-                    let expanded = self.albums.expanded.get(i).copied().unwrap_or(false);
-                    let album_size = 1 + if expanded { album.songs.len() } else { 0 };
-                    if self.albums.selected_result < current_flat_idx + album_size {
-                        if self.albums.selected_result == current_flat_idx {
-                            return None;
-                        } else {
-                            let song_idx = self.albums.selected_result - current_flat_idx - 1;
-                            return album.songs.get(song_idx).cloned();
-                        }
-                    }
-                    current_flat_idx += album_size;
-                }
-                None
-            }
+            Tab::Albums => self
+                .albums
+                .results
+                .get(self.albums.selected_result)
+                .and_then(|a| a.songs.get(self.albums.selected_song).cloned()),
             Tab::Library => self
                 .playlists
                 .playlists
@@ -638,6 +638,44 @@ impl App {
         self.theme = cfg.general.theme.clone();
         self.plugin_ui.allow_lua_ui_changes = cfg.lua.allow_lua_ui_changes;
         self.apply_keybinds(&cfg.keybinds);
+        self.sync_albums_tab();
+    }
+    pub fn albums_available(&self) -> bool {
+        !matches!(self.opt_source, crate::config::SearchSource::Custom(_))
+    }
+    pub fn sync_albums_tab(&mut self) {
+        let has_albums = self
+            .main_tabs
+            .iter()
+            .any(|tab| matches!(&tab.kind, MainTabKind::Stock(stock) if *stock == Tab::Albums));
+        if self.albums_available() == has_albums {
+            return;
+        }
+        if self.albums_available() {
+            let pos = self
+                .main_tabs
+                .iter()
+                .position(|tab| matches!(&tab.kind, MainTabKind::Stock(Tab::Discover)))
+                .map(|i| i + 1)
+                .unwrap_or(0)
+                .min(self.main_tabs.len());
+            self.main_tabs.insert(
+                pos,
+                MainTab {
+                    id: "albums".to_owned(),
+                    title: "ALBUMS".to_owned(),
+                    icon: crate::icons::nf::GRID.to_owned(),
+                    kind: MainTabKind::Stock(Tab::Albums),
+                },
+            );
+        } else {
+            self.main_tabs.retain(
+                |tab| !matches!(&tab.kind, MainTabKind::Stock(stock) if *stock == Tab::Albums),
+            );
+            if self.active_tab == Tab::Albums && self.plugin_ui.active_custom_tab.is_none() {
+                self.active_tab = Tab::Discover;
+            }
+        }
     }
     pub fn build_config(&self) -> Config {
         Config {
@@ -723,4 +761,34 @@ fn format_duration(seconds: f64) -> String {
     let m = secs / 60;
     let s = secs % 60;
     format!("{m:02}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SearchSource;
+
+    fn test_app() -> (App, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::storage::Storage::open_at(dir.path().join("pug.db")).unwrap();
+        (App::new(storage), dir)
+    }
+
+    fn has_albums_tab(app: &App) -> bool {
+        app.main_tabs.iter().any(|tab| tab.id == "albums")
+    }
+
+    #[test]
+    fn custom_source_hides_albums_tab_and_restore_brings_it_back() {
+        let (mut app, _dir) = test_app();
+        assert!(has_albums_tab(&app));
+        app.opt_source = SearchSource::Custom(0);
+        app.active_tab = Tab::Albums;
+        app.sync_albums_tab();
+        assert!(!has_albums_tab(&app));
+        assert_eq!(app.active_tab, Tab::Discover);
+        app.opt_source = SearchSource::YouTube;
+        app.sync_albums_tab();
+        assert!(has_albums_tab(&app));
+    }
 }

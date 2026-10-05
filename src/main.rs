@@ -281,6 +281,7 @@ async fn main() -> Result<()> {
                         6,
                     );
                 }
+                app.sync_albums_tab();
                 let _ = cmd_tx.send(CoreCmd::UpdateSearchSource(
                     app.opt_source,
                     std::sync::Arc::clone(&app.opt_custom_sources),

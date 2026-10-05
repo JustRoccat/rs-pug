@@ -1,6 +1,6 @@
 use crate::core::{CoreCmd, CoreEvent};
 use crate::model::{
-    default_main_tabs, App, Focus, MainTab, MainTabKind, PlayerState, RepeatMode, Tab,
+    App, Focus, MainTab, MainTabKind, PlayerState, RepeatMode, Tab, default_main_tabs,
 };
 use crate::plugins::{
     PluginCoreAction, PluginDispatch, PluginEvent, PluginLayoutConfig, PluginUiConfig,
@@ -25,6 +25,11 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
         CoreEvent::AlbumSearchDone(songs) => {
             app.albums.results = songs;
             app.albums.selected_result = 0;
+            app.albums.selected_song = 0;
+            app.albums.expanding_index = None;
+            app.albums.play_after_expand = false;
+            app.albums.expanded.clear();
+            crate::playlist::ensure_album_state(app);
             app.focus = Focus::Results;
             app.player_state = if app.current_song.is_some() {
                 PlayerState::Playing
@@ -44,6 +49,42 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
         }
         CoreEvent::AlbumSearchFailed(msg) => {
             app.player_state = PlayerState::Idle;
+            app.set_flash(msg, 6);
+            None
+        }
+        CoreEvent::AlbumExpanded { index, songs } => {
+            // late event from a previous search, must not overwrite the new results
+            if app.albums.expanding_index != Some(index) {
+                return None;
+            }
+            app.albums.expanding_index = None;
+            let autoplay = app.albums.play_after_expand;
+            app.albums.play_after_expand = false;
+            if let Some(album) = app.albums.results.get_mut(index) {
+                album.songs = songs;
+            }
+            crate::playlist::ensure_album_state(app);
+            if let Some(open) = app.albums.expanded.get_mut(index) {
+                *open = true;
+            }
+            if autoplay {
+                if let Some(album) = app.albums.results.get(index) {
+                    app.queue.clear();
+                    for s in &album.songs {
+                        app.queue.push_back(s.clone());
+                    }
+                }
+                if let Some(first) = app.queue.front().cloned() {
+                    app.selected_queue = 0;
+                    return Some(CoreCmd::Play(first));
+                }
+            }
+            app.set_flash("Playlist expanded", 3);
+            None
+        }
+        CoreEvent::AlbumExpandFailed(msg) => {
+            app.albums.expanding_index = None;
+            app.albums.play_after_expand = false;
             app.set_flash(msg, 6);
             None
         }
@@ -87,16 +128,13 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
             let next_song = if let Some(current) = app.current_song.as_ref() {
                 if let Some(pos) = app.queue.iter().position(|s| s.id == current.id) {
                     app.queue.remove(pos);
-                    app.queue
-                        .get(pos)
-                        .cloned()
-                        .or_else(|| {
-                            if app.repeat_mode == RepeatMode::All {
-                                app.queue.front().cloned()
-                            } else {
-                                None
-                            }
-                        })
+                    app.queue.get(pos).cloned().or_else(|| {
+                        if app.repeat_mode == RepeatMode::All {
+                            app.queue.front().cloned()
+                        } else {
+                            None
+                        }
+                    })
                 } else {
                     app.queue.front().cloned()
                 }
@@ -188,6 +226,9 @@ pub fn apply_plugin_dispatch(
 ) -> bool {
     if let Some(tab) = dispatch.ui.set_tab {
         if let Some(core_tab) = parse_tab_name(&tab) {
+            if core_tab == Tab::Albums && !app.albums_available() {
+                return dispatch.consume;
+            }
             app.active_tab = core_tab;
             app.plugin_ui.active_tab = None;
             app.plugin_ui.active_custom_tab = None;
@@ -217,25 +258,11 @@ pub fn apply_plugin_dispatch(
         app.focus = parse_focus_name(&focus).unwrap_or(app.focus);
     }
     if let Some(index) = dispatch.ui.set_selected_result {
-        app.search.selected_result = index
-            .min(app.search.results.len().saturating_sub(1));
+        app.search.selected_result = index.min(app.search.results.len().saturating_sub(1));
     }
     if let Some(index) = dispatch.ui.set_selected_album_result {
-        let total_items: usize = app
-            .albums
-            .results
-            .iter()
-            .enumerate()
-            .map(|(i, a)| {
-                1
-                    + if app.albums.expanded.get(i).copied().unwrap_or(false) {
-                        a.songs.len()
-                    } else {
-                        0
-                    }
-            })
-            .sum();
-        app.albums.selected_result = index.min(total_items.saturating_sub(1));
+        app.albums.selected_result = index.min(app.albums.results.len().saturating_sub(1));
+        crate::playlist::ensure_album_state(app);
     }
     if let Some(index) = dispatch.ui.set_selected_queue {
         app.selected_queue = index.min(app.queue.len().saturating_sub(1));
@@ -255,48 +282,36 @@ pub fn apply_plugin_dispatch(
 }
 pub fn plugin_event_from_core_event(event: &CoreEvent) -> PluginEvent {
     match event {
-        CoreEvent::Started(song) => {
-            PluginEvent {
-                kind: "started".to_owned(),
-                message: Some(song.title.clone()),
-                value: None,
-            }
-        }
-        CoreEvent::SearchDone(items) => {
-            PluginEvent {
-                kind: "search_done".to_owned(),
-                message: None,
-                value: Some(items.len() as f64),
-            }
-        }
-        CoreEvent::AlbumSearchDone(items) => {
-            PluginEvent {
-                kind: "album_search_done".to_owned(),
-                message: None,
-                value: Some(items.len() as f64),
-            }
-        }
-        CoreEvent::Progress { position, .. } => {
-            PluginEvent {
-                kind: "progress".to_owned(),
-                message: None,
-                value: Some(*position),
-            }
-        }
-        CoreEvent::Error(msg) => {
-            PluginEvent {
-                kind: "error".to_owned(),
-                message: Some(msg.clone()),
-                value: None,
-            }
-        }
-        _ => {
-            PluginEvent {
-                kind: "event".to_owned(),
-                message: None,
-                value: None,
-            }
-        }
+        CoreEvent::Started(song) => PluginEvent {
+            kind: "started".to_owned(),
+            message: Some(song.title.clone()),
+            value: None,
+        },
+        CoreEvent::SearchDone(items) => PluginEvent {
+            kind: "search_done".to_owned(),
+            message: None,
+            value: Some(items.len() as f64),
+        },
+        CoreEvent::AlbumSearchDone(items) => PluginEvent {
+            kind: "album_search_done".to_owned(),
+            message: None,
+            value: Some(items.len() as f64),
+        },
+        CoreEvent::Progress { position, .. } => PluginEvent {
+            kind: "progress".to_owned(),
+            message: None,
+            value: Some(*position),
+        },
+        CoreEvent::Error(msg) => PluginEvent {
+            kind: "error".to_owned(),
+            message: Some(msg.clone()),
+            value: None,
+        },
+        _ => PluginEvent {
+            kind: "event".to_owned(),
+            message: None,
+            value: None,
+        },
     }
 }
 pub fn parse_tab_name(raw: &str) -> Option<Tab> {
@@ -324,17 +339,17 @@ pub fn apply_ui_config(app: &mut App, config: PluginUiConfig) {
     let mut tabs = default_main_tabs();
     for id in &config.tabs.remove {
         if !tabs.iter().any(|tab| &tab.id == id) {
-            app.push_plugin_warning(
-                format!("Lua WARN [on_ui_config]: unknown tab in tabs.remove: {id}"),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: unknown tab in tabs.remove: {id}"
+            ));
         }
     }
     tabs.retain(|tab| !config.tabs.remove.iter().any(|id| id == &tab.id));
     for (id, rename) in &config.tabs.rename {
         if !tabs.iter().any(|tab| &tab.id == id) {
-            app.push_plugin_warning(
-                format!("Lua WARN [on_ui_config]: unknown tab in tabs.rename: {id}"),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: unknown tab in tabs.rename: {id}"
+            ));
             continue;
         }
         if let Some(tab) = tabs.iter_mut().find(|tab| &tab.id == id) {
@@ -352,9 +367,9 @@ pub fn apply_ui_config(app: &mut App, config: PluginUiConfig) {
             if let Some(pos) = tabs.iter().position(|tab| &tab.id == id) {
                 ordered.push(tabs.remove(pos));
             } else {
-                app.push_plugin_warning(
-                    format!("Lua WARN [on_ui_config]: unknown tab in tabs.order: {id}"),
-                );
+                app.push_plugin_warning(format!(
+                    "Lua WARN [on_ui_config]: unknown tab in tabs.order: {id}"
+                ));
             }
         }
         ordered.extend(tabs);
@@ -368,12 +383,10 @@ pub fn apply_ui_config(app: &mut App, config: PluginUiConfig) {
             continue;
         }
         if tabs.iter().any(|tab| tab.id == custom.id) {
-            app.push_plugin_warning(
-                format!(
-                    "Lua WARN [on_ui_config]: duplicate custom tab id ignored: {}",
-                    custom.id
-                ),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: duplicate custom tab id ignored: {}",
+                custom.id
+            ));
             continue;
         }
         let tab = MainTab {
@@ -385,34 +398,25 @@ pub fn apply_ui_config(app: &mut App, config: PluginUiConfig) {
         let requested = custom.position.unwrap_or(tabs.len() + 1);
         let pos = requested.saturating_sub(1).min(tabs.len());
         if requested == 0 || requested > tabs.len() + 1 {
-            app.push_plugin_warning(
-                format!(
-                    "Lua WARN [on_ui_config]: custom tab position clamped: {requested}"
-                ),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [on_ui_config]: custom tab position clamped: {requested}"
+            ));
         }
         tabs.insert(pos, tab);
     }
     app.main_tabs = tabs;
     if app.main_tabs.is_empty() {
         app.push_plugin_warning(
-            "Lua WARN [on_ui_config]: all stock tabs removed; defaults restored"
-                .to_owned(),
+            "Lua WARN [on_ui_config]: all stock tabs removed; defaults restored".to_owned(),
         );
         app.main_tabs = default_main_tabs();
     }
-    if !app
-        .main_tabs
-        .iter()
-        .any(|tab| match &tab.kind {
-            MainTabKind::Stock(stock) => {
-                app.plugin_ui.active_custom_tab.is_none() && *stock == app.active_tab
-            }
-            MainTabKind::Custom(id) => {
-                app.plugin_ui.active_custom_tab.as_ref() == Some(id)
-            }
-        })
-    {
+    if !app.main_tabs.iter().any(|tab| match &tab.kind {
+        MainTabKind::Stock(stock) => {
+            app.plugin_ui.active_custom_tab.is_none() && *stock == app.active_tab
+        }
+        MainTabKind::Custom(id) => app.plugin_ui.active_custom_tab.as_ref() == Some(id),
+    }) {
         activate_main_tab(app, 0);
     }
     apply_layout_config(app, config.layout);
@@ -473,22 +477,18 @@ fn apply_layout_dimensions(
     if let Some(value) = queue_width_percent {
         let clamped = value.clamp(10, 90);
         if clamped != value {
-            app.push_plugin_warning(
-                format!(
-                    "Lua WARN [{source}]: queue_width_percent clamped from {value} to {clamped}"
-                ),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [{source}]: queue_width_percent clamped from {value} to {clamped}"
+            ));
         }
         app.ui_layout.queue_width_percent = clamped;
     }
     if let Some(value) = visualizer_height {
         let clamped = value.clamp(0, 10);
         if clamped != value {
-            app.push_plugin_warning(
-                format!(
-                    "Lua WARN [{source}]: visualizer_height clamped from {value} to {clamped}"
-                ),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [{source}]: visualizer_height clamped from {value} to {clamped}"
+            ));
         }
         app.ui_layout.visualizer_height = clamped;
     }
@@ -510,18 +510,13 @@ fn apply_layout_hide(app: &mut App, hidden_items: Vec<String>) {
             "volume_bar" => app.ui_layout.show_volume_bar = false,
             "statusbar" => app.ui_layout.show_statusbar = false,
             "keybind_hints" => app.ui_layout.show_keybind_hints = false,
-            _ => {
-                app.push_plugin_warning(
-                    format!("Lua WARN [layout.hide]: unknown UI element: {item}"),
-                )
-            }
+            _ => app.push_plugin_warning(format!(
+                "Lua WARN [layout.hide]: unknown UI element: {item}"
+            )),
         }
     }
 }
-fn apply_custom_sections(
-    app: &mut App,
-    sections: Vec<crate::plugins::PluginCustomSection>,
-) {
+fn apply_custom_sections(app: &mut App, sections: Vec<crate::plugins::PluginCustomSection>) {
     for section in sections {
         if section.id.trim().is_empty() {
             app.push_plugin_warning(
@@ -531,25 +526,27 @@ fn apply_custom_sections(
             continue;
         }
         if !matches!(
-            section.position.as_str(), "above_player" | "below_player" | "left" | "right"
+            section.position.as_str(),
+            "above_player" | "below_player" | "left" | "right"
         ) {
-            app.push_plugin_warning(
-                format!(
-                    "Lua WARN [layout.plugin_ui.custom_sections]: invalid position for {}: {}",
-                    section.id, section.position
-                ),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [layout.plugin_ui.custom_sections]: invalid position for {}: {}",
+                section.id, section.position
+            ));
             continue;
         }
-        if !app.plugin_ui.custom_sections.iter().any(|s| s.id == section.id) {
+        if !app
+            .plugin_ui
+            .custom_sections
+            .iter()
+            .any(|s| s.id == section.id)
+        {
             app.plugin_ui.custom_sections.push(section);
         } else {
-            app.push_plugin_warning(
-                format!(
-                    "Lua WARN [layout.plugin_ui.custom_sections]: duplicate section id ignored: {}",
-                    section.id
-                ),
-            );
+            app.push_plugin_warning(format!(
+                "Lua WARN [layout.plugin_ui.custom_sections]: duplicate section id ignored: {}",
+                section.id
+            ));
         }
     }
 }
@@ -558,11 +555,9 @@ fn apply_tab_bar_position(app: &mut App, raw: &str, source: &str) {
         "top" | "bottom" | "left" | "right" => {
             app.ui_layout.tab_bar_position = raw.trim().to_ascii_lowercase();
         }
-        other => {
-            app.push_plugin_warning(
-                format!("Lua WARN [{source}]: unknown tab_bar_position: {other}"),
-            )
-        }
+        other => app.push_plugin_warning(format!(
+            "Lua WARN [{source}]: unknown tab_bar_position: {other}"
+        )),
     }
 }
 fn apply_queue_position(app: &mut App, raw: &str, source: &str) {
@@ -570,19 +565,17 @@ fn apply_queue_position(app: &mut App, raw: &str, source: &str) {
         "left" | "right" => {
             app.ui_layout.queue_position = raw.trim().to_ascii_lowercase();
         }
-        other => {
-            app.push_plugin_warning(
-                format!("Lua WARN [{source}]: unknown queue_position: {other}"),
-            )
-        }
+        other => app.push_plugin_warning(format!(
+            "Lua WARN [{source}]: unknown queue_position: {other}"
+        )),
     }
 }
 fn apply_tabs_width(app: &mut App, value: u16, source: &str) {
     let clamped = value.clamp(12, 40);
     if clamped != value {
-        app.push_plugin_warning(
-            format!("Lua WARN [{source}]: tabs_width clamped from {value} to {clamped}"),
-        );
+        app.push_plugin_warning(format!(
+            "Lua WARN [{source}]: tabs_width clamped from {value} to {clamped}"
+        ));
     }
     app.ui_layout.tabs_width = clamped;
 }
@@ -602,7 +595,12 @@ pub fn activate_main_tab(app: &mut App, index: usize) {
 }
 fn update_section_visibility(app: &mut App, hide: Vec<String>, show: Vec<String>) {
     for id in hide {
-        if !app.plugin_ui.hidden_sections.iter().any(|hidden| hidden == &id) {
+        if !app
+            .plugin_ui
+            .hidden_sections
+            .iter()
+            .any(|hidden| hidden == &id)
+        {
             app.plugin_ui.hidden_sections.push(id);
         }
     }

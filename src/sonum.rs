@@ -96,10 +96,35 @@ struct SonumTrackDto {
     title: String,
     artist: String,
     #[serde(default)]
-    album: String,
-    #[serde(default)]
     duration_seconds: Option<u64>,
     stream_url: String,
+    #[serde(default)]
+    track_number: Option<u32>,
+    #[serde(default)]
+    disc_number: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SonumAlbumDto {
+    name: String,
+    artist: String,
+    #[serde(default)]
+    track_ids: Vec<String>,
+}
+
+// sonum sorts an albums track ids by id string, so order the fetched tracks here
+fn sort_album_tracks(tracks: &mut [SonumTrackDto]) {
+    tracks.sort_by(|a, b| {
+        (
+            a.disc_number.unwrap_or(u32::MAX),
+            a.track_number.unwrap_or(u32::MAX),
+        )
+            .cmp(&(
+                b.disc_number.unwrap_or(u32::MAX),
+                b.track_number.unwrap_or(u32::MAX),
+            ))
+            .then_with(|| a.title.cmp(&b.title))
+    });
 }
 
 fn fetch_tracks(config: &SonumConfig, query: &str, limit: u8) -> Result<Vec<SonumTrackDto>> {
@@ -128,6 +153,50 @@ fn fetch_tracks(config: &SonumConfig, query: &str, limit: u8) -> Result<Vec<Sonu
         .context("invalid JSON response from Sonum server")
 }
 
+fn fetch_albums(config: &SonumConfig, query: &str, limit: u8) -> Result<Vec<SonumAlbumDto>> {
+    let url = format!("{}/albums", config.base_url());
+    let mut request = ureq::get(&url)
+        .query("limit", limit.to_string())
+        .config()
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build();
+    if !query.trim().is_empty() {
+        request = request.query("q", query);
+    }
+    if let Some(token) = &config.api_token {
+        request = request.header("Authorization", &format!("Bearer {token}"));
+    }
+    let mut response = request.call().map_err(|err| {
+        anyhow::anyhow!(
+            "failed to reach Sonum server at {} (check host/port in {}): {err}",
+            config.base_url(),
+            sonum_config_path().display()
+        )
+    })?;
+    response
+        .body_mut()
+        .read_json::<Vec<SonumAlbumDto>>()
+        .context("invalid JSON response from Sonum server (/albums)")
+}
+
+fn fetch_track_by_id(config: &SonumConfig, id: &str) -> Result<SonumTrackDto> {
+    let url = format!("{}/tracks/{id}", config.base_url());
+    let mut request = ureq::get(&url)
+        .config()
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build();
+    if let Some(token) = &config.api_token {
+        request = request.header("Authorization", &format!("Bearer {token}"));
+    }
+    let mut response = request
+        .call()
+        .map_err(|err| anyhow::anyhow!("failed to fetch Sonum track {id}: {err}"))?;
+    response
+        .body_mut()
+        .read_json::<SonumTrackDto>()
+        .with_context(|| format!("invalid JSON response from Sonum server (/tracks/{id})"))
+}
+
 fn track_to_song(config: &SonumConfig, track: SonumTrackDto) -> Song {
     Song {
         id: track.id,
@@ -154,32 +223,62 @@ pub async fn search_songs(limit: u8, query: String) -> Result<Vec<Song>> {
 pub async fn search_albums(limit: u8, query: String) -> Result<Vec<Album>> {
     tokio::task::spawn_blocking(move || {
         let config = load_sonum_config();
-        let tracks = fetch_tracks(&config, &query, limit)?;
+        let summaries = fetch_albums(&config, &query, limit)?;
         let mut albums: Vec<Album> = Vec::new();
-        for track in tracks {
-            let album_name = if track.album.trim().is_empty() {
-                "Unknown Album".to_string()
-            } else {
-                track.album.clone()
-            };
-            let artist = track.artist.clone();
-            let song = track_to_song(&config, track);
-            if let Some(existing) = albums
-                .iter_mut()
-                .find(|a| a.name == album_name && a.artist == artist)
-            {
-                existing.songs.push(song);
-            } else {
-                albums.push(Album {
-                    name: album_name,
-                    artist,
-                    songs: vec![song],
-                });
+        for summary in summaries {
+            let mut tracks = Vec::new();
+            for id in &summary.track_ids {
+                match fetch_track_by_id(&config, id) {
+                    Ok(track) => tracks.push(track),
+                    Err(err) => log::warn!("skipping Sonum track {id}: {err:#}"),
+                }
             }
+            if tracks.is_empty() {
+                continue;
+            }
+            sort_album_tracks(&mut tracks);
+            albums.push(Album {
+                name: summary.name,
+                artist: summary.artist,
+                songs: tracks
+                    .into_iter()
+                    .map(|t| track_to_song(&config, t))
+                    .collect(),
+                playlist_url: None,
+            });
         }
-        albums.retain(|a| a.songs.len() > 1);
         Ok(albums)
     })
     .await
     .context("Sonum album search task failed")?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn album_track(id: &str, title: &str, disc: Option<u32>, number: Option<u32>) -> SonumTrackDto {
+        SonumTrackDto {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            artist: "Night Drive".to_owned(),
+            duration_seconds: Some(180),
+            stream_url: format!("/tracks/{id}/stream"),
+            track_number: number,
+            disc_number: disc,
+        }
+    }
+
+    #[test]
+    fn album_tracks_sort_by_disc_then_number() {
+        let mut tracks = vec![
+            album_track("c", "Outro", Some(1), Some(9)),
+            album_track("a", "Intro", Some(1), Some(1)),
+            album_track("b", "Interlude", Some(2), Some(1)),
+            album_track("d", "Untagged", None, None),
+        ];
+        sort_album_tracks(&mut tracks);
+        let order: Vec<&str> = tracks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(order, vec!["a", "c", "b", "d"]);
+    }
 }

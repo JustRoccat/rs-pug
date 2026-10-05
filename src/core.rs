@@ -35,7 +35,10 @@ pub enum CoreCmd {
     VolumeDown,
     SetVolume(u8),
     SeekBy(i32),
-    PlayUrl { url: String, title: Option<String> },
+    PlayUrl {
+        url: String,
+        title: Option<String>,
+    },
     RawMpv(Value),
     ToggleMute,
     Next,
@@ -44,10 +47,22 @@ pub enum CoreCmd {
         crate::config::SearchSource,
         std::sync::Arc<Vec<crate::config::CustomSource>>,
     ),
-    DownloadSong { song: Song, path: String },
+    DownloadSong {
+        song: Song,
+        path: String,
+    },
     Quit,
     HandleSearchDone(Vec<Song>),
     HandleAlbumSearchDone(Vec<crate::model::Album>),
+    ExpandAlbum {
+        index: usize,
+        url: String,
+        artist: String,
+    },
+    HandleAlbumExpanded {
+        index: usize,
+        songs: Vec<Song>,
+    },
 }
 
 #[derive(Debug)]
@@ -56,6 +71,8 @@ pub enum CoreEvent {
     AlbumSearchDone(Vec<crate::model::Album>),
     SearchFailed(String),
     AlbumSearchFailed(String),
+    AlbumExpanded { index: usize, songs: Vec<Song> },
+    AlbumExpandFailed(String),
     Started(Song),
     Paused,
     Resumed,
@@ -158,6 +175,17 @@ impl Core {
                             });
                             Ok(())
                         }
+                        CoreCmd::ExpandAlbum { index, url, artist } => {
+                            let cmd_tx = cmd_tx.clone();
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                match expand_playlist(&url, &artist).await {
+                                    Ok(songs) => { let _ = cmd_tx.send(CoreCmd::HandleAlbumExpanded { index, songs }); }
+                                    Err(err) => { let _ = tx.send(CoreEvent::AlbumExpandFailed(format!("{err:#}"))); }
+                                }
+                            });
+                            Ok(())
+                        }
                         CoreCmd::Play(song) => self.play(song, &tx).await,
                         CoreCmd::SmartQueue(song) => {
                             let source = self.config.search.source;
@@ -245,6 +273,10 @@ impl Core {
                         }
                         CoreCmd::HandleAlbumSearchDone(albums) => {
                             let _ = tx.send(CoreEvent::AlbumSearchDone(albums));
+                            Ok(())
+                        }
+                        CoreCmd::HandleAlbumExpanded { index, songs } => {
+                            let _ = tx.send(CoreEvent::AlbumExpanded { index, songs });
                             Ok(())
                         }
                         CoreCmd::Quit => break,
@@ -420,6 +452,10 @@ struct FlatEntry {
     webpage_url: Option<String>,
     #[serde(default)]
     uploader: Option<String>,
+    #[serde(default)]
+    duration: Option<f64>,
+    #[serde(default)]
+    ie_key: Option<String>,
 }
 async fn wait_for_mpv_socket(socket: &str) -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -467,7 +503,6 @@ fn youtube_watch_url(id: &str) -> String {
     format!("https://www.youtube.com/watch?v={id}")
 }
 fn flat_entry_url(entry: &FlatEntry) -> String {
-    // flat results from yt-dlp may omit webpage_url, url is the fallback
     entry
         .webpage_url
         .clone()
@@ -639,61 +674,165 @@ async fn search_albums(
     customs: &std::sync::Arc<Vec<crate::config::CustomSource>>,
 ) -> Result<Vec<crate::model::Album>> {
     use crate::config::{CustomSourceKind, SearchSource};
-    let (prefix, youtube_style) = match source {
-        SearchSource::Sonum => return crate::sonum::search_albums(limit, query).await,
-        SearchSource::YouTube => ("ytsearch".to_owned(), true),
-        SearchSource::SoundCloud => ("scsearch".to_owned(), false),
+    match source {
+        SearchSource::Sonum => crate::sonum::search_albums(limit, query).await,
+        SearchSource::YouTube => search_youtube_playlist_albums(limit, &query).await,
+        // scsearch yields tracks only cause soundcloud exposes no playlist search to ytdlp, ytdlp stupid
+        SearchSource::SoundCloud => search_video_albums("scsearch", limit, &query, false).await,
         SearchSource::Custom(i) => {
             let Some(custom) = customs.get(i as usize) else {
                 anyhow::bail!("unknown custom source");
             };
             match &custom.kind {
-                CustomSourceKind::Ytdlp { prefix } => (prefix.clone(), false),
+                CustomSourceKind::Ytdlp { prefix } => {
+                    search_video_albums(prefix, limit, &query, false)
+                        .await
+                        .with_context(|| format!("source '{}'", custom.name))
+                }
                 CustomSourceKind::Command { .. } => {
                     anyhow::bail!("album search is not supported for source '{}'", custom.name);
                 }
             }
         }
-    };
-    let parsed = run_ytdlp_flat(&format!("{prefix}{limit}:{query} full album")).await;
-    let parsed = match source {
-        SearchSource::Custom(i) => {
-            let name = customs
-                .get(i as usize)
-                .map(|c| c.name.as_str())
-                .unwrap_or("custom");
-            parsed.with_context(|| format!("source '{name}'"))?
-        }
-        _ => parsed?,
-    };
+    }
+}
+
+async fn search_video_albums(
+    prefix: &str,
+    limit: u8,
+    query: &str,
+    youtube_style: bool,
+) -> Result<Vec<crate::model::Album>> {
+    let parsed = run_ytdlp_flat(&format!("{prefix}{limit}:{query} full album")).await?;
     let mut albums = Vec::new();
     for entry in parsed.entries {
-        let title_lower = entry.title.to_lowercase();
-        if title_lower.contains("full album") || title_lower.contains("complete album") {
-            let artist = entry
-                .uploader
-                .clone()
-                .unwrap_or_else(|| "Unknown Artist".to_string());
-            let webpage_url = if youtube_style {
-                youtube_watch_url(&entry.id)
-            } else {
-                flat_entry_url(&entry)
-            };
-            let song = Song {
-                id: entry.id.clone(),
-                title: entry.title.clone(),
-                webpage_url,
-                uploader: Some(artist.clone()),
-                duration: None,
-            };
-            albums.push(crate::model::Album {
-                name: entry.title,
-                artist,
-                songs: vec![song],
-            });
+        if !is_full_album_title(&entry.title) {
+            continue;
         }
+        let artist = entry
+            .uploader
+            .clone()
+            .unwrap_or_else(|| "Unknown Artist".to_string());
+        let name = entry.title.clone();
+        albums.push(crate::model::Album {
+            name,
+            artist: artist.clone(),
+            songs: vec![flat_entry_to_song(entry, youtube_style, &artist)],
+            playlist_url: None,
+        });
     }
     Ok(albums)
+}
+
+const PLAYLIST_EXPAND_TIMEOUT_SECS: u64 = 30;
+
+async fn search_youtube_playlist_albums(
+    limit: u8,
+    query: &str,
+) -> Result<Vec<crate::model::Album>> {
+    // super secret mysterious link, why? without it only single vidoes come back, why? secret...
+    let needle = format!(
+        "https://www.youtube.com/results?search_query={}+full+album&sp=EgIQAw%3D%3D",
+        percent_encode_query(query)
+    );
+    let searched = run_ytdlp_flat(&needle).await?;
+    let mut albums = Vec::new();
+    for entry in searched.entries.into_iter().take(limit.max(1) as usize) {
+        let artist = entry
+            .uploader
+            .clone()
+            .unwrap_or_else(|| "Unknown Artist".to_string());
+        let name = entry.title.clone();
+        if !is_playlist_entry(&entry) {
+            if !is_full_album_title(&name) {
+                continue;
+            }
+            albums.push(crate::model::Album {
+                name,
+                artist: artist.clone(),
+                songs: vec![flat_entry_to_song(entry, true, &artist)],
+                playlist_url: None,
+            });
+            continue;
+        }
+        albums.push(crate::model::Album {
+            name,
+            artist,
+            songs: Vec::new(),
+            playlist_url: Some(absolute_youtube_url(&entry.url)),
+        });
+    }
+    Ok(albums)
+}
+
+async fn expand_playlist(url: &str, artist: &str) -> Result<Vec<Song>> {
+    let list = tokio::time::timeout(
+        Duration::from_secs(PLAYLIST_EXPAND_TIMEOUT_SECS),
+        run_ytdlp_flat(url),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("playlist expand timed out after {PLAYLIST_EXPAND_TIMEOUT_SECS}s")
+    })?
+    .with_context(|| format!("playlist expand failed for {url}"))?;
+    if list.entries.is_empty() {
+        anyhow::bail!("playlist at {url} returned no tracks");
+    }
+    Ok(list
+        .entries
+        .into_iter()
+        .map(|sub| flat_entry_to_song(sub, true, artist))
+        .collect())
+}
+
+fn is_full_album_title(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    lower.contains("full album") || lower.contains("complete album")
+}
+
+fn is_playlist_entry(entry: &FlatEntry) -> bool {
+    entry.ie_key.as_deref() == Some("YoutubeTab") || entry.url.contains("playlist?list=")
+}
+
+fn absolute_youtube_url(url: &str) -> String {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_owned()
+    } else {
+        format!("https://www.youtube.com/{}", url.trim_start_matches('/'))
+    }
+}
+
+fn percent_encode_query(query: &str) -> String {
+    let mut out = String::new();
+    for byte in query.bytes() {
+        match byte {
+            b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn flat_entry_to_song(entry: FlatEntry, youtube_style: bool, fallback_artist: &str) -> Song {
+    let artist = entry
+        .uploader
+        .clone()
+        .unwrap_or_else(|| fallback_artist.to_string());
+    let webpage_url = if youtube_style {
+        youtube_watch_url(&entry.id)
+    } else {
+        flat_entry_url(&entry)
+    };
+    Song {
+        id: entry.id,
+        title: entry.title,
+        webpage_url,
+        uploader: Some(artist),
+        duration: entry.duration,
+    }
 }
 pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
     let mut songs = Vec::new();
@@ -891,6 +1030,52 @@ mod tests {
         let kept = filter_command_songs(songs, 1);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, "1");
+    }
+    #[test]
+    fn percent_encode_query_keeps_search_readable() {
+        assert_eq!(percent_encode_query("rust in peace"), "rust+in+peace");
+        assert_eq!(percent_encode_query("megadeth"), "megadeth");
+        assert_eq!(percent_encode_query("a&b=c"), "a%26b%3Dc");
+    }
+    #[test]
+    fn playlist_entries_detected_by_extractor_or_url() {
+        let playlist = FlatEntry {
+            id: "PL123".to_owned(),
+            title: "Rust In Peace".to_owned(),
+            url: "https://www.youtube.com/playlist?list=PL123".to_owned(),
+            webpage_url: None,
+            uploader: None,
+            duration: None,
+            ie_key: Some("YoutubeTab".to_owned()),
+        };
+        assert!(is_playlist_entry(&playlist));
+        let video = FlatEntry {
+            id: "FiFIGN5084Y".to_owned(),
+            title: "Holy Wars".to_owned(),
+            url: "FiFIGN5084Y".to_owned(),
+            webpage_url: None,
+            uploader: None,
+            duration: Some(397.0),
+            ie_key: Some("Youtube".to_owned()),
+        };
+        assert!(!is_playlist_entry(&video));
+    }
+    #[test]
+    fn full_album_title_matches_case_insensitive() {
+        assert!(is_full_album_title("Rust In Peace (Full Album)"));
+        assert!(is_full_album_title("COMPLETE ALBUM 1990"));
+        assert!(!is_full_album_title("Rust In Peace"));
+    }
+    #[test]
+    fn absolute_youtube_url_prefixes_relative_paths() {
+        assert_eq!(
+            absolute_youtube_url("https://www.youtube.com/playlist?list=PL1"),
+            "https://www.youtube.com/playlist?list=PL1"
+        );
+        assert_eq!(
+            absolute_youtube_url("/playlist?list=PL1"),
+            "https://www.youtube.com/playlist?list=PL1"
+        );
     }
     #[test]
     fn command_stdout_parses_as_songs() {

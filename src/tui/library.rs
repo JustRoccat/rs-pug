@@ -215,16 +215,20 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             })
             .collect()
     } else if app.active_tab == Tab::Albums {
-        let mut current_flat_idx = 0;
         app.albums
             .results
             .iter()
             .enumerate()
             .flat_map(|(idx, album)| {
-                let is_album_sel = current_flat_idx == app.albums.selected_result;
+                let is_sel = idx == app.albums.selected_result;
                 let open = app.albums.expanded.get(idx).copied().unwrap_or(false);
                 let arrow = if open { "▾" } else { "▸" };
-                let mut items = vec![if is_album_sel {
+                let count = if album.needs_expand() {
+                    "  ·  playlist".to_owned()
+                } else {
+                    format!("  ·  {} songs", album.songs.len())
+                };
+                let mut items = vec![if is_sel {
                     ListItem::new(Line::from(vec![
                         Span::styled("▶ ", Style::default().fg(anim)),
                         Span::styled(arrow.to_string(), Style::default().fg(anim)),
@@ -236,7 +240,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            format!("  ·  {} songs", album.songs.len()),
+                            count.clone(),
                             Style::default().fg(pal.get_color("muted")),
                         ),
                     ]))
@@ -253,37 +257,26 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                             Style::default().fg(pal.get_color("text")),
                         ),
                         Span::styled(
-                            format!("  ·  {} songs", album.songs.len()),
+                            count,
                             Style::default().fg(pal.get_color("dim")),
                         ),
                     ]))
                 }];
-                current_flat_idx += 1;
                 if open {
                     items.extend(album.songs.iter().map(|song| {
-                        let is_song_sel = current_flat_idx == app.albums.selected_result;
-                        current_flat_idx += 1;
-                        ListItem::new(Line::from(vec![
-                            if is_song_sel {
-                                Span::styled("▶ ", Style::default().fg(anim))
-                            } else {
-                                Span::styled(
-                                    format!(
-                                        "      {}  ",
-                                        crate::icons::song_bullet(app.opt_icons)
-                                    ),
-                                    Style::default().fg(pal.get_color("accent2")),
-                                )
-                            },
-                            Span::styled(
-                                song.title.as_str(),
-                                if is_song_sel {
-                                    Style::default().fg(anim).add_modifier(Modifier::BOLD)
-                                } else {
-                                    Style::default().fg(pal.get_color("text"))
-                                },
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            format!(
+                                "      {}  ",
+                                crate::icons::song_bullet(app.opt_icons)
                             ),
-                        ]))
+                            Style::default().fg(pal.get_color("accent2")),
+                        ),
+                        Span::styled(
+                            song.title.as_str(),
+                            Style::default().fg(pal.get_color("text")),
+                        ),
+                    ]))
                     }));
                 }
                 items

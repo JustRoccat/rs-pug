@@ -164,6 +164,10 @@ pub fn dispatch(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, action: 
             );
         }
         Action::GoToTab(tab) => {
+            if tab == Tab::Albums && !app.albums_available() {
+                app.set_flash("Albums are unavailable for custom search sources", 3);
+                return true;
+            }
             app.active_tab = tab;
             app.plugin_ui.active_tab = None;
             app.plugin_ui.active_custom_tab = None;
