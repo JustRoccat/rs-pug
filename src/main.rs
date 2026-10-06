@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
         ),
     );
     let mut terminal = terminal::setup_terminal()?;
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    cover::init_terminal_cell_size();    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
     let (plugin_tx, mut plugin_rx) = mpsc::unbounded_channel();
     let (mpris_server, mut mpris_action_rx) =
@@ -260,7 +260,7 @@ async fn main() -> Result<()> {
     let mut last_ui_state: Option<PluginUiState> = None;
     let mut last_ui_surface_state: Option<PluginUiState> = None;
     let mut last_cover_build = Instant::now() - Duration::from_secs(60);
-    let mut proto_inflight: Option<(String, u16, u16)> = None;
+    let mut proto_inflight: Option<(String, u16, u16, u16, u16)> = None;
     loop {
         while let Ok(hr) = hr_result_rx.try_recv() {
             let mut should_reload_plugins = hr.plugins_changed;
@@ -542,17 +542,26 @@ async fn main() -> Result<()> {
                 crossterm::terminal::size().unwrap_or((0, 0));
             // Async art build
             let cover = tui::minimal_cover_area(term_w, term_h);
-            let size = ratatui::layout::Size::new(
+            let avail = ratatui::layout::Size::new(
                 cover.width.saturating_sub(2),
                 cover.height.saturating_sub(2),
             );
-            let key = (app.cover_key.clone(), size.width, size.height);
+            let (fw, fh) = cover::terminal_cell_size();
+            let (cw, ch) =
+                cover::square_cover_cells(avail.width, avail.height, fw, fh);
+            let key = (
+                app.cover_key.clone(),
+                cw,
+                ch,
+                fw,
+                fh,
+            );
             let song_changed = app.cover_proto_key.0 != app.cover_key;
             let throttled = !song_changed
                 && app.cover_protocol.is_some()
                 && last_cover_build.elapsed() < Duration::from_millis(200);
-            if size.width >= 10
-                && size.height >= 5
+            if cw >= 10
+                && ch >= 5
                 && !throttled
                 && proto_inflight != Some(key.clone())
                 && (app.cover_protocol.is_none() || app.cover_proto_key != key)
@@ -560,24 +569,22 @@ async fn main() -> Result<()> {
                 if let Some(bitmap) = app.cover_bitmap.clone() {
                     let tx = proto_tx.clone();
                     tokio::task::spawn_blocking(move || {
-                        let picker =
-                            ratatui_image::picker::Picker::halfblocks();
-                        let font = picker.font_size();
                         let filled = cover::upscale_to_fill(
-                            bitmap,
-                            size.width,
-                            size.height,
-                            font.width,
-                            font.height,
+                            bitmap, cw, ch, fw, fh,
                         );
-                        let protocol = picker
-                            .new_protocol(
+                        let protocol =
+                            ratatui_image::protocol::halfblocks::Halfblocks::new(
                                 filled,
-                                size,
-                                ratatui_image::Resize::Fit(None),
+                                ratatui::layout::Size::new(cw, ch),
                             )
                             .ok()
-                            .map(crate::model::CoverProtocol);
+                            .map(|hb| {
+                                crate::model::CoverProtocol(
+                                    ratatui_image::protocol::Protocol::Halfblocks(
+                                        hb,
+                                    ),
+                                )
+                            });
                         let _ = tx.send(ProtoResult {
                             key,
                             protocol,
@@ -585,8 +592,10 @@ async fn main() -> Result<()> {
                     });
                     proto_inflight = Some((
                         app.cover_key.clone(),
-                        size.width,
-                        size.height,
+                        cw,
+                        ch,
+                        fw,
+                        fh,
                     ));
                     last_cover_build = Instant::now();
                 }
@@ -837,7 +846,7 @@ struct HotReloadPaths {
 }
 // Protocol result
 struct ProtoResult {
-    key: (String, u16, u16),
+    key: (String, u16, u16, u16, u16),
     protocol: Option<crate::model::CoverProtocol>,
 }
 struct HotReloadState {

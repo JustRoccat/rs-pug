@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "rs-pug"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "anyhow",
  "clap",

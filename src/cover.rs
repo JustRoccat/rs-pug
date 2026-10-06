@@ -1,7 +1,10 @@
 use crate::model::Song;
 use lofty::file::TaggedFileExt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+static PROBED_CELL: OnceLock<(u16, u16)> = OnceLock::new();
 
 pub struct CoverResult {
     pub key: String,
@@ -83,11 +86,7 @@ fn sonum_art_bytes(song: &Song) -> Option<Vec<u8>> {
         return None;
     }
     let id = song.id.trim();
-    if id.is_empty()
-        || id.contains('/')
-        || id.contains('\\')
-        || id.contains("..")
-    {
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return None;
     }
     let url = format!("{base}/tracks/{id}/art?size=thumbnail&placeholder=false");
@@ -129,8 +128,7 @@ pub fn palette3(img: &image::DynamicImage) -> [[u8; 3]; 3] {
             continue;
         }
         let (r, g, b) = (p[0] as u64, p[1] as u64, p[2] as u64);
-        let idx =
-            (((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)) as usize;
+        let idx = (((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)) as usize;
         count[idx] += 1;
         sum[idx][0] += r;
         sum[idx][1] += g;
@@ -201,26 +199,119 @@ pub fn upscale_to_fill(
     if scale <= 1.0 {
         return img;
     }
-    let (nw, nh) = (
-        ((iw * scale) as u32).max(1),
-        ((ih * scale) as u32).max(1),
-    );
+    let (nw, nh) = (((iw * scale) as u32).max(1), ((ih * scale) as u32).max(1));
     img.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
+}
+
+pub fn init_terminal_cell_size() {
+    if PROBED_CELL.get().is_some() {
+        return;
+    }
+    if let Some(cell) = probed_cell_size() {
+        let _ = PROBED_CELL.set(cell);
+    }
+}
+
+pub fn terminal_cell_size() -> (u16, u16) {
+    if let Some(cell) = ioctl_cell_size() {
+        return cell;
+    }
+    if let Some(cell) = PROBED_CELL.get().copied() {
+        return cell;
+    }
+    (10, 20)
+}
+
+fn probed_cell_size() -> Option<(u16, u16)> {
+    if let Some(cell) = ioctl_cell_size() {
+        return Some(cell);
+    }
+    query_cell_size()
+}
+
+fn ioctl_cell_size() -> Option<(u16, u16)> {
+    let ws = crossterm::terminal::window_size().ok()?;
+    if ws.columns == 0 || ws.rows == 0 || ws.width == 0 || ws.height == 0 {
+        return None;
+    }
+    let fw = ws.width / ws.columns;
+    let fh = ws.height / ws.rows;
+    if !(4..=64).contains(&fw) || !(4..=128).contains(&fh) {
+        return None;
+    }
+    Some((fw, fh))
+}
+
+fn query_cell_size() -> Option<(u16, u16)> {
+    let opts = ratatui_image::picker::cap_parser::QueryStdioOptions {
+        timeout: Duration::from_millis(350),
+        ..Default::default()
+    };
+    let picker = ratatui_image::picker::Picker::from_query_stdio_with_options(opts).ok()?;
+    let fs = picker.font_size();
+    if !(4..=64).contains(&fs.width) || !(4..=128).contains(&fs.height) {
+        return None;
+    }
+    Some((fs.width, fs.height))
+}
+
+pub fn square_cover_cells(
+    avail_cols: u16,
+    avail_rows: u16,
+    cell_w: u16,
+    cell_h: u16,
+) -> (u16, u16) {
+    if avail_cols == 0 || avail_rows == 0 {
+        return (0, 0);
+    }
+    let cw = cell_w.max(1) as u64;
+    let ch = cell_h.max(1) as u64;
+    let side = (avail_cols as u64 * cw).min(avail_rows as u64 * ch);
+    if side == 0 {
+        return (0, 0);
+    }
+    let gcd = {
+        let (mut a, mut b) = (cw, ch);
+        while b != 0 {
+            let t = a % b;
+            a = b;
+            b = t;
+        }
+        a.max(1)
+    };
+    let lcm = cw / gcd * ch;
+    let exact = side / lcm * lcm;
+    if exact == 0 {
+        let cols = (side / cw).max(1).min(avail_cols as u64) as u16;
+        let rows = (side / ch).max(1).min(avail_rows as u64) as u16;
+        return (cols, rows);
+    }
+    let cols = (exact / cw).min(avail_cols as u64) as u16;
+    let rows = (exact / ch).min(avail_rows as u64) as u16;
+    if cols == 0 || rows == 0 {
+        return (0, 0);
+    }
+    (cols, rows)
+}
+
+// Centercrop any art to square
+pub fn crop_to_square(img: image::DynamicImage) -> image::DynamicImage {
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 || w == h {
+        return img;
+    }
+    if w > h {
+        let x = (w - h) / 2;
+        img.crop_imm(x, 0, h, h)
+    } else {
+        let y = (h - w) / 2;
+        img.crop_imm(0, y, w, w)
+    }
 }
 
 // Crop wide thumbs
 pub fn crop_landscape_to_square(img: image::DynamicImage) -> image::DynamicImage {
-    let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 {
-        return img;
-    }
-    if (w as u64) * 4 > (h as u64) * 5 {
-        let side = h;
-        let x = (w - side) / 2;
-        img.crop_imm(x, 0, side, side)
-    } else {
-        img
-    }
+    crop_to_square(img)
 }
 
 fn remote_bytes(song: &Song) -> Option<Vec<u8>> {
@@ -235,7 +326,6 @@ fn remote_bytes(song: &Song) -> Option<Vec<u8>> {
     fetch_bytes(&thumb)
 }
 
-// Get thumb URL
 fn thumbnail_url(page_url: &str) -> Option<String> {
     let out = std::process::Command::new("yt-dlp")
         .arg("--no-playlist")
@@ -312,7 +402,10 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_string_lossy().to_string();
         let s = song(&path, &path);
-        assert_eq!(local_path_for(&s).map(|p| p.to_string_lossy().to_string()), Some(path));
+        assert_eq!(
+            local_path_for(&s).map(|p| p.to_string_lossy().to_string()),
+            Some(path)
+        );
         assert!(embedded_for_song(&s).is_none());
     }
 
@@ -354,8 +447,7 @@ mod tests {
                 image::Rgba([120, 80, 20, 255])
             };
         }
-        let cropped =
-            crop_landscape_to_square(image::DynamicImage::ImageRgba8(img));
+        let cropped = crop_landscape_to_square(image::DynamicImage::ImageRgba8(img));
         assert_eq!((cropped.width(), cropped.height()), (90, 90));
         let rgba = cropped.to_rgba8();
         assert_eq!(rgba.get_pixel(45, 45).0, [200, 10, 10, 255]);
@@ -366,7 +458,34 @@ mod tests {
         assert_eq!((sq.width(), sq.height()), (90, 90));
         let tall = image::DynamicImage::ImageRgba8(image::RgbaImage::new(90, 160));
         let tall = crop_landscape_to_square(tall);
-        assert_eq!((tall.width(), tall.height()), (90, 160));
+        assert_eq!((tall.width(), tall.height()), (90, 90));
+        let wide = image::DynamicImage::ImageRgba8(image::RgbaImage::new(100, 90));
+        let wide = crop_to_square(wide);
+        assert_eq!((wide.width(), wide.height()), (90, 90));
+    }
+
+    #[test]
+    fn square_cells_stay_pixel_exact_on_any_font() {
+        for (cw, ch) in [(8, 16), (10, 20), (9, 18), (9, 17), (12, 24)] {
+            for (acols, arows) in [(60, 20), (100, 30), (40, 40), (80, 25)] {
+                let (cols, rows) = square_cover_cells(acols, arows, cw, ch);
+                assert!(cols <= acols && rows <= arows, "fits {cw}x{ch}");
+                assert!(cols > 0 && rows > 0, "non-empty {cw}x{ch}");
+                assert_eq!(
+                    cols as u64 * cw as u64,
+                    rows as u64 * ch as u64,
+                    "square pixels for cell {cw}x{ch} in {acols}x{arows}"
+                );
+            }
+        }
+        assert_eq!((square_cover_cells(0, 20, 8, 16)), (0, 0));
+        assert_eq!((square_cover_cells(20, 0, 8, 16)), (0, 0));
+    }
+
+    #[test]
+    fn terminal_cell_falls_back_to_two_to_one() {
+        let (w, h) = terminal_cell_size();
+        assert!(w >= 4 && h >= 4, "sane {w}x{h}");
     }
 
     #[test]
@@ -400,11 +519,9 @@ mod tests {
         }
         let stops = palette3(&image::DynamicImage::ImageRgba8(img));
         let has_hue = |want: usize| {
-            stops.iter().any(|c| {
-                c[want] > 100
-                    && c[(want + 1) % 3] < 90
-                    && c[(want + 2) % 3] < 90
-            })
+            stops
+                .iter()
+                .any(|c| c[want] > 100 && c[(want + 1) % 3] < 90 && c[(want + 2) % 3] < 90)
         };
         assert!(has_hue(0), "red present: {stops:?}");
         assert!(has_hue(1), "green present: {stops:?}");
@@ -433,8 +550,7 @@ mod tests {
         let stops = palette3(&img);
         for c in &stops {
             assert!(
-                (c[0] as i16 - c[1] as i16).abs() < 25
-                    && (c[1] as i16 - c[2] as i16).abs() < 25,
+                (c[0] as i16 - c[1] as i16).abs() < 25 && (c[1] as i16 - c[2] as i16).abs() < 25,
                 "near gray: {stops:?}"
             );
         }
@@ -449,12 +565,7 @@ mod tests {
         }
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new(&mut png)
-            .write_image(
-                img.as_raw(),
-                64,
-                48,
-                image::ExtendedColorType::Rgba8,
-            )
+            .write_image(img.as_raw(), 64, 48, image::ExtendedColorType::Rgba8)
             .unwrap();
         let decoded = decode_cover(&png).expect("decodable");
         assert_eq!((decoded.width(), decoded.height()), (48, 48));
