@@ -42,3 +42,48 @@ pub fn natural_compare(a: &str, b: &str) -> std::cmp::Ordering {
         }
     }
 }
+pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "wav", "ogg", "opus", "m4a"];
+pub fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix('~') {
+        match std::env::var("HOME") {
+            Ok(home) => format!("{home}{rest}"),
+            Err(_) => path.to_owned(),
+        }
+    } else {
+        path.to_owned()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn audio_extensions_cover_common_lossy_and_lossless() {
+        for ext in ["mp3", "flac", "wav", "ogg", "opus", "m4a"] {
+            assert!(AUDIO_EXTENSIONS.contains(&ext), "missing {ext}");
+        }
+    }
+    #[test]
+    fn expand_tilde_leaves_plain_paths_alone() {
+        assert_eq!(expand_tilde("/home/you/Music"), "/home/you/Music");
+        assert_eq!(expand_tilde("relative/dir"), "relative/dir");
+    }
+    #[test]
+    fn expand_tilde_resolves_home_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "HOME";
+        let old = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, dir.path());
+        }
+        assert_eq!(
+            expand_tilde("~/Music"),
+            format!("{}/Music", dir.path().display())
+        );
+        unsafe {
+            match old {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}

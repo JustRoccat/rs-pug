@@ -446,6 +446,8 @@ pub struct App {
     pub opt_plugins_enabled: bool,
     pub opt_plugins_dir: String,
     pub opt_music_dirs: Vec<String>,
+    pub opt_download_format: String,
+    pub opt_download_dir: Option<String>,
     pub opt_smart_playlists_enabled: bool,
     pub opt_editing: bool,
     pub opt_edit_buffer: String,
@@ -512,13 +514,15 @@ impl App {
             opt_search_limit: 20,
             opt_source: crate::config::SearchSource::YouTube,
             opt_custom_sources: std::sync::Arc::new(Vec::new()),
-            opt_socket: "/tmp/rs-pug.sock".to_owned(),
+            opt_socket: crate::config::MpvConfig::default().socket,
             opt_theme: Theme::Dark,
             opt_mpris_enabled: true,
             opt_mpris_command: None,
             opt_plugins_enabled: true,
             opt_plugins_dir: crate::config::GeneralConfig::default().plugins_dir,
             opt_music_dirs: Vec::new(),
+            opt_download_format: "mp3".to_owned(),
+            opt_download_dir: None,
             opt_smart_playlists_enabled: true,
             opt_editing: false,
             opt_edit_buffer: String::new(),
@@ -593,6 +597,12 @@ impl App {
     pub fn queue_selection(&self) -> Option<&Song> {
         self.queue.get(self.selected_queue)
     }
+    pub fn effective_download_dir(&self) -> Option<String> {
+        self.opt_download_dir
+            .clone()
+            .filter(|d| !d.trim().is_empty())
+            .or_else(|| self.opt_music_dirs.first().cloned())
+    }
     pub fn selected_song_for_context(&self) -> Option<Song> {
         match self.active_tab {
             Tab::Discover => match self.focus {
@@ -632,6 +642,9 @@ impl App {
         self.opt_plugins_enabled = cfg.general.plugins_enabled;
         self.opt_plugins_dir = cfg.general.plugins_dir.clone();
         self.opt_music_dirs = cfg.general.music_directories.clone();
+        self.opt_download_format =
+            crate::config::normalize_download_format(&cfg.general.download_format);
+        self.opt_download_dir = cfg.general.download_dir.clone();
         self.opt_smart_playlists_enabled = cfg.general.smart_playlists_enabled;
         self.opt_image_background = cfg.general.image_background;
         self.opt_icons = cfg.general.icons;
@@ -641,7 +654,14 @@ impl App {
         self.sync_albums_tab();
     }
     pub fn albums_available(&self) -> bool {
-        !matches!(self.opt_source, crate::config::SearchSource::Custom(_))
+        match self.opt_source {
+            crate::config::SearchSource::Custom(i) => {
+                self.opt_custom_sources.get(i as usize).is_some_and(|c| {
+                    c.albums && matches!(c.kind, crate::config::CustomSourceKind::Ytdlp { .. })
+                })
+            }
+            _ => true,
+        }
     }
     pub fn sync_albums_tab(&mut self) {
         let has_albums = self
@@ -686,6 +706,10 @@ impl App {
                 plugins_enabled: self.opt_plugins_enabled,
                 plugins_dir: self.opt_plugins_dir.clone(),
                 music_directories: self.opt_music_dirs.clone(),
+                download_format: crate::config::normalize_download_format(
+                    &self.opt_download_format,
+                ),
+                download_dir: self.opt_download_dir.clone(),
                 smart_playlists_enabled: self.opt_smart_playlists_enabled,
                 image_background: self.opt_image_background,
                 icons: self.opt_icons,
@@ -790,5 +814,72 @@ mod tests {
         app.opt_source = SearchSource::YouTube;
         app.sync_albums_tab();
         assert!(has_albums_tab(&app));
+    }
+    fn ytdlp_custom(name: &str, albums: bool) -> crate::config::CustomSource {
+        crate::config::CustomSource {
+            name: name.to_owned(),
+            albums,
+            kind: crate::config::CustomSourceKind::Ytdlp {
+                prefix: "ytsearch".to_owned(),
+            },
+        }
+    }
+    #[test]
+    fn ytdlp_custom_with_albums_keeps_albums_tab() {
+        let (mut app, _dir) = test_app();
+        app.opt_custom_sources = std::sync::Arc::new(vec![ytdlp_custom("PeerTube", true)]);
+        app.opt_source = SearchSource::Custom(0);
+        app.sync_albums_tab();
+        assert!(has_albums_tab(&app));
+        assert!(app.albums_available());
+    }
+    #[test]
+    fn ytdlp_custom_without_albums_hides_tab() {
+        let (mut app, _dir) = test_app();
+        app.opt_custom_sources = std::sync::Arc::new(vec![ytdlp_custom("PeerTube", false)]);
+        app.opt_source = SearchSource::Custom(0);
+        app.active_tab = Tab::Albums;
+        app.sync_albums_tab();
+        assert!(!has_albums_tab(&app));
+        assert_eq!(app.active_tab, Tab::Discover);
+    }
+    #[test]
+    fn command_custom_with_albums_stays_hidden() {
+        let (mut app, _dir) = test_app();
+        app.opt_custom_sources = std::sync::Arc::new(vec![crate::config::CustomSource {
+            name: "Script".to_owned(),
+            albums: true,
+            kind: crate::config::CustomSourceKind::Command {
+                command: vec!["/bin/echo".to_owned()],
+                timeout_secs: 15,
+            },
+        }]);
+        app.opt_source = SearchSource::Custom(0);
+        app.sync_albums_tab();
+        assert!(!has_albums_tab(&app));
+        assert!(!app.albums_available());
+    }
+    #[test]
+    fn download_dir_defaults_to_music_dir_until_overridden() {
+        let (mut app, _dir) = test_app();
+        assert_eq!(app.effective_download_dir(), None);
+        app.opt_music_dirs = vec!["/home/you/Music".to_owned()];
+        assert_eq!(
+            app.effective_download_dir(),
+            Some("/home/you/Music".to_owned())
+        );
+        app.opt_download_dir = Some("  ".to_owned());
+        assert_eq!(
+            app.effective_download_dir(),
+            Some("/home/you/Music".to_owned())
+        );
+        app.opt_download_dir = Some("/tmp/dls".to_owned());
+        assert_eq!(app.effective_download_dir(), Some("/tmp/dls".to_owned()));
+        app.opt_download_dir = None;
+        app.opt_music_dirs = vec!["/home/you/Other".to_owned()];
+        assert_eq!(
+            app.effective_download_dir(),
+            Some("/home/you/Other".to_owned())
+        );
     }
 }

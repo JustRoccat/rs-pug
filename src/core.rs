@@ -50,6 +50,7 @@ pub enum CoreCmd {
     DownloadSong {
         song: Song,
         path: String,
+        format: String,
     },
     Quit,
     HandleSearchDone(Vec<Song>),
@@ -98,20 +99,52 @@ pub struct Core {
 
 impl Core {
     pub async fn new(config: Config, plugins: Arc<Mutex<PluginManager>>) -> Result<Self> {
-        let mpv_child = Command::new("mpv")
-            .arg("--idle")
+        crate::config::ensure_socket_parent(&config.mpv.socket);
+        let sonum_servers = crate::sonum::load_sonum_config().all_servers();
+        for server in sonum_servers.iter().filter(|s| s.token_over_plaintext()) {
+            log::warn!(
+                "Sonum api_token for '{}' is set with non-loopback host over plain http ({}); consider scheme = \"https\"",
+                server.display_name(),
+                server.base_url()
+            );
+        }
+        let mut mpv = Command::new("mpv");
+        mpv.arg("--idle")
             .arg("--no-video")
             .arg("--profile=high-quality")
             .arg("--audio-display=no")
             .arg("--volume=70")
             .arg("--audio-client-name=rs-pug")
-            .arg(format!("--input-ipc-server={}", config.mpv.socket))
+            .arg(format!("--input-ipc-server={}", config.mpv.socket));
+        let sonum_tokens: Vec<&str> = sonum_servers
+            .iter()
+            .filter_map(|s| s.api_token.as_deref())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect();
+        if sonum_tokens.len() > 1 {
+            log::warn!("multiple Sonum servers define api_token; mpv streaming uses the first one");
+        }
+        if let Some(token) = sonum_tokens.first() {
+            mpv.arg(format!(
+                "--http-header-fields=Authorization: Bearer {token}"
+            ));
+        }
+        let mpv_child = mpv
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|err| anyhow::anyhow!("failed to start mpv (is `mpv` installed?): {err}"))?;
         wait_for_mpv_socket(config.mpv.socket.as_str()).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                config.mpv.socket.as_str(),
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
         let custom_sources = std::sync::Arc::new(config.search.custom_sources.clone());
         let core = Self {
             plugins,
@@ -220,43 +253,12 @@ impl Core {
                         CoreCmd::ToggleMute => self.toggle_mute(&tx).await,
                         CoreCmd::Next => self.next(&tx).await,
                         CoreCmd::Prev => self.prev(&tx).await,
-                        CoreCmd::DownloadSong { song, path } => {
+                        CoreCmd::DownloadSong { song, path, format } => {
+                            let format =
+                                crate::config::normalize_download_format(&format);
                             let tx = tx.clone();
                             tokio::spawn(async move {
-                                let output_template = format!("{}/%(title)s.%(ext)s", path);
-                                let result = Command::new("yt-dlp")
-                                    .arg("--no-playlist")
-                                    .arg("-x")
-                                    .arg("--audio-format")
-                                    .arg("mp3")
-                                    .arg("--audio-quality")
-                                    .arg("0")
-                                    .arg("--embed-metadata")
-                                    .arg("--embed-thumbnail")
-                                    .arg("--convert-thumbnails")
-                                    .arg("jpg")
-                                    .arg("--parse-metadata")
-                                    .arg("uploader:%(artist)s")
-                                    .arg("--parse-metadata")
-                                    .arg("channel:%(artist)s")
-                                    .arg("--parse-metadata")
-                                    .arg("title:%(title)s")
-                                    .arg("-o")
-                                    .arg(output_template)
-                                    .arg("--")
-                                    .arg(&song.webpage_url)
-                                    .output()
-                                    .await;
-                                let res = match result {
-                                    Ok(output) if output.status.success() => {
-                                        Ok(format!("Downloaded: {}", song.title))
-                                    }
-                                    Ok(output) => {
-                                        let stderr = String::from_utf8_lossy(&output.stderr);
-                                        Err(format!("yt-dlp failed: {}", stderr.trim()))
-                                    }
-                                    Err(err) => Err(format!("failed to run yt-dlp: {err}")),
-                                };
+                                let res = download_song(song.clone(), path, &format).await;
                                 let _ = tx.send(CoreEvent::DownloadFinished(res));
                             });
                             Ok(())
@@ -501,6 +503,148 @@ async fn run_ytdlp_flat(needle: &str) -> Result<FlatSearch> {
 }
 fn youtube_watch_url(id: &str) -> String {
     format!("https://www.youtube.com/watch?v={id}")
+}
+fn ytdlp_download_args(format: &str, path: &str) -> Vec<String> {
+    let mut args = vec!["--no-playlist".to_owned(), "-x".to_owned()];
+    if format != "best" {
+        args.push("--audio-format".to_owned());
+        args.push(format.to_owned());
+        args.push("--audio-quality".to_owned());
+        args.push("0".to_owned());
+    } else {
+        args.push("--audio-format".to_owned());
+        args.push("best".to_owned());
+    }
+    if format != "best" {
+        args.push("--embed-metadata".to_owned());
+        args.push("--embed-thumbnail".to_owned());
+        args.push("--convert-thumbnails".to_owned());
+        args.push("jpg".to_owned());
+    }
+    args.push("--parse-metadata".to_owned());
+    args.push("uploader:%(artist)s".to_owned());
+    args.push("--parse-metadata".to_owned());
+    args.push("channel:%(artist)s".to_owned());
+    args.push("--parse-metadata".to_owned());
+    args.push("title:%(title)s".to_owned());
+    args.push("-P".to_owned());
+    args.push(path.to_owned());
+    args.push("-o".to_owned());
+    args.push("%(title)s.%(ext)s".to_owned());
+    args
+}
+fn needs_transcode(requested: &str, source_ext: &str) -> bool {
+    requested != "best" && requested != source_ext
+}
+fn ffmpeg_codec(format: &str) -> Option<&'static str> {
+    match format {
+        "mp3" => Some("libmp3lame"),
+        "m4a" => Some("aac"),
+        "opus" => Some("libopus"),
+        "flac" => Some("flac"),
+        _ => None,
+    }
+}
+async fn transcode_audio(
+    tmp: &std::path::Path,
+    dest: &std::path::Path,
+    format: &str,
+) -> Result<(), String> {
+    let Some(codec) = ffmpeg_codec(format) else {
+        return Err(format!("unsupported download format: {format}"));
+    };
+    let output = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(tmp)
+        .arg("-vn")
+        .arg("-map_metadata")
+        .arg("0")
+        .arg("-c:a")
+        .arg(codec)
+        .arg(dest)
+        .output()
+        .await
+        .map_err(|err| format!("failed to run ffmpeg (is `ffmpeg` installed?): {err}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed: {}",
+            truncate_stderr(&output.stderr)
+        ))
+    }
+}
+async fn download_song(song: Song, path: String, format: &str) -> Result<String, String> {
+    let path = crate::utils::expand_tilde(&path);
+    if crate::sonum::sonum_config_for_url(&song.webpage_url).is_some() {
+        let url = song.webpage_url.clone();
+        let title = song.title.clone();
+        let bytes = tokio::task::spawn_blocking(move || crate::sonum::fetch_sonum_bytes(&url))
+            .await
+            .map_err(|err| format!("Sonum download failed: {err}"))?
+            .map_err(|err| format!("{err:#}"))?;
+        let ext = crate::sonum::stream_extension(&song.webpage_url);
+        let name = crate::sonum::sanitize_download_filename(&song.title);
+        if needs_transcode(format, &ext) {
+            let tmp = std::path::Path::new(&path).join(format!("{name}.tmp.{ext}"));
+            let dest = std::path::Path::new(&path).join(format!("{name}.{format}"));
+            if let Some(parent) = tmp.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+            }
+            tokio::fs::write(&tmp, &bytes)
+                .await
+                .map_err(|err| format!("failed to write {}: {err}", tmp.display()))?;
+            match transcode_audio(&tmp, &dest, format).await {
+                Ok(()) => {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    return Ok(format!("Downloaded: {title} to {}", dest.display()));
+                }
+                Err(err) => {
+                    let orig = std::path::Path::new(&path).join(format!("{name}.{ext}"));
+                    if tokio::fs::rename(&tmp, &orig).await.is_ok() {
+                        return Ok(format!(
+                            "Downloaded original {ext} ({err}): {title} to {}",
+                            orig.display()
+                        ));
+                    }
+                    return Err(format!(
+                        "transcode failed ({err}); original kept at {}",
+                        tmp.display()
+                    ));
+                }
+            }
+        }
+        let dest = std::path::Path::new(&path).join(format!("{name}.{ext}"));
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+        }
+        tokio::fs::write(&dest, &bytes)
+            .await
+            .map_err(|err| format!("failed to write {}: {err}", dest.display()))?;
+        return Ok(format!("Downloaded: {title} to {}", dest.display()));
+    }
+    let args = ytdlp_download_args(format, &path);
+    let result = Command::new("yt-dlp")
+        .args(&args)
+        .arg("--")
+        .arg(&song.webpage_url)
+        .output()
+        .await;
+    match result {
+        Ok(output) if output.status.success() => Ok(format!("Downloaded: {}", song.title)),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("yt-dlp failed: {}", stderr.trim()))
+        }
+        Err(err) => Err(format!("failed to run yt-dlp: {err}")),
+    }
 }
 fn flat_entry_url(entry: &FlatEntry) -> String {
     entry
@@ -837,7 +981,7 @@ fn flat_entry_to_song(entry: FlatEntry, youtube_style: bool, fallback_artist: &s
 pub fn scan_local_library(config: &Config) -> Vec<LocalSong> {
     let mut songs = Vec::new();
     let mut seen_files = HashSet::new();
-    let extensions = ["mp3", "flac", "wav", "ogg", "m4a"];
+    let extensions = crate::utils::AUDIO_EXTENSIONS;
     for dir in &config.general.music_directories {
         let path_str = if dir.starts_with('~') {
             if let Ok(home) = std::env::var("HOME") {
@@ -1114,6 +1258,38 @@ mod tests {
             "Should have deduplicated symlinks to the same file. Found: {}",
             songs.len()
         );
+    }
+    #[test]
+    fn download_args_use_search_path_and_plain_template() {
+        let args = ytdlp_download_args("mp3", "/music/100%");
+        let joined = args.join(" ");
+        assert!(args.contains(&"-P".to_owned()));
+        assert!(args.contains(&"/music/100%".to_owned()));
+        assert!(args.contains(&"%(title)s.%(ext)s".to_owned()));
+        assert!(!joined.contains("/%(title)s"));
+        assert!(args.contains(&"mp3".to_owned()));
+    }
+    #[test]
+    fn download_args_best_keeps_original_codec() {
+        let args = ytdlp_download_args("best", "/music");
+        assert!(args.contains(&"best".to_owned()));
+        assert!(!args.contains(&"--embed-thumbnail".to_owned()));
+        assert!(!args.contains(&"--audio-quality".to_owned()));
+    }
+    #[test]
+    fn transcode_decision_skips_best_and_matching() {
+        assert!(!needs_transcode("best", "mp3"));
+        assert!(!needs_transcode("mp3", "mp3"));
+        assert!(needs_transcode("flac", "mp3"));
+        assert!(needs_transcode("mp3", "flac"));
+    }
+    #[test]
+    fn ffmpeg_codecs_cover_download_formats() {
+        assert_eq!(ffmpeg_codec("mp3"), Some("libmp3lame"));
+        assert_eq!(ffmpeg_codec("m4a"), Some("aac"));
+        assert_eq!(ffmpeg_codec("opus"), Some("libopus"));
+        assert_eq!(ffmpeg_codec("flac"), Some("flac"));
+        assert_eq!(ffmpeg_codec("best"), None);
     }
 }
 pub fn write_local_tags(song: &LocalSong) -> Result<()> {

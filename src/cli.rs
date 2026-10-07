@@ -41,7 +41,11 @@ pub fn validate_report(
     for custom in &config.search.custom_sources {
         match &custom.kind {
             CustomSourceKind::Ytdlp { prefix } => {
-                out.push_str(&format!("  - {} [ytdlp] prefix=\"{prefix}\"\n", custom.name));
+                let albums = if custom.albums { " albums=true" } else { "" };
+                out.push_str(&format!(
+                    "  - {} [ytdlp] prefix=\"{prefix}\"{albums}\n",
+                    custom.name
+                ));
             }
             CustomSourceKind::Command {
                 command,
@@ -92,6 +96,7 @@ mod tests {
     fn customs() -> Vec<CustomSource> {
         vec![CustomSource {
             name: "My Script".to_owned(),
+            albums: false,
             kind: CustomSourceKind::Command {
                 command: vec!["/bin/echo".to_owned()],
                 timeout_secs: 15,

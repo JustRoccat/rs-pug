@@ -1,36 +1,38 @@
 # rs-pug usage guide
 
-Everything that did not fit in the README: keys, config file, Minimal, EQ, visualizer, IPC, themes, Sonum, storage. Lua plugins live in [`docs.md`](./docs.md).
+Everything that didn't fit in the README lives here: keys, sound shaping, remote control, themes, and hooking up your own music sources. Lua plugins have a reference of their own:
+
+[docs.md](./docs.md)
 
 ## Keys
 
-| Key | Action |
+| Key | What it does |
 |-----|--------|
-| `1`-`5` | Switch tabs: Discover, Albums, Library (playlists), Local, Options |
-| `Tab` | Switch panel focus |
-| `j` / `k` | Move up / down |
-| `/` | Search |
-| `Enter` | Play (or add all marked songs to the queue, see Multi-select below) |
-| `Space` | Pause / Resume |
-| `n` / `p` | Next / Previous |
-| `m` | Mute |
-| `r` | Cycle repeat mode |
-| `c` | Context menu |
-| `v` | Toggle flat/organized view (Local tab) |
-| `Ctrl+V` | Toggle the real FFT spectrum visualizer (needs `parec`) |
-| `Shift+Z` | Toggle minimal mode |
-| `e` | Edit ID3 tags for selected local file (Local tab) |
-| `s` | Cycle local sort mode (Local tab) |
-| `g` / `a` | Filter local library by genre / artist (Local tab, Organized view) |
-| `b` | Filter by album (Organized view), or mark/unmark for bulk-queue (Flat view / Discover) |
-| `F` | Clear local library filters |
-| `:` | Open the command palette |
-| `?` | Show the full command reference |
-| `q` | Quit |
+| 1-5 | Switch tabs: Discover, Albums, Library (playlists), Local, Options |
+| Tab | Switch panel focus |
+| j / k | Move up / down |
+| / | Search |
+| Enter | Play (or queue everything you marked, see Multi-select) |
+| Space | Pause / Resume |
+| n / p | Next / Previous |
+| m | Mute |
+| r | Cycle repeat mode |
+| c | Context menu |
+| v | Toggle flat/organized view (Local tab) |
+| Ctrl+V | Toggle the real FFT spectrum visualizer |
+| Shift+Z | Toggle minimal mode |
+| e | Edit tags of the selected local file (Local tab) |
+| s | Cycle local sort mode (Local tab) |
+| g / a | Filter the local library by genre / artist (Local tab, Organized view) |
+| b | Filter by album (Organized view), or mark/unmark for bulk-queue (Flat view / Discover) |
+| F | Clear local library filters |
+| : | Open the command palette |
+| ? | Show the full command reference |
+| q | Quit |
 
 ### Remapping keys
 
-`n`, `p`, `m`, `r`, `z`, `[`, `]`, the FFT toggle and the Minimal toggle can be rebound in `~/.config/rs-pug/config.toml`:
+The transport keys, the volume and seek keys, and both toggles can be rebound. They live in the keybinds section of the config file:
 
 ```toml
 [keybinds]
@@ -45,51 +47,72 @@ fft_toggle = "C-v"   # Ctrl+V
 minimal_toggle = "S-Z"   # Shift+Z
 ```
 
-Modifiers are prefixed with `C-` (Ctrl), `M-` (Alt), and/or `S-` (Shift), e.g. `C-r` or `M-S-n`. Multi-key sequences are space-separated, e.g. `g g` (press `g` twice within 1.5s). The **Options** tab also lets you remap `next`/`prev`/`mute`/`repeat`/`shuffle`/`seek_back`/`seek_forward` directly, though it's currently limited to single characters there.
+A modifier goes in front with a dash. C means Ctrl, M means Alt, and S means Shift, so the last two lines above read as Ctrl+V and Shift+Z. You can also chain keys with a space. Press G twice quickly and it counts as one shortcut, as long as both presses land within about a second and a half.
+
+The Options tab lets you remap the transport and seek keys directly too, though there you're limited to single characters.
 
 ### Icons
 
-Tab icons, playback state, song bullets, and status markers use Nerd Fonts glyphs. If your terminal has no Nerd Font, flip the **Options** tab's **Icons** row (or `:` → `icons`, or `icons = false` under `[general]`): icon slots fall back to short ASCII (`>`, `||`, `!`) or disappear where the text speaks for itself.
+Tabs, playback state, song bullets, and status markers use Nerd Font symbols. If your terminal doesn't have a Nerd Font, turn icons off wherever is closest:
+
+```
+Options tab → Icons row (h/l toggles it)
+Command palette → icons
+Config file → [general] icons = false
+```
+
+Without icons, slots fall back to short plain-text marks, or disappear where the text already says enough:
+
+```
+>    ||    !
+```
 
 ## Multi-select / bulk queue
 
-Instead of queueing songs one at a time:
+To queue a bunch of songs at once instead of one by one:
 
-1. Press `b` on a song to mark it (in **Discover** results or the **Local** tab's flat view).
-2. Keep marking more with `j`/`k`.
-3. Press `Enter` to queue every marked song in list order. Playback starts automatically only if nothing was already playing.
-4. Press `Esc` to clear marks without queuing anything.
+1. Press B on a song to mark it (in Discover results or the Local tab's flat view).
+2. Keep marking more with J and K.
+3. Press Enter to queue every marked song in list order. Playback starts on its own only if nothing was already playing.
+4. Press Esc to clear the marks without queueing anything.
 
-Marks track the song itself, not its list position, so scrolling won't lose them.
+Marks stick to the songs themselves, not to their positions, so scrolling around won't lose them.
 
 ## Command palette
 
-`:` opens a fuzzy-searchable palette for playback, volume, repeat/shuffle, seeking, speed, EQ, and tab navigation. Use `↑`/`↓` to pick a result and `Enter` to run it. `?` shows the same list read-only, without running anything.
+The colon key opens a fuzzy-searchable palette with playback, volume, repeat and shuffle, seeking, speed, EQ, and tab navigation. Pick with the up and down arrows, run with Enter. The question-mark key shows the same list read-only, without running anything.
 
 ## Playback speed
 
-Available from the **Options** tab's **Speed** row (0.25x-2.00x, `h`/`l` to adjust in 0.05x steps, `Enter` to reset) or the command palette (`speed up` / `speed down` / `speed reset`). The current speed appears as a badge next to "Now Playing" whenever it isn't 1.00x.
+Find it on the Options tab's Speed row: H and L adjust in small steps from quarter speed up to double, Enter resets to normal. The same three moves exist in the palette:
+
+```
+speed up / speed down / speed reset
+```
+
+Whenever speed isn't normal, a small badge next to Now Playing says so.
 
 ## Equalizer
 
-The 10-band graph in **Options** is interactive once selected:
+The 10-band graph in Options wakes up once you select its row. H and L move between bands, plus and minus shape the selected band from minus twelve to plus twelve decibels, P flips through presets, and S writes your current setup, EQ included, to the config file.
 
-- `h`/`l` - move between bands
-- `+`/`-` - adjust gain of the selected band (-12 dB to +12 dB)
-- `p` - cycle EQ presets
-- `s` - save current settings, including EQ, to `config.toml`
+Your own presets live as JSON files in the presets folder:
 
-Custom EQ presets are stored as `.json` files in `~/.config/rs-pug/eqpresets/`.
+```
+~/.config/rs-pug/eqpresets/
+```
 
 ## FFT visualizer
 
-The "Now Playing" bar always shows an animated spectrum, a synthetic wave by default. Press `Ctrl+V` (or your remapped `fft_toggle`) to switch to a **real** spectrum computed from system audio. `rs-pug` tries these in order:
+The Now Playing bar always carries an animated spectrum. What you see by default is a made-up wave that just looks alive. Ctrl+V (or your remapped toggle) swaps in a real spectrum computed from the actual system audio. The app tries three ways to listen in, in this order:
 
-1. `parec` (PulseAudio, or PipeWire's `pipewire-pulse` compatibility layer): precise per-stream capture via `pactl`
-2. `pw-cat --record --raw --monitor`: native PipeWire, captures the default sink's output
-3. `pw-record --monitor`: native PipeWire fallback
+```
+1. parec: PulseAudio, or PipeWire through its PulseAudio layer (per-stream capture)
+2. pw-cat with monitor flags: native PipeWire, default output
+3. pw-record with monitor flags: native PipeWire fallback
+```
 
-If none are installed, `rs-pug` silently falls back to the synthetic wave. To enable the real visualizer by default at startup:
+If none of those exist, you silently get the made-up wave back. To start with the real one every time:
 
 ```toml
 [general]
@@ -98,31 +121,27 @@ fft_visualizer_default = true
 
 ## Minimal mode
 
-`Shift+Z` (or your remapped `minimal_toggle`) hides tabs, lists, options, headers, and labels, leaving only:
+Shift+Z (or your remapped toggle) strips the interface down to almost nothing: no tabs, no lists, no headers. What remains is the cover in a tight frame with no title, the track title, a bare spectrum strip, and a single-line progress bar. Local files and downloads show their real embedded picture; streams show the video thumbnail, fetched quietly in the background.
 
-- cover art in a tight frame without any title: the real embedded picture (local files and downloads embed it automatically) or the stream thumbnail for YouTube/SoundCloud, fetched in the background,
-- the track title, a bare spectrum strip, and a single-line progress bar.
+Covers are drawn from plain terminal cells, so they work in every terminal. No special graphics protocols involved.
 
-Covers render as pixelated halfblocks through `ratatui-image`: plain terminal cells that work in every terminal, with no Kitty/Sixel graphics protocols involved.
-
-Inside Minimal only a few keys do anything: `Shift+Z` or `Esc` to leave, `Space` to pause, `n`/`p` for next/previous track, `←`/`→` to seek, `9`/`0` for volume, `:` for the palette, `?` for help, `q` to quit. Everything else is swallowed so you can't wander the hidden UI by accident.
+While Minimal is on, only a handful of keys do anything: Shift+Z or Esc to leave, Space to pause, N and P to skip tracks, left and right arrows to seek, 9 and 0 for volume, colon for the palette, question mark for help, Q to quit. Everything else is swallowed, so you can't wander into the hidden interface by accident.
 
 ### Minimal image background
 
-When a cover is showing, Minimal can tint its whole background with the cover's colors: the three most vivid hues of the art blended into a subtle vertical gradient (dark enough that text stays readable, boosted so even near-black covers tint visibly). Three ways to switch it:
+When a cover is showing, Minimal can wash the whole background in the cover's own colors: the three most vivid hues blended into a subtle vertical gradient, kept dark enough to read over and boosted so even near-black covers still tint visibly. Flip it from the Options tab, the palette, or the config file:
 
-- the **Options** tab's **Image background** row (`h`/`l` or `Enter`),
-- the command palette (`:`, then `image background`),
-- permanently in the config:
-
-```toml
-[general]
-image_background = true   # default: true
 ```
+Options tab → Image background row (h/l or Enter)
+Command palette → image background
+Config file → [general] image_background = true
+```
+
+It defaults to on.
 
 ## CLI / IPC
 
-Beyond `--source`, `rs-pug` accepts flags that control an **already-running** instance over a local Unix socket. Handy for `i3status`, `waybar`, or keybinding scripts:
+Besides picking a source at startup, rs-pug can drive an already-running instance through a local socket. That's what status bars and hotkey daemons talk to:
 
 ```bash
 rs-pug --toggle-pause         # play/pause the running instance
@@ -131,11 +150,27 @@ rs-pug --prev                 # go to previous track
 rs-pug --play <path-or-url>   # queue and play a file or URL
 ```
 
-Each command connects to the running instance's IPC socket and exits immediately. If no instance is running, an error is printed instead of starting a new one.
+Each command reaches the running instance and exits right away. If nothing is running, you get an error instead of a new window.
 
-Pass `--debug` to write logs to `~/.config/rs-pug/rs-pug.log`, useful when filing a bug report.
+The sockets live next to your other runtime files when the system offers a runtime directory, otherwise inside the app's own config folder, and ending up in a per-user temp folder as a last resort:
 
-Pass `--validate` to check `config.toml` without starting the app: it prints the active file, the resolved search source, all custom sources, and any warnings, then exits 0 when clean or 1 when something was skipped or fell back:
+```
+$XDG_RUNTIME_DIR/rs-pug-ipc.sock     # app control
+$XDG_RUNTIME_DIR/rs-pug.sock         # mpv control (changeable in the config)
+~/.config/rs-pug/rs-pug-ipc.sock     # when no runtime directory exists
+```
+
+Both are created readable only by you. If binding one fails, you'll hear about it. Remote control never dies quietly.
+
+For safety, the play command only accepts web addresses and absolute file paths that actually exist. Anything else is refused, and absurdly long input lines are dropped instead of being buffered forever.
+
+When something misbehaves, a debug flag writes a log file, handy when reporting a bug:
+
+```
+rs-pug --debug        # logs to ~/.config/rs-pug/rs-pug.log
+```
+
+Another flag checks your setup without starting the app. It prints the active file, the resolved search source, all custom sources, and any warnings, then exits zero when clean or one when something was skipped or fell back:
 
 ```bash
 rs-pug --validate
@@ -143,18 +178,32 @@ rs-pug --validate
 
 ## Configuration
 
-Config file: `~/.config/rs-pug/config.toml`. It hot-reloads, so most edits apply without a restart (the Sonum client config below is the exception).
+Every setting lives in one file:
+
+```
+~/.config/rs-pug/config.toml
+```
+
+Edits apply without a restart. The app watches the file. The Sonum client file below is the one exception.
 
 ### Themes
 
-Built-in themes: `dark` (default), `light`, `nord`, `gruvbox`, `mono`.
+Five themes ship with the app, dark by default:
+
+```
+dark, light, nord, gruvbox, mono
+```
 
 ```toml
 [general]
 theme = "nord"
 ```
 
-To create your own, add a `.json` file under `~/.config/rs-pug/themes/` with `[r, g, b]` triples for each color:
+To roll your own, drop a JSON file into the themes folder:
+
+```
+~/.config/rs-pug/themes/
+```
 
 ```json
 {
@@ -171,7 +220,7 @@ To create your own, add a `.json` file under `~/.config/rs-pug/themes/` with `[r
 }
 ```
 
-Then reference it by filename (without `.json`):
+Then point the config at the filename without its extension:
 
 ```toml
 [general]
@@ -179,49 +228,124 @@ theme = "mytheme"
 ```
 
 > [!NOTE]
-> All nine base colors are required. If one is missing, the file fails to parse and `rs-pug` falls back to the built-in palette. `spectrum` is optional and accepts a list of any length, omit it for the default gradient.
+> All nine base colors are required. Miss one and the file won't parse, so the app falls back to the built-in palette. The spectrum list is optional, any length. Leave it out for the default gradient.
 
-Restart or hot-reload to apply changes. Community themes: [all-rspug](https://github.com/JustRoccat/all-rspug/).
+Restart or just let the hot-reload pick it up. Community themes live at [all-rspug](https://github.com/JustRoccat/all-rspug/).
 
 ### Local music and storage
 
-`rs-pug` scans `~/.config/rs-pug/music-local/` by default (add more directories from **Options**), with natural sorting and metadata extraction.
+Out of the box the app scans one folder:
 
-Playlists and library data live in a SQLite database at `~/.config/rs-pug/pug.db`. Legacy JSON files are migrated automatically on first run.
+```
+~/.config/rs-pug/music-local/
+```
 
-- Playlist import: `~/.config/rs-pug/import_playlist.json`
-- Playlist export: `~/.config/rs-pug/exports/<playlist_name>.json`
+Add more folders from the Options tab. Sorting feels natural, metadata is read off the files, and these are the formats it picks up:
+
+```
+mp3, flac, wav, ogg, opus, m4a
+```
+
+A tilde at the start of a folder path means your home folder, everywhere a folder is expected:
+
+```
+~/Music   →   /home/you/Music
+```
+
+Playlists and library data live in a small database, and anything from the old JSON layout is moved over automatically on first run:
+
+```
+~/.config/rs-pug/pug.db               # the database
+~/.config/rs-pug/import_playlist.json # drop a playlist here to import it
+~/.config/rs-pug/exports/             # playlists land here on export
+```
+
+#### Tag editor
+
+Press E over a local file to fix its tags. Tab walks through the fields, Enter writes everything to the file and closes, Esc bails out without touching anything. The year field only accepts numbers. If it complains, you stay on the field so you can fix the value instead of losing it.
 
 ### Sonum (self-hosted music server)
 
-[Sonum](https://github.com/JustRoccat/Sonum) is a lightweight, self-hosted music streaming server (Rust/Axum). It scans a music folder on a machine of your choosing and exposes it over a plain HTTP/JSON API, with metadata, lyrics, and album art extraction, and auto-rescans when files change. `rs-pug` can talk to a Sonum server as a third search source, alongside YouTube and SoundCloud, which is useful for streaming your library from a home server/NAS to any machine running `rs-pug`.
+[Sonum](https://github.com/JustRoccat/Sonum) is a small self-hosted music server. It watches a folder on a machine of your choice and serves it over a plain JSON API, with metadata, lyrics, and cover art pulled from the files, rescanning when things change. Point rs-pug at it and it becomes another search source next to YouTube and SoundCloud. Handy when your music lives on a home server and you want it on whatever machine you're at.
 
-**How it works:** on startup, `rs-pug` writes a default client config to `~/.config/rs-pug/sonumclient.toml` if it doesn't already exist:
+On first start the app writes a client file for you, readable only by you since it can hold a secret:
+
+```
+~/.config/rs-pug/sonumclient.toml
+```
 
 ```toml
+scheme = "http"
 host = "127.0.0.1"
 port = 8420
 # api_token = "your-secret-token"
 ```
 
-- `host` / `port` should point at wherever your Sonum server is running (defaults match Sonum's own defaults, `127.0.0.1:8420`).
-- `api_token` is optional and only needed if the Sonum server was started with `api_token` set in its own `sonum.conf`. When set, `rs-pug` sends it as `Authorization: Bearer <token>` on every request.
-- **Restart `rs-pug` after editing this file.** Unlike `config.toml`, it isn't hot-reloaded.
+| Setting | Meaning |
+|---------|---------|
+| scheme | Plain or encrypted connection |
+| host / port | Wherever your Sonum server runs (the defaults match Sonum's own) |
+| api_token | Only needed if the server itself demands one; sent along as a bearer token on searching, covers, streaming, and downloads |
 
-Once configured, switch **Search source** to **Sonum** from the **Options** tab (`h`/`l` to cycle YouTube → SoundCloud → Sonum), or launch with:
+A token paired with a non-local address over a plain connection earns you a warning in the log. Use the encrypted scheme there.
+
+Unlike the main config, this file needs an app restart after editing. Then flip the Search source row in Options through YouTube and SoundCloud until Sonum shows up, or start straight into it:
 
 ```bash
 rs-pug --source sonum
 ```
 
-Searching then queries `GET /tracks?q=<query>&limit=<n>` on the Sonum server; results are mapped into `rs-pug` songs, with playback pointed at the server's `/tracks/:id/stream` endpoint (so `mpv` streams directly from Sonum). The Albums view queries Sonum's `GET /albums` endpoint (same `q`/`limit` params, grouping by album and album-artist server-side) and resolves each album's tracks in disc/track-number order. YouTube album search lists actual playlists (playlist-filtered search); a playlist's tracks load on demand with `e`, `Enter`, or `Tab` (30s timeout each), so searching stays fast. SoundCloud has no playlist search in `yt-dlp`, so it keeps single `full album` videos. Custom search sources hide the Albums tab entirely, since album search isn't supported for them.
+Four server endpoints do the work:
+
+```
+GET /tracks                searching, with query and limit
+/tracks/:id/stream         playback, streamed straight into mpv
+GET /albums                the Albums view
+GET /tracks/:id/art        covers
+```
+
+Server-side, albums arrive already grouped with their tracks in disc and track order. YouTube album search works off real playlists, and a playlist opens its tracks on demand with E, Enter, or Tab (each gets half a minute before it times out, so searching stays snappy). SoundCloud has no playlist search to speak of, so it sticks to single full-album uploads. Command-type custom sources never get an Albums tab. yt-dlp ones get it only when you opt in (see below).
 
 > [!NOTE]
-> This integration covers *searching, streaming, and cover art* from Sonum (covers come from `GET /tracks/:id/art`, honoring `api_token`). Local downloads, playlists, and the local library scanner are unaffected and continue to work with `~/.config/rs-pug/music-local/` as usual.
+> Searching, streaming, covers, and downloads all work against Sonum. Downloading a Sonum track from the context menu grabs the file straight over HTTP with your token; it gets converted to your download format when that differs from the server's file. Playlists and the local scanner ignore all of this and keep using your local folders.
+
+### Multiple Sonum servers
+
+When one library isn't enough, declare the extras below the main settings. Searching asks every server and pools the answers; one being down just logs a warning and the rest carry on. Playback, covers, and downloads always use the song's own server and its own token:
+
+```toml
+[[servers]]
+name = "NAS"
+host = "192.168.1.50"
+port = 8420
+# scheme = "http"
+# api_token = "other-secret-token"
+```
+
+One catch: the player itself accepts a single global header, so when several servers carry different tokens, streaming uses the first one (and says so in the log). Downloads and covers always use the right token per server.
+
+### Downloads
+
+The context menu can save a song to disk. Fetching is done by yt-dlp, so audio extraction and thumbnails need ffmpeg installed (it's in the README requirements).
+
+Tune it in the config or straight from the Options tab. The Download format row cycles with H and L, the Download dir row edits with Enter, and clearing the dir falls back to the music folder:
+
+```toml
+[general]
+download_format = "mp3"   # mp3 (default), best, m4a, opus, flac
+# download_dir = "/home/you/Music"   # default: the first music directory
+```
+
+| Setting | Meaning |
+|---------|---------|
+| download_format | Which container the file ends up in; best keeps whatever the source had instead of re-encoding (handy for lossless originals) |
+| download_dir | Where files land; unset means the first music folder, and the Options row shows the resolved path with a music-dir marker until you override it |
+
+Sonum downloads skip yt-dlp entirely and pull the server's file directly. If your chosen format matches the server's file, or you picked best, the original lands untouched with its tags. Otherwise the app converts it with ffmpeg, and if conversion fails you still get the original, with the message saying exactly that. Turning a lossy file into flac only makes it bigger. Quality that was never there can't come back.
 
 ### Custom search sources
 
-Besides YouTube, SoundCloud, and Sonum, `rs-pug` can search through user-defined sources declared in `~/.config/rs-pug/config.toml`. They appear in the **Options** tab cycle, in the search prompt, and in `--source`.
+For anything beyond YouTube, SoundCloud, and Sonum, declare your own sources in the main config. They join the Options cycle, the search prompt, and the startup flag:
 
 ```toml
 [search]
@@ -231,6 +355,7 @@ source = "youtube"
 name = "YouTube (newest)"
 type = "ytdlp"
 prefix = "ytsearchdate"          # becomes "{prefix}{limit}:{query}"
+albums = true                    # optional, default false: show the Albums tab (ytdlp only)
 
 [[search.custom_sources]]
 name = "Audius"
@@ -239,7 +364,7 @@ command = ["/home/you/.config/rs-pug/scripts/audius-search.py", "{query}", "{lim
 timeout_secs = 15                # optional, default 15, 0 means default, max 120
 ```
 
-where `audius-search.py` queries the public Audius search API and prints the matching tracks as a JSON array:
+The script above queries the public Audius search API and prints matching tracks as a JSON array:
 
 ```python
 #!/usr/bin/env python3
@@ -268,20 +393,39 @@ for track in data.get("data") or []:
 print(json.dumps(songs[:limit]))
 ```
 
-Python above is just an example: `command` can be anything executable (shell, Ruby, Node, a compiled binary, `curl` against an API that already returns the right shape) as long as it prints the JSON array to stdout.
+Python is just an example. Anything executable works (shell, Ruby, Node, a compiled binary, curl against an API that already speaks the right shape) as long as it prints a JSON array to standard output. Each entry carries three required fields and two optional ones, duration in seconds:
 
-- `ytdlp` reuses the yt-dlp search path with your prefix. Song URLs are built from `webpage_url` with `url` as fallback. Album search appends `full album` like the built-in sources. The prefix must be a search scheme your yt-dlp understands (`ytsearch`, `scsearch`, and a few others; check with `yt-dlp --list-extractors | grep -i search`). Anything else fails at search time with the yt-dlp error. When in doubt, test first: `yt-dlp --flat-playlist --dump-single-json -- "{prefix}3:test"`.
-- `command` runs `command` directly as argv, never through a shell. `{query}` and `{limit}` are substituted per argument. Stdout must be a JSON array of songs with `id`, `title`, `webpage_url` (required) and `uploader`, `duration` (optional, `duration` in seconds). Stdout over 8 MiB is rejected, results are truncated to the search limit, entries with empty `id`/`title`/`webpage_url` are skipped, and album search returns a "not supported" error. A non-zero exit, a timeout (the process is killed), or invalid JSON shows an error naming the source.
-- Since there is no shell, pipelines need an explicit `sh -c`, with `{limit}`/`{query}` passed as positional parameters, e.g. `command = ["sh", "-c", "yt-dlp ... \"$0\" ... \"$1\" | jq ...", "{limit}", "{query}"]`.
-- Names are matched trimmed and case-insensitive (Unicode lowercase). Empty, duplicate, or built-in-clashing names, empty `prefix`/`command`, unknown types, and entries beyond 255 are skipped with a warning. A saved `source` that no longer exists falls back to YouTube with a warning.
-- Cycle order in Options is YouTube -> SoundCloud -> Sonum -> customs. `--source` accepts custom names too (unknown names error out listing the available ones), and `rs-pug --validate` checks the whole setup without starting the app. Like the rest of `config.toml`, custom sources hot-reload.
+```json
+[
+  { "id": "...", "title": "...", "webpage_url": "...", "uploader": "...", "duration": 123 }
+]
+```
+
+A few things worth knowing about the two flavors:
+
+- A yt-dlp source reuses the normal yt-dlp search with your prefix dropped in front. Song links come from the webpage address, falling back to the plain URL field. Album search tacks on a full-album suffix like the built-ins. The prefix has to be a search scheme your yt-dlp understands. When in doubt, try it by hand first:
+
+```bash
+yt-dlp --flat-playlist --dump-single-json -- "{prefix}3:test"
+```
+
+Flip the albums flag on and the Albums tab appears for that source; it stays off by default.
+
+- A command source runs your program directly as arguments, never through a shell. The query and the limit are substituted per argument. Output past eight megabytes is refused, results are cut to the search limit, entries missing their id, title, or address are skipped, and album search answers that it isn't supported. A crash, a timeout (the process gets killed), or broken JSON surfaces as an error naming the source. Since there's no shell involved, pipelines need an explicit shell call with the limit and query handed over as positional parameters:
+
+```toml
+command = ["sh", "-c", "yt-dlp ... \"$0\" ... \"$1\" | jq ...", "{limit}", "{query}"]
+```
+
+- Names match loosely. Surrounding space is ignored, and so is case. Empty names, duplicates, clashes with built-ins, empty prefixes or commands, unknown types, and anything past 255 entries are skipped with a warning. A saved source that no longer exists falls back to YouTube, also with a warning.
+- The Options cycle walks YouTube, SoundCloud, Sonum, then your customs. Custom names work with the startup flag too, and an unknown one gets you the full list of what's available. To check the whole setup without starting the app, there's the validate flag. And like everything else in the main config, custom sources hot-reload.
 
 > [!WARNING]
-> `command` sources run programs with your privileges. Only point them at scripts you trust.
+> Command sources run programs with your privileges. Only point them at scripts you trust.
 
 ### Smart Playlist
 
-On every startup, rs-pug auto-generates and refreshes a single **Smart Playlist** built from three SQLite-backed rules over your local library: most played, recently added, and not-heard-in-a-while tracks (deduped, capped at ~50 songs). It behaves like a normal playlist otherwise, but its contents are replaced on the next launch, so treat it as a rotating mix rather than something to hand-curate. Disable it with:
+Every startup rebuilds a single Smart Playlist from three rules over your local library: most played, recently added, and not heard in a while. Duplicates are folded away and it caps around fifty songs. It behaves like any playlist otherwise, but the next launch replaces its contents. Treat it as a rotating mix rather than something to curate by hand. To turn it off:
 
 ```toml
 [general]

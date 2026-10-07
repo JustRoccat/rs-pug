@@ -61,7 +61,7 @@ pub(super) fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: C
                 .unwrap_or_default(),
             ),
             Line::from(""),
-            Line::from("Tab: next field  Enter: write tags  Esc: cancel"),
+            Line::from("Tab: next field  Enter: save all and close  Esc: cancel"),
         ];
         frame.render_widget(
             Paragraph::new(lines).block(

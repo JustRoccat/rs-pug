@@ -40,6 +40,7 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 
 - [`mpv`](https://mpv.io/) (required)
 - [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) (recommended, without it streaming and downloading are unavailable, but local playback still works)
+- [`ffmpeg`](https://ffmpeg.org/) (recommended, needed for downloads: audio extraction and thumbnail embedding)
 - MPRIS2 works out of the box through a native in process daemon, no `mpv-mpris` needed. Set `mpris_enabled = false` in the config to keep rs-pug off the session bus.
 
 ## Installation

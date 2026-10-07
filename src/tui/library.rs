@@ -128,6 +128,31 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                     if app.opt_icons { "ON" } else { "OFF" }
                 ),
             ),
+            (
+                "⊞",
+                format!("Download format  {}  (h/l cycle)", app.opt_download_format),
+            ),
+            (
+                "⊞",
+                if app.opt_editing
+                    && app.options_index == crate::ui_helpers::DOWNLOAD_DIR_OPTIONS_INDEX
+                {
+                    format!("Download dir     {}", app.opt_edit_buffer)
+                } else {
+                    let custom = app
+                        .opt_download_dir
+                        .as_deref()
+                        .is_some_and(|d| !d.trim().is_empty());
+                    format!(
+                        "Download dir     {}{}",
+                        app.effective_download_dir()
+                            .as_deref()
+                            .map(crate::utils::expand_tilde)
+                            .unwrap_or_else(|| "none".to_owned()),
+                        if custom { "" } else { "  (music dir)" }
+                    )
+                },
+            ),
         ];
         rows.into_iter()
             .enumerate()

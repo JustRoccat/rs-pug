@@ -80,11 +80,8 @@ pub fn load_blocking(song: &Song) -> Option<Vec<u8>> {
 
 // Fetch Sonum cover
 fn sonum_art_bytes(song: &Song) -> Option<Vec<u8>> {
-    let config = crate::sonum::load_sonum_config();
-    let base = config.base_url();
-    if !song.webpage_url.starts_with(&base) {
-        return None;
-    }
+    let server = crate::sonum::sonum_config_for_url(&song.webpage_url)?;
+    let base = server.base_url();
     let id = song.id.trim();
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return None;
@@ -94,7 +91,7 @@ fn sonum_art_bytes(song: &Song) -> Option<Vec<u8>> {
         .config()
         .timeout_global(Some(Duration::from_secs(15)))
         .build();
-    if let Some(token) = &config.api_token {
+    if let Some(token) = &server.api_token {
         request = request.header("Authorization", &format!("Bearer {token}"));
     }
     let mut response = request.call().ok()?;
@@ -423,7 +420,7 @@ mod tests {
 
     #[test]
     fn sonum_art_rejects_path_traversal_ids() {
-        let base = crate::sonum::load_sonum_config().base_url();
+        let base = crate::sonum::load_sonum_config().primary().base_url();
         for evil in ["../etc/passwd", "a/b", "a\\b", "", "  "] {
             let s = song(&format!("{base}/tracks/x/stream"), evil);
             assert!(sonum_art_bytes(&s).is_none(), "id {evil:?} rejected");

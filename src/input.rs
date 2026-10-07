@@ -689,6 +689,30 @@ pub fn handle_native_key_event(
                             app.opt_music_dirs.first().cloned().unwrap_or_default();
                         app.set_flash("Editing Music Directory... (Enter to save)", 3);
                     }
+                } else if app.options_index == ui_helpers::DOWNLOAD_DIR_OPTIONS_INDEX {
+                    if app.opt_editing {
+                        let trimmed = app.opt_edit_buffer.trim().to_owned();
+                        app.opt_download_dir = if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed)
+                        };
+                        save_config(&app.build_config());
+                        app.opt_editing = false;
+                        app.set_flash("Download directory updated", 3);
+                    } else {
+                        app.opt_editing = true;
+                        app.opt_edit_buffer = app.opt_download_dir.clone().unwrap_or_default();
+                        app.set_flash(
+                            "Editing Download Directory... (empty clears it, Enter to save)",
+                            3,
+                        );
+                    }
+                } else if app.options_index == ui_helpers::DOWNLOAD_FORMAT_OPTIONS_INDEX {
+                    app.opt_download_format =
+                        crate::config::cycle_download_format(&app.opt_download_format, 1);
+                    save_config(&app.build_config());
+                    app.set_flash(format!("Download format: {}", app.opt_download_format), 2);
                 } else if app.options_index == 8 && app.opt_editing {
                     let name = app.opt_edit_buffer.clone();
                     let preset = EqPreset {
@@ -917,7 +941,7 @@ pub fn handle_native_key_event(
             1 => {
                 app.opt_search_limit = app.opt_search_limit.saturating_sub(1).max(1);
             }
-            2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
+            2 => app.opt_socket = crate::config::MpvConfig::default().socket,
             5 => {
                 app.opt_theme = ui_helpers::prev_theme(app.opt_theme.clone());
             }
@@ -937,6 +961,11 @@ pub fn handle_native_key_event(
             ui_helpers::SPEED_OPTIONS_INDEX => extras::nudge_speed(app, cmd_tx, -1),
             ui_helpers::IMAGE_BG_OPTIONS_INDEX => toggle_image_background(app),
             ui_helpers::ICONS_OPTIONS_INDEX => toggle_icons(app),
+            ui_helpers::DOWNLOAD_FORMAT_OPTIONS_INDEX => {
+                app.opt_download_format =
+                    crate::config::cycle_download_format(&app.opt_download_format, -1);
+                save_config(&app.build_config());
+            }
             _ => {}
         },
         KeyCode::Char('l') | KeyCode::Right if is_core_options(app) => match app.options_index {
@@ -944,7 +973,7 @@ pub fn handle_native_key_event(
                 toggle_search_source(app, cmd_tx);
             }
             1 => app.opt_search_limit = (app.opt_search_limit + 1).min(50),
-            2 => app.opt_socket = "/tmp/rs-pug.sock".to_owned(),
+            2 => app.opt_socket = crate::config::MpvConfig::default().socket,
             5 => {
                 app.opt_theme = ui_helpers::next_theme(app.opt_theme.clone());
             }
@@ -964,6 +993,11 @@ pub fn handle_native_key_event(
             ui_helpers::SPEED_OPTIONS_INDEX => extras::nudge_speed(app, cmd_tx, 1),
             ui_helpers::IMAGE_BG_OPTIONS_INDEX => toggle_image_background(app),
             ui_helpers::ICONS_OPTIONS_INDEX => toggle_icons(app),
+            ui_helpers::DOWNLOAD_FORMAT_OPTIONS_INDEX => {
+                app.opt_download_format =
+                    crate::config::cycle_download_format(&app.opt_download_format, 1);
+                save_config(&app.build_config());
+            }
             _ => {}
         },
         KeyCode::Char('p') if is_core_options(app) => {
@@ -1250,7 +1284,7 @@ fn open_tag_editor(app: &mut App) {
         app.local.tag_editor_song = Some(song);
         app.local.tag_editor_open = true;
         app.set_flash(
-            "Editing local tags: Tab switches field, Enter saves field, Esc cancels",
+            "Editing local tags: Tab next field, Enter saves all and closes, Esc cancels",
             3,
         );
     }
@@ -1263,6 +1297,8 @@ fn cycle_tag_field(app: &mut App) {
             app.local.tag_edit_buffer.clone(),
         ) {
             app.set_flash(err, 3);
+            app.local.tag_editor_song = Some(song);
+            return;
         }
         app.local.tag_editor_field = app.local.tag_editor_field.next();
         app.local.tag_edit_buffer = tag_value(&song, app.local.tag_editor_field);

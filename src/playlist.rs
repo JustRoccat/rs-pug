@@ -147,12 +147,14 @@ pub fn execute_context_action(
                     add_to_named_playlist(app, song, &name);
                 }
                 2 => {
-                    if let Some(dir) = app.opt_music_dirs.first() {
-                        let _ = cmd_tx
-                            .send(CoreCmd::DownloadSong {
-                                song: song.clone(),
-                                path: dir.clone(),
-                            });
+                    if let Some(dir) = app.effective_download_dir() {
+                        let _ = cmd_tx.send(CoreCmd::DownloadSong {
+                            song: song.clone(),
+                            path: dir.clone(),
+                            format: crate::config::normalize_download_format(
+                                &app.opt_download_format,
+                            ),
+                        });
                         app.set_flash(format!("Downloading {}...", song.title), 3);
                     } else {
                         app.set_flash("Please set a music directory in settings!", 3);

@@ -141,6 +141,10 @@ pub struct GeneralConfig {
     pub plugins_dir: String,
     #[serde(default = "default_music_directories")]
     pub music_directories: Vec<String>,
+    #[serde(default = "default_download_format")]
+    pub download_format: String,
+    #[serde(default)]
+    pub download_dir: Option<String>,
     #[serde(default)]
     pub fft_visualizer_default: bool,
     #[serde(default = "default_true")]
@@ -159,6 +163,8 @@ impl Default for GeneralConfig {
             plugins_enabled: true,
             plugins_dir: default_plugins_dir(),
             music_directories: default_music_directories(),
+            download_format: default_download_format(),
+            download_dir: None,
             fft_visualizer_default: false,
             smart_playlists_enabled: true,
             image_background: true,
@@ -230,6 +236,8 @@ pub fn normalize_command_timeout(value: Option<u64>) -> u64 {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CustomSource {
     pub name: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub albums: bool,
     #[serde(flatten)]
     pub kind: CustomSourceKind,
 }
@@ -257,6 +265,8 @@ struct RawCustomSource {
     command: Option<toml::Value>,
     #[serde(default)]
     timeout_secs: Option<toml::Value>,
+    #[serde(default)]
+    albums: Option<toml::Value>,
 }
 #[derive(Debug, Clone)]
 pub struct SearchConfig {
@@ -410,8 +420,14 @@ fn validate_one_raw(
                 warnings.push(format!("skipping custom source '{name}': empty prefix"));
                 return None;
             }
+            let albums = raw
+                .albums
+                .as_ref()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             Some(CustomSource {
                 name,
+                albums,
                 kind: CustomSourceKind::Ytdlp { prefix },
             })
         }
@@ -437,6 +453,7 @@ fn validate_one_raw(
                 .and_then(|n| u64::try_from(n).ok());
             Some(CustomSource {
                 name,
+                albums: false,
                 kind: CustomSourceKind::Command {
                     command,
                     timeout_secs: normalize_command_timeout(timeout),
@@ -655,11 +672,53 @@ pub fn log_path() -> PathBuf {
 fn default_true() -> bool {
     true
 }
+fn is_false(value: &bool) -> bool {
+    !value
+}
 fn default_limit() -> u8 {
     20
 }
 fn default_socket() -> String {
-    "/tmp/rs-pug.sock".to_owned()
+    default_runtime_socket("rs-pug.sock")
+}
+pub fn default_ipc_socket() -> String {
+    default_runtime_socket("rs-pug-ipc.sock")
+}
+fn default_runtime_socket(name: &str) -> String {
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
+        if !dir.trim().is_empty() {
+            return format!("{}/{name}", dir.trim_end_matches('/'));
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.trim().is_empty() {
+            return format!("{home}/.config/rs-pug/{name}");
+        }
+    }
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "default".to_owned());
+    let safe: String = user
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("/tmp/rs-pug-{safe}/{name}")
+}
+pub fn ensure_socket_parent(path: &str) {
+    let path = std::path::Path::new(path);
+    if let Some(parent) = path.parent() {
+        if parent.as_os_str().is_empty() {
+            return;
+        }
+        let _ = fs::create_dir_all(parent);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if parent.to_string_lossy().starts_with("/tmp/rs-pug-") {
+                let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+            }
+        }
+    }
 }
 fn default_next_key() -> String {
     "n".to_string()
@@ -697,6 +756,25 @@ fn default_plugins_dir() -> String {
 }
 fn default_music_directories() -> Vec<String> {
     vec!["~/.config/rs-pug/music-local/".to_string()]
+}
+fn default_download_format() -> String {
+    "mp3".to_owned()
+}
+pub fn normalize_download_format(raw: &str) -> String {
+    match raw.trim().to_lowercase().as_str() {
+        "best" | "m4a" | "opus" | "flac" | "mp3" => raw.trim().to_lowercase(),
+        _ => "mp3".to_owned(),
+    }
+}
+pub const DOWNLOAD_FORMATS: [&str; 5] = ["mp3", "best", "m4a", "opus", "flac"];
+pub fn cycle_download_format(current: &str, delta: isize) -> String {
+    let pos = DOWNLOAD_FORMATS
+        .iter()
+        .position(|f| *f == current.trim().to_lowercase().as_str())
+        .unwrap_or(0) as isize;
+    DOWNLOAD_FORMATS
+        [(pos + delta).rem_euclid(DOWNLOAD_FORMATS.len() as isize) as usize]
+        .to_owned()
 }
 pub fn theme_to_str(theme: &Theme) -> String {
     match theme {
@@ -859,6 +937,70 @@ mod tests {
         assert!(sanitize_preset_filename("").is_err());
         assert!(sanitize_preset_filename("   ").is_err());
     }
+    #[test]
+    fn download_format_accepts_known_values_and_falls_back() {
+        assert_eq!(normalize_download_format("mp3"), "mp3");
+        assert_eq!(normalize_download_format(" BEST "), "best");
+        assert_eq!(normalize_download_format("Flac"), "flac");
+        assert_eq!(normalize_download_format("m4a"), "m4a");
+        assert_eq!(normalize_download_format("opus"), "opus");
+        assert_eq!(normalize_download_format("wav"), "mp3");
+        assert_eq!(normalize_download_format(""), "mp3");
+    }
+    #[test]
+    fn download_format_cycles_through_all_choices() {
+        assert_eq!(cycle_download_format("mp3", 1), "best");
+        assert_eq!(cycle_download_format("mp3", -1), "flac");
+        assert_eq!(cycle_download_format("flac", 1), "mp3");
+        assert_eq!(cycle_download_format("nonsense", 1), "best");
+    }
+    #[test]
+    fn runtime_socket_prefers_xdg_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "XDG_RUNTIME_DIR";
+        let old = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, dir.path());
+        }
+        let sock = default_ipc_socket();
+        assert_eq!(sock, format!("{}/rs-pug-ipc.sock", dir.path().display()));
+        unsafe {
+            match old {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+    #[test]
+    fn config_roundtrips_download_options() {
+        let cfg = Config::default();
+        let raw = toml::to_string_pretty(&cfg).expect("config must serialize");
+        assert!(raw.contains("download_format"));
+        let back: Config = toml::from_str(&raw).expect("config must parse");
+        assert_eq!(back.general.download_format, "mp3");
+        assert_eq!(back.general.download_dir, None);
+    }
+    #[test]
+    fn custom_source_albums_opt_in_only_for_ytdlp() {
+        let (customs, _) = custom_sources_from_toml(
+            r#"
+[search]
+[[search.custom_sources]]
+name = "PeerTube"
+type = "ytdlp"
+prefix = "peertube"
+albums = true
+[[search.custom_sources]]
+name = "Script"
+type = "command"
+command = ["/bin/echo"]
+albums = true
+"#,
+        );
+        assert_eq!(customs.len(), 2);
+        assert!(customs[0].albums);
+        assert!(!customs[1].albums);
+    }
     fn custom_sources_from_toml(toml: &str) -> (Vec<CustomSource>, Vec<String>) {
         let value: toml::Value = toml::from_str(toml).unwrap();
         validate_raw_custom_sources(value.get("search").and_then(|s| s.get("custom_sources")))
@@ -873,6 +1015,7 @@ mod tests {
     fn resolve_source_name_finds_builtins_and_customs() {
         let customs = vec![CustomSource {
             name: "My Script".to_owned(),
+            albums: false,
             kind: CustomSourceKind::Ytdlp {
                 prefix: "ytsearchdate".to_owned(),
             },
@@ -971,6 +1114,7 @@ command = ["/bin/echo", "{query}"]
     fn source_persist_name_uses_declared_name() {
         let customs = vec![CustomSource {
             name: "My Script".to_owned(),
+            albums: false,
             kind: CustomSourceKind::Ytdlp {
                 prefix: "x".to_owned(),
             },

@@ -75,15 +75,58 @@ fn init_logging(debug: bool) {
     );
     log::info!("rs-pug starting, debug logging enabled -> {}", path.display());
 }
+const MAX_IPC_LINE_BYTES: usize = 4096;
+async fn read_ipc_line<R>(reader: &mut tokio::io::BufReader<R>) -> std::io::Result<Option<String>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 256];
+    loop {
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > MAX_IPC_LINE_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "IPC line too long",
+            ));
+        }
+        if buf.contains(&b'\n') {
+            break;
+        }
+    }
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+}
+fn validated_ipc_play(raw: &str) -> Option<String> {
+    let arg = raw.trim();
+    if arg.is_empty() {
+        return None;
+    }
+    if arg.starts_with("http://") || arg.starts_with("https://") {
+        return Some(arg.to_owned());
+    }
+    let path = Path::new(arg);
+    if path.is_absolute() && path.exists() {
+        return Some(arg.to_owned());
+    }
+    None
+}
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = cli::Args::parse();
     init_logging(args.debug);
-    let ipc_sock_path = "/tmp/rs-pug-ipc.sock";
+    let ipc_sock_path = config::default_ipc_socket();
     let is_client_cmd = args.toggle_pause || args.next || args.prev
         || args.play.is_some();
     if is_client_cmd {
-        if let Ok(mut stream) = tokio::net::UnixStream::connect(ipc_sock_path).await {
+        if let Ok(mut stream) = tokio::net::UnixStream::connect(&ipc_sock_path).await {
             use tokio::io::AsyncWriteExt;
             if args.toggle_pause {
                 let _ = stream.write_all(b"TOGGLE_PAUSE\n").await;
@@ -147,20 +190,43 @@ async fn main() -> Result<()> {
     tokio::spawn(core.run(cmd_rx, evt_tx.clone(), cmd_tx.clone()));
     let ipc_cmd_tx = cmd_tx.clone();
     tokio::spawn(async move {
-        let _ = std::fs::remove_file(ipc_sock_path);
-        if let Ok(listener) = tokio::net::UnixListener::bind(ipc_sock_path) {
-            use tokio::io::{AsyncBufReadExt, BufReader};
+        config::ensure_socket_parent(&ipc_sock_path);
+        let _ = std::fs::remove_file(&ipc_sock_path);
+        let listener = match tokio::net::UnixListener::bind(&ipc_sock_path) {
+            Ok(listener) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &ipc_sock_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+                listener
+            }
+            Err(err) => {
+                log::error!("failed to bind IPC socket at {ipc_sock_path}: {err}");
+                eprintln!("Failed to bind IPC socket at {ipc_sock_path}: {err}");
+                return;
+            }
+        };
+        {
+            use tokio::io::BufReader;
             loop {
                 if let Ok((mut stream, _)) = listener.accept().await {
                     let tx = ipc_cmd_tx.clone();
                     tokio::spawn(async move {
                         let (read, _) = stream.split();
                         let mut reader = BufReader::new(read);
-                        let mut line = String::new();
-                        while let Ok(n) = reader.read_line(&mut line).await {
-                            if n == 0 {
-                                break;
-                            }
+                        loop {
+                            let line = match read_ipc_line(&mut reader).await {
+                                Ok(Some(line)) => line,
+                                Ok(None) => break,
+                                Err(_) => {
+                                    log::warn!("dropping oversize IPC line");
+                                    break;
+                                }
+                            };
                             let cmd = line.trim();
                             if cmd == "TOGGLE_PAUSE" {
                                 let _ = tx.send(CoreCmd::TogglePause);
@@ -169,17 +235,22 @@ async fn main() -> Result<()> {
                             } else if cmd == "PREV" {
                                 let _ = tx.send(CoreCmd::Prev);
                             } else if let Some(path) = cmd.strip_prefix("PLAY ") {
-                                let path = path.to_string();
-                                let song = crate::model::Song {
-                                    id: path.clone(),
-                                    title: path.clone(),
-                                    webpage_url: path,
-                                    uploader: Some("IPC".to_string()),
-                                    duration: None,
-                                };
-                                let _ = tx.send(CoreCmd::Play(song));
+                                match validated_ipc_play(path) {
+                                    Some(url) => {
+                                        let song = crate::model::Song {
+                                            id: url.clone(),
+                                            title: url.clone(),
+                                            webpage_url: url,
+                                            uploader: Some("IPC".to_string()),
+                                            duration: None,
+                                        };
+                                        let _ = tx.send(CoreCmd::Play(song));
+                                    }
+                                    None => {
+                                        log::warn!("rejected IPC PLAY payload");
+                                    }
+                                }
                             }
-                            line.clear();
                         }
                     });
                 }
@@ -1006,7 +1077,6 @@ fn config_resource_dir(kind: &str) -> PathBuf {
         PathBuf::from(".config/rs-pug").join(kind)
     }
 }
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "wav", "ogg", "m4a"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MusicDirsSnapshot {
     dirs: Vec<String>,
@@ -1037,7 +1107,7 @@ impl MusicDirsSnapshot {
                 if entry.file_type().is_file() {
                     let p = entry.path();
                     if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
-                        if AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
+                        if crate::utils::AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
                             paths.push(p.to_path_buf());
                         }
                     }
@@ -1058,5 +1128,39 @@ impl MusicDirsSnapshot {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ipc_play_accepts_http_urls_and_existing_absolute_paths() {
+        assert_eq!(
+            validated_ipc_play("https://example.com/song.mp3"),
+            Some("https://example.com/song.mp3".to_owned())
+        );
+        assert_eq!(
+            validated_ipc_play("http://example.com/song.mp3"),
+            Some("http://example.com/song.mp3".to_owned())
+        );
+        assert_eq!(validated_ipc_play("ytdl://foo"), None);
+        assert_eq!(validated_ipc_play("edl://foo"), None);
+        assert_eq!(validated_ipc_play("relative/path.mp3"), None);
+        assert_eq!(validated_ipc_play(""), None);
+        assert_eq!(
+            validated_ipc_play("/nonexistent-rs-pug-test-file.mp3"),
+            None
+        );
+    }
+    #[tokio::test]
+    async fn ipc_line_reader_caps_length() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+        let big = vec![b'a'; MAX_IPC_LINE_BYTES + 1];
+        let (mut write, read) = tokio::io::duplex(big.len());
+        write.write_all(&big).await.unwrap();
+        drop(write);
+        let mut reader = BufReader::new(read);
+        assert!(read_ipc_line(&mut reader).await.is_err());
     }
 }
