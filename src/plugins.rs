@@ -3,6 +3,7 @@ use mlua::{Function, HookTriggers, Lua, LuaSerdeExt, Table, Value, VmState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 const PLUGIN_EXEC_TIMEOUT: Duration = Duration::from_millis(250);
+pub(crate) const PLUGIN_TASK_TIMEOUT: Duration = Duration::from_secs(2);
 const PLUGIN_HOOK_INSTRUCTION_INTERVAL: u32 = 10_000;
 fn with_exec_timeout<T>(
     lua: &Lua,
@@ -506,13 +507,7 @@ impl PluginManager {
             warnings: Mutex::new(warnings),
         }
     }
-    pub fn reload(
-        &mut self,
-        enabled: bool,
-        configured_dir: &str,
-        allow_lua_ui_changes: bool,
-    ) {
-        let next = Self::load(enabled, configured_dir, allow_lua_ui_changes);
+    pub fn swap_from(&mut self, next: Self) {
         if let Ok(mut warnings) = self.warnings.lock() {
             warnings
                 .push_back(PluginWarning {
@@ -1392,6 +1387,36 @@ return plugin
         let panels = manager.collect_ui_panels(&state);
         assert_eq!(panels[0].items.len(), 2);
         assert!(matches!(panels[0].items[0], PluginPanelItem::Text { .. }));
+    }
+    #[test]
+    fn reload_swap_moves_plugins_and_records_warning() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+                dir.path().join("panel.lua"),
+                "plugin = {}\nreturn plugin\n",
+            )
+            .expect("write plugin");
+        let next = PluginManager::load(
+            true,
+            dir.path().to_str().expect("utf8"),
+            false,
+        );
+        assert_eq!(next.plugin_count(), 1);
+        let other = tempfile::tempdir().expect("tempdir");
+        let mut target = PluginManager::load(
+            true,
+            other.path().to_str().expect("utf8"),
+            false,
+        );
+        assert_eq!(target.plugin_count(), 0);
+        target.swap_from(next);
+        assert_eq!(target.plugin_count(), 1);
+        assert!(
+            target
+                .drain_warnings()
+                .iter()
+                .any(|warning| warning.message.contains("hot-reloaded"))
+        );
     }
 }
 fn lua_table_has_key(table: &Table, key: &str) -> bool {

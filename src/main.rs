@@ -32,7 +32,7 @@ mod utils;
 use config::load_config_with_diagnostics;
 use core::{Core, CoreCmd, CoreEvent};
 use input::KeyPluginAction;
-use model::App;
+use model::{App, MainTabKind, Tab};
 use plugins::{
     PluginDispatch, PluginManager, PluginPanel, PluginTab, PluginUiConfig,
     PluginUiInject, PluginUiSections, PluginUiState,
@@ -50,6 +50,7 @@ enum PluginTaskResult {
     },
     EventDispatch(PluginDispatch),
     KeyDispatch { key: KeyEvent, dispatch: PluginDispatch },
+    PluginsReloaded,
 }
 struct PendingPluginKey {
     key: KeyEvent,
@@ -376,24 +377,13 @@ async fn main() -> Result<()> {
                 app.eq.custom_presets = config::load_eq_presets();
             }
             if should_reload_plugins {
-                if let Ok(mut plugins) = plugin_manager.lock() {
-                    plugins
-                        .reload(
-                            config.general.plugins_enabled,
-                            &config.general.plugins_dir,
-                            config.lua.allow_lua_ui_changes,
-                        );
-                }
-                startup_ui_config_scheduled = false;
-                startup_ui_config_done = !app.plugin_ui.allow_lua_ui_changes;
-                ui_update_pending = false;
-                ui_surface_pending = false;
-                last_ui_state = None;
-                last_ui_surface_state = None;
-                app.plugin_ui.tabs.clear();
-                app.plugin_ui.panels.clear();
-                app.plugin_ui.section_items.clear();
-                app.plugin_ui.inject = PluginUiInject::default();
+                spawn_plugin_reload_task(
+                    &plugin_manager,
+                    &plugin_tx,
+                    config.general.plugins_enabled,
+                    config.general.plugins_dir.clone(),
+                    config.lua.allow_lua_ui_changes,
+                );
             }
             if hr.music_changed && !app.local.scanning {
                 app.local.scanning = true;
@@ -494,6 +484,16 @@ async fn main() -> Result<()> {
                     sections,
                     inject,
                 } => {
+                    if state.active_plugin_tab.is_some()
+                        && app.plugin_ui.pending_plugin_tab == state.active_plugin_tab
+                    {
+                        app.plugin_ui.active_tab = app
+                            .plugin_ui
+                            .pending_plugin_tab
+                            .take();
+                        app.active_tab = Tab::Options;
+                        app.plugin_ui.active_custom_tab = None;
+                    }
                     if state == PluginUiState::from_app(&app) {
                         app.plugin_ui.tabs = tabs;
                         if let Some(active) = app.plugin_ui.active_tab.clone() {
@@ -535,6 +535,19 @@ async fn main() -> Result<()> {
                         );
                     }
                 }
+                PluginTaskResult::PluginsReloaded => {
+                    startup_ui_config_scheduled = false;
+                    startup_ui_config_done = !app.plugin_ui.allow_lua_ui_changes;
+                    ui_update_pending = false;
+                    ui_surface_pending = false;
+                    last_ui_state = None;
+                    last_ui_surface_state = None;
+                    app.plugin_ui.tabs.clear();
+                    app.plugin_ui.panels.clear();
+                    app.plugin_ui.pending_plugin_tab = None;
+                    app.plugin_ui.section_items.clear();
+                    app.plugin_ui.inject = PluginUiInject::default();
+                }
             }
             if !keep_running {
                 break;
@@ -555,16 +568,17 @@ async fn main() -> Result<()> {
             spawn_ui_update_task(&plugin_manager, &plugin_tx, ui_state.clone());
             ui_update_pending = true;
         }
-        if startup_ui_config_done && !ui_surface_pending
-            && last_ui_surface_state.as_ref() != Some(&ui_state)
-        {
-            spawn_ui_surface_task(
-                &plugin_manager,
-                &plugin_tx,
-                ui_state.clone(),
-                app.plugin_ui.allow_lua_ui_changes,
-            );
-            ui_surface_pending = true;
+        if startup_ui_config_done && !ui_surface_pending {
+            let surface_state = prospective_surface_state(&app, &ui_state);
+            if last_ui_surface_state.as_ref() != Some(&surface_state) {
+                spawn_ui_surface_task(
+                    &plugin_manager,
+                    &plugin_tx,
+                    surface_state,
+                    app.plugin_ui.allow_lua_ui_changes,
+                );
+                ui_surface_pending = true;
+            }
         }
         app.anim_tick = app.anim_tick.wrapping_add(1);
         // Cover orchestration
@@ -752,6 +766,45 @@ async fn main() -> Result<()> {
     terminal::restore_terminal(terminal)?;
     Ok(())
 }
+fn spawn_plugin_reload_task(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_tx: &mpsc::UnboundedSender<PluginTaskResult>,
+    enabled: bool,
+    plugins_dir: String,
+    allow_lua_ui_changes: bool,
+) {
+    let plugins = Arc::clone(plugin_manager);
+    let tx = plugin_tx.clone();
+    tokio::spawn(async move {
+        let job = tokio::task::spawn_blocking(move || {
+            PluginManager::load(enabled, plugins_dir.as_str(), allow_lua_ui_changes)
+        });
+        if let Ok(Ok(next)) =
+            tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await
+        {
+            if let Ok(mut manager) = plugins.lock() {
+                manager.swap_from(next);
+            }
+        }
+        let _ = tx.send(PluginTaskResult::PluginsReloaded);
+    });
+}
+fn prospective_surface_state(app: &App, ui_state: &PluginUiState) -> PluginUiState {
+    let Some(pending) = app.plugin_ui.pending_plugin_tab.clone() else {
+        return ui_state.clone();
+    };
+    let mut next = ui_state.clone();
+    next.active_tab = "options".to_owned();
+    next.active_plugin_tab = Some(pending);
+    next.active_custom_tab = None;
+    next.active_tab_index = app
+        .main_tabs
+        .iter()
+        .position(|tab| matches!(&tab.kind, MainTabKind::Stock(stock) if *stock == Tab::Options))
+        .map(|index| index + 1)
+        .unwrap_or(1);
+    next
+}
 fn spawn_ui_config_task(
     plugin_manager: &Arc<Mutex<PluginManager>>,
     plugin_tx: &mpsc::UnboundedSender<PluginTaskResult>,
@@ -759,11 +812,17 @@ fn spawn_ui_config_task(
 ) {
     let plugins = Arc::clone(plugin_manager);
     let tx = plugin_tx.clone();
-    tokio::task::spawn_blocking(move || {
-        let config = plugins
-            .lock()
-            .map(|plugins| plugins.collect_ui_config(&state))
-            .unwrap_or_default();
+    tokio::spawn(async move {
+        let job = tokio::task::spawn_blocking(move || {
+            plugins
+                .lock()
+                .map(|plugins| plugins.collect_ui_config(&state))
+                .unwrap_or_default()
+        });
+        let config = match tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await {
+            Ok(Ok(config)) => config,
+            _ => PluginUiConfig::default(),
+        };
         let _ = tx.send(PluginTaskResult::UiConfig(config));
     });
 }
@@ -774,11 +833,18 @@ fn spawn_ui_update_task(
 ) {
     let plugins = Arc::clone(plugin_manager);
     let tx = plugin_tx.clone();
-    tokio::task::spawn_blocking(move || {
-        let layout = plugins
-            .lock()
-            .map(|plugins| plugins.collect_ui_update(&state))
-            .unwrap_or_default();
+    tokio::spawn(async move {
+        let job_state = state.clone();
+        let job = tokio::task::spawn_blocking(move || {
+            plugins
+                .lock()
+                .map(|plugins| plugins.collect_ui_update(&job_state))
+                .unwrap_or_default()
+        });
+        let layout = match tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await {
+            Ok(Ok(layout)) => layout,
+            _ => plugins::PluginLayoutConfig::default(),
+        };
         let _ = tx
             .send(PluginTaskResult::UiUpdate {
                 state,
@@ -794,28 +860,40 @@ fn spawn_ui_surface_task(
 ) {
     let plugins = Arc::clone(plugin_manager);
     let tx = plugin_tx.clone();
-    tokio::task::spawn_blocking(move || {
-        let (tabs, panels, sections, inject) = plugins
-            .lock()
-            .map(|plugins| {
-                let sections = if allow_lua_ui_changes {
-                    plugins.collect_ui_sections(&state)
-                } else {
-                    PluginUiSections::default()
-                };
-                let inject = if allow_lua_ui_changes {
-                    plugins.collect_ui_inject(&state)
-                } else {
-                    PluginUiInject::default()
-                };
-                (
-                    plugins.collect_tabs(&state),
-                    plugins.collect_ui_panels(&state),
-                    sections,
-                    inject,
-                )
-            })
-            .unwrap_or_default();
+    tokio::spawn(async move {
+        let job_state = state.clone();
+        let job = tokio::task::spawn_blocking(move || {
+            plugins
+                .lock()
+                .map(|plugins| {
+                    let sections = if allow_lua_ui_changes {
+                        plugins.collect_ui_sections(&job_state)
+                    } else {
+                        PluginUiSections::default()
+                    };
+                    let inject = if allow_lua_ui_changes {
+                        plugins.collect_ui_inject(&job_state)
+                    } else {
+                        PluginUiInject::default()
+                    };
+                    (
+                        plugins.collect_tabs(&job_state),
+                        plugins.collect_ui_panels(&job_state),
+                        sections,
+                        inject,
+                    )
+                })
+                .unwrap_or_default()
+        });
+        let (tabs, panels, sections, inject) = match tokio::time::timeout(
+            plugins::PLUGIN_TASK_TIMEOUT,
+            job,
+        )
+        .await
+        {
+            Ok(Ok(surface)) => surface,
+            _ => Default::default(),
+        };
         let _ = tx
             .send(PluginTaskResult::UiSurface {
                 state,
@@ -834,11 +912,17 @@ fn spawn_event_dispatch_task(
 ) {
     let plugins = Arc::clone(plugin_manager);
     let tx = plugin_tx.clone();
-    tokio::task::spawn_blocking(move || {
-        let dispatch = plugins
-            .lock()
-            .map(|plugins| plugins.dispatch_event(&event, &state))
-            .unwrap_or_default();
+    tokio::spawn(async move {
+        let job = tokio::task::spawn_blocking(move || {
+            plugins
+                .lock()
+                .map(|plugins| plugins.dispatch_event(&event, &state))
+                .unwrap_or_default()
+        });
+        let dispatch = match tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await {
+            Ok(Ok(dispatch)) => dispatch,
+            _ => PluginDispatch::default(),
+        };
         let _ = tx.send(PluginTaskResult::EventDispatch(dispatch));
     });
 }
@@ -857,15 +941,21 @@ fn start_next_plugin_key(
     *key_hook_pending = true;
     let plugins = Arc::clone(plugin_manager);
     let tx = plugin_tx.clone();
-    tokio::task::spawn_blocking(move || {
-        let dispatch = plugins
-            .lock()
-            .map(|plugins| dispatch_key_with_aliases(
-                &plugins,
-                &request.labels,
-                &request.state,
-            ))
-            .unwrap_or_default();
+    tokio::spawn(async move {
+        let job = tokio::task::spawn_blocking(move || {
+            plugins
+                .lock()
+                .map(|plugins| dispatch_key_with_aliases(
+                    &plugins,
+                    &request.labels,
+                    &request.state,
+                ))
+                .unwrap_or_default()
+        });
+        let dispatch = match tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await {
+            Ok(Ok(dispatch)) => dispatch,
+            _ => PluginDispatch::default(),
+        };
         let _ = tx
             .send(PluginTaskResult::KeyDispatch {
                 key: request.key,
@@ -1134,6 +1224,23 @@ impl MusicDirsSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pending_plugin_tab_yields_options_backed_surface_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::storage::Storage::open_at(dir.path().join("pug.db")).unwrap();
+        let mut app = App::new(storage);
+        let ui_state = PluginUiState::from_app(&app);
+        assert_eq!(prospective_surface_state(&app, &ui_state), ui_state);
+        app.plugin_ui.pending_plugin_tab = Some("scrobbles".to_owned());
+        let next = prospective_surface_state(&app, &ui_state);
+        assert_eq!(next.active_plugin_tab.as_deref(), Some("scrobbles"));
+        assert_eq!(next.active_tab, "options");
+        assert_eq!(next.active_custom_tab, None);
+        app.plugin_ui.active_tab = app.plugin_ui.pending_plugin_tab.take();
+        app.active_tab = Tab::Options;
+        app.plugin_ui.active_custom_tab = None;
+        assert_eq!(PluginUiState::from_app(&app), next);
+    }
     #[test]
     fn ipc_play_accepts_http_urls_and_existing_absolute_paths() {
         assert_eq!(

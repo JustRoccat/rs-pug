@@ -358,10 +358,10 @@ A snapshot of application state passed to **every** hook that takes a `state` ar
 
 | Field | Lua type | Description |
 |---|---|---|
-| `active_tab` | `string` | Id of the active tab: one of `discover`, `albums`, `library`, `local`, `options`, a custom tab id, or a plugin tab id from `on_tabs`. |
+| `active_tab` | `string` | Id of the active stock tab (`discover`, `albums`, `library`, `local`, `options`), or a custom tab id (from `on_ui_config`). When a plugin tab (from `on_tabs`) is active, this still holds the backing stock tab (usually `options`): check `active_plugin_tab` for the plugin tab id. |
 | `active_plugin_tab` | `string \| nil` | Id of the active plugin tab (from `on_tabs`), if one is active. |
 | `active_custom_tab` | `string \| nil` | Id of the active custom tab (from `on_ui_config`), if one is active. |
-| `active_tab_index` | `number` | Position of the active tab in the tab bar (0-based, includes main and plugin tabs). |
+| `active_tab_index` | `number` | 1-based position of the active tab in the tab bar (includes main and plugin tabs). |
 | `current_layout` | [`PluginUiLayoutState`](#pluginuilayoutstate) | Current, effective layout values. |
 | `visible_sections` | `string[]` | Ids of currently visible (non-hidden) custom sections. |
 | `player_state` | `string` | One of the player state labels (e.g. `"playing"`, `"paused"`, `"idle"`, `"searching"`: the exact text comes from `ui_helpers::player_state_label`). |
@@ -464,7 +464,7 @@ Point changes to UI state returned in the `ui` field of `PluginDispatch`. All fi
 
 | Field | Lua type | Description |
 |---|---|---|
-| `set_tab` | `string \| nil` | Switches the active tab. Accepts a stock tab name (`discover`, `albums`, `library`, `local`, `options`), a custom tab id (requires `allow-lua-ui-changes = true`), or a plugin tab id from `on_tabs`. |
+| `set_tab` | `string \| nil` | Switches the active tab. Accepts a stock tab name (`discover`, `albums`, `library`, `local`, `options`), a custom tab id (requires `allow-lua-ui-changes = true`), or a plugin tab id from `on_tabs`. Switching to a plugin tab keeps `PluginUiState.active_tab` on the backing stock tab (usually `options`) and sets `active_plugin_tab` instead: gate tab-specific logic on `active_plugin_tab`, not `active_tab`. |
 | `set_search_query` | `string \| nil` | Overwrites the search field's contents (Discover). |
 | `set_album_search_query` | `string \| nil` | Overwrites the album search field's contents. |
 | `set_focus` | `string \| nil` | `"search"`, `"results"`, or `"queue"`. |

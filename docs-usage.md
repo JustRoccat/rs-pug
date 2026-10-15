@@ -8,7 +8,7 @@ Everything that didn't fit in the README lives here: keys, sound shaping, remote
 
 | Key | What it does |
 |-----|--------|
-| 1-5 | Switch tabs: Discover, Albums, Library (playlists), Local, Options |
+| 1-5 | Switch tabs: Discover, Albums, Library (playlists), Local, Options. Tabs added by plugins follow in render order on keys 6-8 (the tab bar shows the number next to each tab) |
 | Tab | Switch panel focus |
 | j / k | Move up / down |
 | / | Search |
@@ -80,7 +80,7 @@ Marks stick to the songs themselves, not to their positions, so scrolling around
 
 ## Command palette
 
-The colon key opens a fuzzy-searchable palette with playback, volume, repeat and shuffle, seeking, speed, EQ, and tab navigation. Pick with the up and down arrows, run with Enter. The question-mark key shows the same list read-only, without running anything.
+The colon key opens a fuzzy-searchable palette with playback, volume, repeat and shuffle, seeking, speed, EQ, and stock tab navigation (plugin tabs are not listed: use their number key, click them, or a plugin keybind). Pick with the up and down arrows, run with Enter. The question-mark key shows the same list read-only, without running anything.
 
 ## Playback speed
 

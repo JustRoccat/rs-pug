@@ -1044,9 +1044,7 @@ fn activate_tab_by_render_index(app: &mut App, tab_index: usize) {
     }
     let plugin_index = tab_index.saturating_sub(app.main_tabs.len());
     if let Some(tab) = app.plugin_ui.tabs.get(plugin_index) {
-        app.active_tab = Tab::Options;
-        app.plugin_ui.active_tab = Some(tab.id.clone());
-        app.plugin_ui.active_custom_tab = None;
+        app.plugin_ui.pending_plugin_tab = Some(tab.id.clone());
     }
 }
 fn tab_index_from_mouse(app: &App, mouse: MouseEvent) -> Option<usize> {

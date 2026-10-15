@@ -40,6 +40,7 @@ pub struct PluginUiState {
     pub tabs: Vec<PluginTab>,
     pub active_tab: Option<String>,
     pub active_custom_tab: Option<String>,
+    pub pending_plugin_tab: Option<String>,
     pub warnings: std::collections::VecDeque<String>,
     pub allow_lua_ui_changes: bool,
     pub custom_sections: Vec<PluginCustomSection>,

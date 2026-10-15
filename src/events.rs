@@ -232,6 +232,7 @@ pub fn apply_plugin_dispatch(
             app.active_tab = core_tab;
             app.plugin_ui.active_tab = None;
             app.plugin_ui.active_custom_tab = None;
+            app.plugin_ui.pending_plugin_tab = None;
         } else if app.plugin_ui.allow_lua_ui_changes
             && app
                 .main_tabs
@@ -240,9 +241,9 @@ pub fn apply_plugin_dispatch(
         {
             app.plugin_ui.active_custom_tab = Some(tab);
             app.plugin_ui.active_tab = None;
+            app.plugin_ui.pending_plugin_tab = None;
         } else if app.plugin_ui.tabs.iter().any(|t| t.id == tab) {
-            app.active_tab = Tab::Options;
-            app.plugin_ui.active_tab = Some(tab);
+            app.plugin_ui.pending_plugin_tab = Some(tab);
         }
     }
     if let Some(query) = dispatch.ui.set_search_query {
@@ -591,6 +592,7 @@ pub fn activate_main_tab(app: &mut App, index: usize) {
             }
         }
         app.plugin_ui.active_tab = None;
+        app.plugin_ui.pending_plugin_tab = None;
     }
 }
 fn update_section_visibility(app: &mut App, hide: Vec<String>, show: Vec<String>) {

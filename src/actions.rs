@@ -171,6 +171,7 @@ pub fn dispatch(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, action: 
             app.active_tab = tab;
             app.plugin_ui.active_tab = None;
             app.plugin_ui.active_custom_tab = None;
+            app.plugin_ui.pending_plugin_tab = None;
         }
         Action::Quit => {
             let _ = cmd_tx.send(CoreCmd::Quit);

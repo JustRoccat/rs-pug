@@ -54,6 +54,7 @@ pub enum CoreCmd {
     },
     Quit,
     HandleSearchDone(Vec<Song>),
+    HandlePlayReady(Song),
     HandleAlbumSearchDone(Vec<crate::model::Album>),
     ExpandAlbum {
         index: usize,
@@ -166,6 +167,7 @@ impl Core {
         cmd_tx: mpsc::UnboundedSender<CoreCmd>,
     ) {
         let mut tick = time::interval(Duration::from_millis(700));
+        let play_tx = spawn_play_pipeline(Arc::clone(&self.plugins), cmd_tx.clone());
         loop {
             tokio::select! {
                 _ = tick.tick() => {
@@ -180,12 +182,13 @@ impl Core {
                     let res = match cmd {
                         CoreCmd::Search(query) => {
                             let limit = self.config.search.limit.max(1);
-                            let query = self.transform_search_query(query);
                             let source = self.config.search.source;
                             let customs = std::sync::Arc::clone(&self.custom_sources);
+                            let plugins = std::sync::Arc::clone(&self.plugins);
                             let cmd_tx = cmd_tx.clone();
                             let tx = tx.clone();
                             tokio::spawn(async move {
+                                let query = plugin_search_query(plugins, query).await;
                                 match search_songs(limit, query, source, &customs).await {
                                     Ok(songs) => { let _ = cmd_tx.send(CoreCmd::HandleSearchDone(songs)); }
                                     Err(err) => { let _ = tx.send(CoreEvent::SearchFailed(format!("{err:#}"))); }
@@ -195,12 +198,13 @@ impl Core {
                         }
                         CoreCmd::SearchAlbums(query) => {
                             let limit = self.config.search.limit.max(1);
-                            let query = self.transform_search_query(query);
                             let source = self.config.search.source;
                             let customs = std::sync::Arc::clone(&self.custom_sources);
+                            let plugins = std::sync::Arc::clone(&self.plugins);
                             let cmd_tx = cmd_tx.clone();
                             let tx = tx.clone();
                             tokio::spawn(async move {
+                                let query = plugin_search_query(plugins, query).await;
                                 match search_albums(limit, query, source, &customs).await {
                                     Ok(albums) => { let _ = cmd_tx.send(CoreCmd::HandleAlbumSearchDone(albums)); }
                                     Err(err) => { let _ = tx.send(CoreEvent::AlbumSearchFailed(format!("{err:#}"))); }
@@ -219,7 +223,10 @@ impl Core {
                             });
                             Ok(())
                         }
-                        CoreCmd::Play(song) => self.play(song, &tx).await,
+                        CoreCmd::Play(song) => {
+                            let _ = play_tx.send(song);
+                            Ok(())
+                        },
                         CoreCmd::SmartQueue(song) => {
                             let source = self.config.search.source;
                             let customs = std::sync::Arc::clone(&self.custom_sources);
@@ -245,7 +252,8 @@ impl Core {
                                 uploader: None,
                                 duration: None,
                             };
-                            self.play(song, &tx).await
+                            let _ = play_tx.send(song);
+                            Ok(())
                         }
                         CoreCmd::RawMpv(command) => {
                             self.send_mpv(json!({ "command" : command })).await
@@ -269,8 +277,12 @@ impl Core {
                             Ok(())
                         }
                         CoreCmd::HandleSearchDone(songs) => {
-                            let songs = self.transform_search_results(songs);
-                            let _ = tx.send(CoreEvent::SearchDone(songs));
+                            let plugins = std::sync::Arc::clone(&self.plugins);
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                let songs = plugin_search_results(plugins, songs).await;
+                                let _ = tx.send(CoreEvent::SearchDone(songs));
+                            });
                             Ok(())
                         }
                         CoreCmd::HandleAlbumSearchDone(albums) => {
@@ -281,6 +293,7 @@ impl Core {
                             let _ = tx.send(CoreEvent::AlbumExpanded { index, songs });
                             Ok(())
                         }
+                        CoreCmd::HandlePlayReady(song) => self.play(song, &tx).await,
                         CoreCmd::Quit => break,
                     };
                     if let Err(err) = res {
@@ -291,26 +304,7 @@ impl Core {
         }
         let _ = self.mpv_child.kill().await;
     }
-    fn transform_search_query(&self, query: String) -> String {
-        self.plugins
-            .lock()
-            .map(|plugins| plugins.transform_search_query(query.clone()))
-            .unwrap_or(query)
-    }
-    fn transform_search_results(&self, songs: Vec<Song>) -> Vec<Song> {
-        self.plugins
-            .lock()
-            .map(|plugins| plugins.transform_search_results(songs.clone()))
-            .unwrap_or(songs)
-    }
-    fn transform_song_start(&self, song: Song) -> Song {
-        self.plugins
-            .lock()
-            .map(|plugins| plugins.transform_song_start(song.clone()))
-            .unwrap_or(song)
-    }
     async fn play(&mut self, song: Song, tx: &mpsc::UnboundedSender<CoreEvent>) -> Result<()> {
-        let song = self.transform_song_start(song);
         self.send_mpv(json!({ "command" : ["loadfile", song.webpage_url, "replace"] }))
             .await?;
         self.history.push_front(song.clone());
@@ -406,6 +400,66 @@ impl Core {
 #[derive(Debug, Deserialize)]
 struct MpvBoolResponse {
     data: bool,
+}
+async fn plugin_search_query(
+    plugins: Arc<Mutex<PluginManager>>,
+    query: String,
+) -> String {
+    let fallback = query.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        plugins
+            .lock()
+            .map(|plugins| plugins.transform_search_query(query.clone()))
+            .unwrap_or(query)
+    });
+    match tokio::time::timeout(crate::plugins::PLUGIN_TASK_TIMEOUT, job).await {
+        Ok(Ok(query)) => query,
+        _ => fallback,
+    }
+}
+async fn plugin_search_results(
+    plugins: Arc<Mutex<PluginManager>>,
+    songs: Vec<Song>,
+) -> Vec<Song> {
+    let fallback = songs.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        plugins
+            .lock()
+            .map(|plugins| plugins.transform_search_results(songs.clone()))
+            .unwrap_or(songs)
+    });
+    match tokio::time::timeout(crate::plugins::PLUGIN_TASK_TIMEOUT, job).await {
+        Ok(Ok(songs)) => songs,
+        _ => fallback,
+    }
+}
+async fn plugin_song_start(plugins: Arc<Mutex<PluginManager>>, song: Song) -> Song {
+    let fallback = song.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        plugins
+            .lock()
+            .map(|plugins| plugins.transform_song_start(song.clone()))
+            .unwrap_or(song)
+    });
+    match tokio::time::timeout(crate::plugins::PLUGIN_TASK_TIMEOUT, job).await {
+        Ok(Ok(song)) => song,
+        _ => fallback,
+    }
+}
+fn spawn_play_pipeline(
+    plugins: Arc<Mutex<PluginManager>>,
+    cmd_tx: mpsc::UnboundedSender<CoreCmd>,
+) -> mpsc::UnboundedSender<Song> {
+    let (play_tx, mut play_rx) = mpsc::unbounded_channel::<Song>();
+    tokio::spawn(async move {
+        while let Some(song) = play_rx.recv().await {
+            let song = plugin_song_start(Arc::clone(&plugins), song).await;
+            if cmd_tx.send(CoreCmd::HandlePlayReady(song)).is_err() {
+                break;
+            }
+        }
+    });
+    play_tx
 }
 #[derive(Debug, Deserialize)]
 struct MpvNumberResponse {
@@ -1131,6 +1185,39 @@ mod tests {
             "Should have found songs in symlinked directory. Found: {}",
             songs.len()
         );
+    }
+    #[tokio::test]
+    async fn play_pipeline_preserves_order() {
+        let dir = std::env::temp_dir().join("rs_pug_test_play_order");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let plugins = Arc::new(
+            Mutex::new(PluginManager::load(true, dir.to_str().unwrap(), false)),
+        );
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let play_tx = spawn_play_pipeline(Arc::clone(&plugins), cmd_tx);
+        let song = |id: &str| Song {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            webpage_url: id.to_owned(),
+            uploader: None,
+            duration: None,
+        };
+        play_tx.send(song("a")).unwrap();
+        play_tx.send(song("b")).unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let cmd = tokio::time::timeout(Duration::from_secs(5), cmd_rx.recv())
+                .await
+                .expect("pipeline replies")
+                .expect("channel open");
+            match cmd {
+                CoreCmd::HandlePlayReady(song) => ids.push(song.id),
+                _ => panic!("pipeline sends only play-ready commands"),
+            }
+        }
+        assert_eq!(ids, vec!["a".to_owned(), "b".to_owned()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn substitute_arg_replaces_query_and_limit() {
