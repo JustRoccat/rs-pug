@@ -36,6 +36,14 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 - Hot reload: configuration and theme changes apply automatically
 - Add any streaming source you want.
 
+## Additional with plugins
+- Discord Rich Presence
+- Last.fm
+- Lirycs 
+- UI Change to minimal
+- Plugin Manager
+- Get all this [`here!`](https://github.com/JustRoccat/all-rspug) 
+
 ## Requirements
 
 - [`mpv`](https://mpv.io/) (required)
