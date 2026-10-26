@@ -26,7 +26,7 @@ pub fn validate_report(
     warning: Option<&str>,
     path: Option<&std::path::Path>,
 ) -> (String, i32) {
-    use crate::config::{source_label, source_persist_name, CustomSourceKind};
+    use crate::config::{CustomSourceKind, source_label, source_persist_name};
     let mut out = String::new();
     match path {
         Some(path) => out.push_str(&format!("Config file: {}\n", path.display())),
@@ -37,7 +37,10 @@ pub fn validate_report(
         source_label(config.search.source, &config.search.custom_sources),
         source_persist_name(config.search.source, &config.search.custom_sources),
     ));
-    out.push_str(&format!("Custom sources ({}):\n", config.search.custom_sources.len()));
+    out.push_str(&format!(
+        "Custom sources ({}):\n",
+        config.search.custom_sources.len()
+    ));
     for custom in &config.search.custom_sources {
         match &custom.kind {
             CustomSourceKind::Ytdlp { prefix } => {

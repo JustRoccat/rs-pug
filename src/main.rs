@@ -1,26 +1,31 @@
-use std::{
-    collections::VecDeque, fs, path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime},
-};
 use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyEvent};
+use std::{
+    collections::VecDeque,
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime},
+};
 use tokio::sync::mpsc;
 mod actions;
+mod audio;
 mod cli;
 mod config;
 mod core;
 mod cover;
-mod icons;
 mod db;
 mod eq;
+mod events;
 mod extras;
 mod fft;
-mod events;
+mod icons;
 mod input;
+mod lyrics;
 mod model;
 mod mpris;
+mod paths;
 mod playlist;
 mod plugins;
 mod sonum;
@@ -34,13 +39,16 @@ use core::{Core, CoreCmd, CoreEvent};
 use input::KeyPluginAction;
 use model::{App, MainTabKind, Tab};
 use plugins::{
-    PluginDispatch, PluginManager, PluginPanel, PluginTab, PluginUiConfig,
-    PluginUiInject, PluginUiSections, PluginUiState,
+    PluginDispatch, PluginManager, PluginPanel, PluginTab, PluginUiConfig, PluginUiInject,
+    PluginUiSections, PluginUiState,
 };
 use storage::Storage;
 enum PluginTaskResult {
     UiConfig(PluginUiConfig),
-    UiUpdate { state: PluginUiState, layout: plugins::PluginLayoutConfig },
+    UiUpdate {
+        state: PluginUiState,
+        layout: plugins::PluginLayoutConfig,
+    },
     UiSurface {
         state: PluginUiState,
         tabs: Vec<PluginTab>,
@@ -49,7 +57,10 @@ enum PluginTaskResult {
         inject: PluginUiInject,
     },
     EventDispatch(PluginDispatch),
-    KeyDispatch { key: KeyEvent, dispatch: PluginDispatch },
+    KeyDispatch {
+        key: KeyEvent,
+        dispatch: PluginDispatch,
+    },
     PluginsReloaded,
 }
 struct PendingPluginKey {
@@ -69,12 +80,12 @@ fn init_logging(debug: bool) {
         Ok(file) => file,
         Err(_) => return,
     };
-    let _ = simplelog::WriteLogger::init(
-        log::LevelFilter::Debug,
-        simplelog::Config::default(),
-        file,
+    let _ =
+        simplelog::WriteLogger::init(log::LevelFilter::Debug, simplelog::Config::default(), file);
+    log::info!(
+        "rs-pug starting, debug logging enabled -> {}",
+        path.display()
     );
-    log::info!("rs-pug starting, debug logging enabled -> {}", path.display());
 }
 const MAX_IPC_LINE_BYTES: usize = 4096;
 async fn read_ipc_line<R>(reader: &mut tokio::io::BufReader<R>) -> std::io::Result<Option<String>>
@@ -124,8 +135,7 @@ async fn main() -> Result<()> {
     let args = cli::Args::parse();
     init_logging(args.debug);
     let ipc_sock_path = config::default_ipc_socket();
-    let is_client_cmd = args.toggle_pause || args.next || args.prev
-        || args.play.is_some();
+    let is_client_cmd = args.toggle_pause || args.next || args.prev || args.play.is_some();
     if is_client_cmd {
         if let Ok(mut stream) = tokio::net::UnixStream::connect(&ipc_sock_path).await {
             use tokio::io::AsyncWriteExt;
@@ -143,9 +153,7 @@ async fn main() -> Result<()> {
             }
         } else {
             log::warn!("failed to connect to IPC socket at {ipc_sock_path}");
-            eprintln!(
-                "Failed to connect to rs-pug instance at {ipc_sock_path}. Is it running?"
-            );
+            eprintln!("Failed to connect to rs-pug instance at {ipc_sock_path}. Is it running?");
             std::process::exit(1);
         }
         return Ok(());
@@ -164,25 +172,19 @@ async fn main() -> Result<()> {
         }
     }
     if args.validate {
-        let (report, code) = cli::validate_report(
-            &config,
-            config_warning.as_deref(),
-            config_path.as_deref(),
-        );
+        let (report, code) =
+            cli::validate_report(&config, config_warning.as_deref(), config_path.as_deref());
         print!("{report}");
         std::process::exit(code);
     }
-    let plugin_manager = Arc::new(
-        Mutex::new(
-            PluginManager::load(
-                config.general.plugins_enabled,
-                config.general.plugins_dir.as_str(),
-                config.lua.allow_lua_ui_changes,
-            ),
-        ),
-    );
+    let plugin_manager = Arc::new(Mutex::new(PluginManager::load(
+        config.general.plugins_enabled,
+        config.general.plugins_dir.as_str(),
+        config.lua.allow_lua_ui_changes,
+    )));
     let mut terminal = terminal::setup_terminal()?;
-    cover::init_terminal_cell_size();    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    cover::init_terminal_cell_size();
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
     let (plugin_tx, mut plugin_rx) = mpsc::unbounded_channel();
     let (mpris_server, mut mpris_action_rx) =
@@ -297,14 +299,33 @@ async fn main() -> Result<()> {
         Ok(recent) => app.recently_played = recent.into(),
         Err(e) => app.set_flash(format!("Error loading recent: {e}"), 5),
     }
-    match app.storage.fetch_local_songs_window(0, 200) {
-        Ok((window, offset, total)) => {
-            app.local.window = window;
-            app.local.offset = offset;
-            app.local.total = total;
-        }
-        Err(e) => app.set_flash(format!("Error loading library window: {e}"), 5),
+    if let Some((window, offset, total)) = ui_helpers::fetch_local_window(&app, 0) {
+        app.local.window = window;
+        app.local.offset = offset;
+        app.local.total = total;
     }
+    if let Ok(Some(session)) = app.storage.load_session() {
+        app.queue = session.queue.into();
+        app.selected_queue = 0;
+        app.volume = session.volume.min(130);
+        app.muted = session.muted;
+        app.repeat_mode = session.repeat;
+        app.playback_speed = session.speed.clamp(0.25, 2.0);
+        app.playback_pos = session.position.max(0.0);
+        if session.muted {
+            let _ = cmd_tx.send(CoreCmd::ToggleMute);
+        }
+        let _ = cmd_tx.send(CoreCmd::SetVolume(app.volume));
+        app.resume_pending = session
+            .current
+            .clone()
+            .map(|song| (song.id.clone(), session.position.max(0.0)));
+        if let Some(current) = session.current {
+            app.set_flash(format!("Resumed session: {}", current.title), 3);
+            let _ = cmd_tx.send(CoreCmd::Play(current));
+        }
+    }
+    crate::audio::apply_startup_audio(&cmd_tx, &app);
     app.eq.custom_presets = config::load_eq_presets();
     app.local.scanning = true;
     let storage_clone = app.storage.clone();
@@ -312,9 +333,9 @@ async fn main() -> Result<()> {
     let evt_tx_clone = evt_tx.clone();
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || {
-                core::check_and_refresh_library(&config_clone, &storage_clone)
-            })
-            .await;
+            core::check_and_refresh_library(&config_clone, &storage_clone)
+        })
+        .await;
         let _ = evt_tx_clone.send(CoreEvent::LibraryRefreshDone);
     });
     let tick_rate = Duration::from_millis(33);
@@ -322,6 +343,8 @@ async fn main() -> Result<()> {
     let (hr_paths_tx, hr_paths_rx) = mpsc::unbounded_channel::<HotReloadPaths>();
     let (cover_tx, mut cover_rx) = mpsc::unbounded_channel::<cover::CoverResult>();
     let (proto_tx, mut proto_rx) = mpsc::unbounded_channel::<ProtoResult>();
+    let (lyrics_tx, mut lyrics_rx) =
+        mpsc::unbounded_channel::<(String, Option<crate::lyrics::Lyrics>)>();
     spawn_hot_reload_task(config.clone(), hr_result_tx, hr_paths_rx);
     let mut startup_ui_config_scheduled = false;
     let mut startup_ui_config_done = !app.plugin_ui.allow_lua_ui_changes;
@@ -361,11 +384,10 @@ async fn main() -> Result<()> {
                 if let Some(warning) = warning {
                     app.set_flash(warning, 6);
                 }
-                let _ = hr_paths_tx
-                    .send(HotReloadPaths {
-                        plugins_dir: config.general.plugins_dir.clone(),
-                        music_dirs: config.general.music_directories.clone(),
-                    });
+                let _ = hr_paths_tx.send(HotReloadPaths {
+                    plugins_dir: config.general.plugins_dir.clone(),
+                    music_dirs: config.general.music_directories.clone(),
+                });
                 if config.general.plugins_enabled != old.general.plugins_enabled
                     || config.general.plugins_dir != old.general.plugins_dir
                     || config.lua.allow_lua_ui_changes != old.lua.allow_lua_ui_changes
@@ -392,12 +414,9 @@ async fn main() -> Result<()> {
                 let evt_tx_clone = evt_tx.clone();
                 tokio::spawn(async move {
                     let _ = tokio::task::spawn_blocking(move || {
-                            core::check_and_refresh_library(
-                                &config_clone,
-                                &storage_clone,
-                            )
-                        })
-                        .await;
+                        core::check_and_refresh_library(&config_clone, &storage_clone)
+                    })
+                    .await;
                     let _ = evt_tx_clone.send(CoreEvent::LibraryRefreshDone);
                 });
             }
@@ -434,14 +453,16 @@ async fn main() -> Result<()> {
                 }
                 mpris::MprisAction::SetPositionAbsolute(position_micros) => {
                     let seconds = (position_micros as f64 / 1_000_000.0).max(0.0);
-                    let _ = cmd_tx
-                        .send(
-                            CoreCmd::RawMpv(serde_json::json!(["seek", seconds, "absolute"])),
-                        );
+                    let _ = cmd_tx.send(CoreCmd::RawMpv(serde_json::json!([
+                        "seek", seconds, "absolute"
+                    ])));
                     mpris_server.notify_seeked(seconds);
                 }
                 mpris::MprisAction::OpenUri(uri) => {
-                    let _ = cmd_tx.send(CoreCmd::PlayUrl { url: uri, title: None });
+                    let _ = cmd_tx.send(CoreCmd::PlayUrl {
+                        url: uri,
+                        title: None,
+                    });
                 }
                 mpris::MprisAction::SetVolume(volume) => {
                     let percent = (volume.clamp(0.0, 1.3) * 100.0).round() as u8;
@@ -487,10 +508,7 @@ async fn main() -> Result<()> {
                     if state.active_plugin_tab.is_some()
                         && app.plugin_ui.pending_plugin_tab == state.active_plugin_tab
                     {
-                        app.plugin_ui.active_tab = app
-                            .plugin_ui
-                            .pending_plugin_tab
-                            .take();
+                        app.plugin_ui.active_tab = app.plugin_ui.pending_plugin_tab.take();
                         app.active_tab = Tab::Options;
                         app.plugin_ui.active_custom_tab = None;
                     }
@@ -518,11 +536,7 @@ async fn main() -> Result<()> {
                 PluginTaskResult::KeyDispatch { key, dispatch } => {
                     key_hook_pending = false;
                     if !events::apply_plugin_dispatch(&mut app, &cmd_tx, dispatch) {
-                        keep_running = input::handle_native_key_event(
-                            &mut app,
-                            key,
-                            &cmd_tx,
-                        );
+                        keep_running = input::handle_native_key_event(&mut app, key, &cmd_tx);
                     }
                     last_ui_state = None;
                     last_ui_surface_state = None;
@@ -550,10 +564,12 @@ async fn main() -> Result<()> {
                 }
             }
             if !keep_running {
+                crate::events::persist_session_now(&mut app);
                 break;
             }
         }
         if !keep_running {
+            crate::events::persist_session_now(&mut app);
             break;
         }
         let ui_state = PluginUiState::from_app(&app);
@@ -562,8 +578,10 @@ async fn main() -> Result<()> {
             startup_ui_config_scheduled = true;
         }
         let ui_state = PluginUiState::from_app(&app);
-        if startup_ui_config_done && app.plugin_ui.allow_lua_ui_changes
-            && !ui_update_pending && last_ui_state.as_ref() != Some(&ui_state)
+        if startup_ui_config_done
+            && app.plugin_ui.allow_lua_ui_changes
+            && !ui_update_pending
+            && last_ui_state.as_ref() != Some(&ui_state)
         {
             spawn_ui_update_task(&plugin_manager, &plugin_tx, ui_state.clone());
             ui_update_pending = true;
@@ -600,8 +618,7 @@ async fn main() -> Result<()> {
                     let tx = cover_tx.clone();
                     tokio::task::spawn_blocking(move || {
                         let bytes = cover::load_blocking(&song);
-                        let bitmap =
-                            bytes.as_ref().and_then(|b| cover::decode_cover(b));
+                        let bitmap = bytes.as_ref().and_then(|b| cover::decode_cover(b));
                         let palette = bitmap.as_ref().map(cover::palette3);
                         let _ = tx.send(cover::CoverResult {
                             key: want_cover,
@@ -623,8 +640,7 @@ async fn main() -> Result<()> {
             }
         }
         if app.minimal && app.cover_bitmap.is_some() {
-            let (term_w, term_h) =
-                crossterm::terminal::size().unwrap_or((0, 0));
+            let (term_w, term_h) = crossterm::terminal::size().unwrap_or((0, 0));
             // Async art build
             let cover = tui::minimal_cover_area(term_w, term_h);
             let avail = ratatui::layout::Size::new(
@@ -632,15 +648,8 @@ async fn main() -> Result<()> {
                 cover.height.saturating_sub(2),
             );
             let (fw, fh) = cover::terminal_cell_size();
-            let (cw, ch) =
-                cover::square_cover_cells(avail.width, avail.height, fw, fh);
-            let key = (
-                app.cover_key.clone(),
-                cw,
-                ch,
-                fw,
-                fh,
-            );
+            let (cw, ch) = cover::square_cover_cells(avail.width, avail.height, fw, fh);
+            let key = (app.cover_key.clone(), cw, ch, fw, fh);
             let song_changed = app.cover_proto_key.0 != app.cover_key;
             let throttled = !song_changed
                 && app.cover_protocol.is_some()
@@ -654,34 +663,20 @@ async fn main() -> Result<()> {
                 if let Some(bitmap) = app.cover_bitmap.clone() {
                     let tx = proto_tx.clone();
                     tokio::task::spawn_blocking(move || {
-                        let filled = cover::upscale_to_fill(
-                            bitmap, cw, ch, fw, fh,
-                        );
-                        let protocol =
-                            ratatui_image::protocol::halfblocks::Halfblocks::new(
-                                filled,
-                                ratatui::layout::Size::new(cw, ch),
+                        let filled = cover::upscale_to_fill(bitmap, cw, ch, fw, fh);
+                        let protocol = ratatui_image::protocol::halfblocks::Halfblocks::new(
+                            filled,
+                            ratatui::layout::Size::new(cw, ch),
+                        )
+                        .ok()
+                        .map(|hb| {
+                            crate::model::CoverProtocol(
+                                ratatui_image::protocol::Protocol::Halfblocks(hb),
                             )
-                            .ok()
-                            .map(|hb| {
-                                crate::model::CoverProtocol(
-                                    ratatui_image::protocol::Protocol::Halfblocks(
-                                        hb,
-                                    ),
-                                )
-                            });
-                        let _ = tx.send(ProtoResult {
-                            key,
-                            protocol,
                         });
+                        let _ = tx.send(ProtoResult { key, protocol });
                     });
-                    proto_inflight = Some((
-                        app.cover_key.clone(),
-                        cw,
-                        ch,
-                        fw,
-                        fh,
-                    ));
+                    proto_inflight = Some((app.cover_key.clone(), cw, ch, fw, fh));
                     last_cover_build = Instant::now();
                 }
             }
@@ -704,19 +699,67 @@ async fn main() -> Result<()> {
                 proto_inflight = None;
             }
         }
+        let want_lyrics = app
+            .current_song
+            .as_ref()
+            .map(cover::song_key)
+            .unwrap_or_default();
+        if want_lyrics != app.lyrics.key && !want_lyrics.is_empty() {
+            app.lyrics.key = want_lyrics.clone();
+            app.lyrics.lines.clear();
+            app.lyrics.text = None;
+            app.lyrics.loading = true;
+            if let Some(song) = app.current_song.clone() {
+                let tx = lyrics_tx.clone();
+                let key = want_lyrics.clone();
+                tokio::task::spawn_blocking(move || {
+                    let found = crate::lyrics::fetch_lyrics(&song);
+                    let _ = tx.send((key, found));
+                });
+            }
+        }
+        if want_lyrics.is_empty() && !app.lyrics.key.is_empty() {
+            app.lyrics.key.clear();
+            app.lyrics.lines.clear();
+            app.lyrics.text = None;
+            app.lyrics.loading = false;
+        }
+        while let Ok((key, found)) = lyrics_rx.try_recv() {
+            if key == app.lyrics.key {
+                if let Some(lyrics) = found {
+                    app.lyrics.lines = lyrics.lines;
+                    app.lyrics.text = lyrics.text;
+                    app.lyrics.source = lyrics.source;
+                }
+                app.lyrics.loading = false;
+            }
+        }
         terminal.draw(|frame| tui::draw(frame, &app))?;
         while let Ok(event) = evt_rx.try_recv() {
+            let resume_seek = match &event {
+                CoreEvent::Started(song) => app
+                    .resume_pending
+                    .as_ref()
+                    .filter(|(id, _)| id == &song.id)
+                    .map(|(_, pos)| *pos),
+                _ => None,
+            };
             let plugin_event = events::plugin_event_from_core_event(&event);
             if let Some(cmd) = events::apply_event(&mut app, event) {
                 let _ = cmd_tx.send(cmd);
             }
+            if let Some(pos) = resume_seek {
+                if pos > 3.0 {
+                    let _ = cmd_tx.send(CoreCmd::RawMpv(serde_json::json!([
+                        "seek",
+                        pos - 2.0,
+                        "absolute"
+                    ])));
+                }
+                app.resume_pending = None;
+            }
             let ui_state = PluginUiState::from_app(&app);
-            spawn_event_dispatch_task(
-                &plugin_manager,
-                &plugin_tx,
-                plugin_event,
-                ui_state,
-            );
+            spawn_event_dispatch_task(&plugin_manager, &plugin_tx, plugin_event, ui_state);
         }
         {
             let mpris_status = match app.player_state {
@@ -739,6 +782,7 @@ async fn main() -> Result<()> {
                     match input::handle_key_event_pre_plugin(&mut app, key, &cmd_tx) {
                         KeyPluginAction::Handled(next) => {
                             if !next {
+                                crate::events::persist_session_now(&mut app);
                                 break;
                             }
                         }
@@ -762,6 +806,7 @@ async fn main() -> Result<()> {
             }
         }
     }
+    crate::events::persist_session_now(&mut app);
     let _ = cmd_tx.send(CoreCmd::Quit);
     terminal::restore_terminal(terminal)?;
     Ok(())
@@ -779,9 +824,7 @@ fn spawn_plugin_reload_task(
         let job = tokio::task::spawn_blocking(move || {
             PluginManager::load(enabled, plugins_dir.as_str(), allow_lua_ui_changes)
         });
-        if let Ok(Ok(next)) =
-            tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await
-        {
+        if let Ok(Ok(next)) = tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await {
             if let Ok(mut manager) = plugins.lock() {
                 manager.swap_from(next);
             }
@@ -845,11 +888,7 @@ fn spawn_ui_update_task(
             Ok(Ok(layout)) => layout,
             _ => plugins::PluginLayoutConfig::default(),
         };
-        let _ = tx
-            .send(PluginTaskResult::UiUpdate {
-                state,
-                layout,
-            });
+        let _ = tx.send(PluginTaskResult::UiUpdate { state, layout });
     });
 }
 fn spawn_ui_surface_task(
@@ -885,23 +924,18 @@ fn spawn_ui_surface_task(
                 })
                 .unwrap_or_default()
         });
-        let (tabs, panels, sections, inject) = match tokio::time::timeout(
-            plugins::PLUGIN_TASK_TIMEOUT,
-            job,
-        )
-        .await
-        {
-            Ok(Ok(surface)) => surface,
-            _ => Default::default(),
-        };
-        let _ = tx
-            .send(PluginTaskResult::UiSurface {
-                state,
-                tabs,
-                panels,
-                sections,
-                inject,
-            });
+        let (tabs, panels, sections, inject) =
+            match tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await {
+                Ok(Ok(surface)) => surface,
+                _ => Default::default(),
+            };
+        let _ = tx.send(PluginTaskResult::UiSurface {
+            state,
+            tabs,
+            panels,
+            sections,
+            inject,
+        });
     });
 }
 fn spawn_event_dispatch_task(
@@ -945,22 +979,17 @@ fn start_next_plugin_key(
         let job = tokio::task::spawn_blocking(move || {
             plugins
                 .lock()
-                .map(|plugins| dispatch_key_with_aliases(
-                    &plugins,
-                    &request.labels,
-                    &request.state,
-                ))
+                .map(|plugins| dispatch_key_with_aliases(&plugins, &request.labels, &request.state))
                 .unwrap_or_default()
         });
         let dispatch = match tokio::time::timeout(plugins::PLUGIN_TASK_TIMEOUT, job).await {
             Ok(Ok(dispatch)) => dispatch,
             _ => PluginDispatch::default(),
         };
-        let _ = tx
-            .send(PluginTaskResult::KeyDispatch {
-                key: request.key,
-                dispatch,
-            });
+        let _ = tx.send(PluginTaskResult::KeyDispatch {
+            key: request.key,
+            dispatch,
+        });
     });
 }
 fn dispatch_key_with_aliases(
@@ -977,20 +1006,27 @@ fn dispatch_key_with_aliases(
     PluginDispatch::default()
 }
 fn plugin_dispatch_has_effect(dispatch: &PluginDispatch) -> bool {
-    dispatch.consume || dispatch.flash.is_some() || dispatch.flash_seconds.is_some()
-        || !dispatch.core_actions.is_empty() || dispatch.ui.set_tab.is_some()
+    dispatch.consume
+        || dispatch.flash.is_some()
+        || dispatch.flash_seconds.is_some()
+        || !dispatch.core_actions.is_empty()
+        || dispatch.ui.set_tab.is_some()
         || dispatch.ui.set_search_query.is_some()
         || dispatch.ui.set_album_search_query.is_some()
-        || dispatch.ui.set_focus.is_some() || dispatch.ui.set_search_mode.is_some()
+        || dispatch.ui.set_focus.is_some()
+        || dispatch.ui.set_search_mode.is_some()
         || dispatch.ui.set_selected_result.is_some()
         || dispatch.ui.set_selected_album_result.is_some()
         || dispatch.ui.set_selected_queue.is_some()
         || layout_patch_has_effect(&dispatch.ui.layout)
 }
 fn layout_patch_has_effect(layout: &plugins::PluginUiLayoutPatch) -> bool {
-    layout.queue_width_percent.is_some() || layout.visualizer_height.is_some()
-        || layout.tab_bar_position.is_some() || layout.tabs_width.is_some()
-        || layout.queue_position.is_some() || !layout.hide_sections.is_empty()
+    layout.queue_width_percent.is_some()
+        || layout.visualizer_height.is_some()
+        || layout.tab_bar_position.is_some()
+        || layout.tabs_width.is_some()
+        || layout.queue_position.is_some()
+        || !layout.hide_sections.is_empty()
         || !layout.show_sections.is_empty()
 }
 struct HotReloadResult {
@@ -1024,9 +1060,7 @@ impl HotReloadState {
             theme_snapshot: DirSnapshot::capture(config_resource_dir("themes"), "json"),
             eq_snapshot: DirSnapshot::capture(config_resource_dir("eqpresets"), "json"),
             plugin_snapshot: DirSnapshot::capture(&config.general.plugins_dir, "lua"),
-            music_dirs_snapshot: MusicDirsSnapshot::capture(
-                &config.general.music_directories,
-            ),
+            music_dirs_snapshot: MusicDirsSnapshot::capture(&config.general.music_directories),
         }
     }
     fn refresh_all(&mut self) -> HotReloadResult {
@@ -1049,14 +1083,11 @@ fn spawn_hot_reload_task(
     mut paths_rx: mpsc::UnboundedReceiver<HotReloadPaths>,
 ) {
     tokio::spawn(async move {
-        let mut state = match tokio::task::spawn_blocking(move || HotReloadState::new(
-                &config,
-            ))
-            .await
-        {
-            Ok(state) => state,
-            Err(_) => return,
-        };
+        let mut state =
+            match tokio::task::spawn_blocking(move || HotReloadState::new(&config)).await {
+                Ok(state) => state,
+                Err(_) => return,
+            };
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         interval.tick().await;
@@ -1067,13 +1098,13 @@ fn spawn_hot_reload_task(
                 latest_paths = Some(p);
             }
             let result = tokio::task::spawn_blocking(move || {
-                    if let Some(paths) = latest_paths {
-                        state.update_paths(paths);
-                    }
-                    let result = state.refresh_all();
-                    (state, result)
-                })
-                .await;
+                if let Some(paths) = latest_paths {
+                    state.update_paths(paths);
+                }
+                let result = state.refresh_all();
+                (state, result)
+            })
+            .await;
             let result = match result {
                 Ok(result) => result,
                 Err(_) => break,
@@ -1114,9 +1145,7 @@ impl PathsSnapshot {
         }
     }
     fn refresh(&mut self) -> bool {
-        let next = Self::capture(
-            self.files.iter().map(|file| file.path.clone()).collect(),
-        );
+        let next = Self::capture(self.files.iter().map(|file| file.path.clone()).collect());
         if *self != next {
             *self = next;
             true
@@ -1161,11 +1190,7 @@ impl DirSnapshot {
     }
 }
 fn config_resource_dir(kind: &str) -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".config/rs-pug").join(kind)
-    } else {
-        PathBuf::from(".config/rs-pug").join(kind)
-    }
+    crate::paths::rs_pug_dir().join(kind)
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MusicDirsSnapshot {

@@ -15,7 +15,11 @@ pub mod nf {
 
 // Tab icon or nothing
 pub fn tab(icon: &str, enabled: bool) -> String {
-    if enabled { icon.to_owned() } else { String::new() }
+    if enabled {
+        icon.to_owned()
+    } else {
+        String::new()
+    }
 }
 
 // Icon row or title
@@ -132,17 +136,24 @@ mod tests {
     fn stock_tabs_ship_toggleable_icons() {
         use ratatui::style::Style;
         let tabs = crate::model::default_main_tabs();
-        assert_eq!(tabs.len(), 5);
+        assert_eq!(tabs.len(), 6);
         for tab in &tabs {
             assert!(!tab.icon.is_empty(), "tab {} has an icon", tab.id);
             assert!(
-                tab.icon.chars().all(|c| ('\u{e000}'..='\u{f8ff}').contains(&c)),
+                tab.icon
+                    .chars()
+                    .all(|c| ('\u{e000}'..='\u{f8ff}').contains(&c)),
                 "tab {} icon is NF-only: {:?}",
                 tab.id,
                 tab.icon
             );
-            let rendered =
-                tab_row(&tab.icon, &tab.title, false, Style::default(), Style::default());
+            let rendered = tab_row(
+                &tab.icon,
+                &tab.title,
+                false,
+                Style::default(),
+                Style::default(),
+            );
             assert_eq!(rendered.len(), 1, "icons off leaves just the title");
         }
         assert!(crate::config::GeneralConfig::default().icons);

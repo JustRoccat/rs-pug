@@ -1,6 +1,12 @@
 use super::*;
 
-pub(super) fn draw_now_playing(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
+pub(super) fn draw_now_playing(
+    frame: &mut Frame,
+    app: &App,
+    pal: &Palette,
+    anim: Color,
+    area: Rect,
+) {
     let inner_w = area.width.saturating_sub(2) as usize;
     let (song_str, artist_str) = if let Some(song) = &app.current_song {
         (song.title.clone(), song.subtitle())

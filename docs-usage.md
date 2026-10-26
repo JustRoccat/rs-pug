@@ -8,7 +8,7 @@ Everything that didn't fit in the README lives here: keys, sound shaping, remote
 
 | Key | What it does |
 |-----|--------|
-| 1-5 | Switch tabs: Discover, Albums, Library (playlists), Local, Options. Tabs added by plugins follow in render order on keys 6-8 (the tab bar shows the number next to each tab) |
+| 1-6 | Switch tabs: Discover, Albums, Library (playlists), Local, Lyrics, Options. Tabs added by plugins follow in render order on keys 7-8 (the tab bar shows the number next to each tab) |
 | Tab | Switch panel focus |
 | j / k | Move up / down |
 | / | Search |
@@ -25,6 +25,9 @@ Everything that didn't fit in the README lives here: keys, sound shaping, remote
 | s | Cycle local sort mode (Local tab) |
 | g / a | Filter the local library by genre / artist (Local tab, Organized view) |
 | b | Filter by album (Organized view), or mark/unmark for bulk-queue (Flat view / Discover) |
+| w | Queue selected song as next |
+| J / K | Move selected queue item down / up |
+| S | Save queue as playlist |
 | F | Clear local library filters |
 | : | Open the command palette |
 | ? | Show the full command reference |
@@ -139,6 +142,18 @@ Config file → [general] image_background = true
 
 It defaults to on.
 
+## Lyrics
+
+The Lyrics tab follows the current track. Sonum tracks use `GET /tracks/:id/lyrics` with timed lines when available. Local files use a sibling `.lrc` file first, then embedded lyrics tags. Plain text shows as-is, timed lines highlight with playback position.
+
+## Session restore
+
+Queue, current track, playback position, volume, mute, repeat mode and speed are saved to SQLite on track change, volume change and exit, then restored on next start. The current track resumes a couple seconds before where it stopped.
+
+## Audio shaping
+
+Options tab rows and palette commands cover loudnorm normalize, replaygain off/track/album, gapless and fade seconds. Normalize and fade apply through the mpv `af` chain together with the equalizer. Replaygain and gapless are set as mpv flags at startup and runtime properties.
+
 ## CLI / IPC
 
 Besides picking a source at startup, rs-pug can drive an already-running instance through a local socket. That's what status bars and hotkey daemons talk to:
@@ -178,7 +193,7 @@ rs-pug --validate
 
 ## Configuration
 
-Every setting lives in one file:
+Every setting lives in one file (`$XDG_CONFIG_HOME/rs-pug/config.toml` when set, otherwise `~/.config/rs-pug/config.toml`):
 
 ```
 ~/.config/rs-pug/config.toml

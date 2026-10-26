@@ -1,6 +1,12 @@
 use super::*;
 
-pub(super) fn draw_plugin_panels(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size: Rect) {
+pub(super) fn draw_plugin_panels(
+    frame: &mut Frame,
+    app: &App,
+    pal: &Palette,
+    anim: Color,
+    size: Rect,
+) {
     if app.plugin_ui.panels.is_empty() {
         return;
     }

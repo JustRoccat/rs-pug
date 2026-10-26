@@ -141,13 +141,11 @@ fn draw_minimal_title(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
     } else {
         pal.get_color("dim")
     };
-    let w = Paragraph::new(lines)
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border)),
-        );
+    let w = Paragraph::new(lines).alignment(Alignment::Center).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border)),
+    );
     frame.render_widget(w, area);
 }
 
@@ -239,10 +237,7 @@ fn draw_minimal_spectrum(frame: &mut Frame, app: &App, pal: &Palette, area: Rect
             if *lvl >= threshold {
                 spans.push(Span::styled("█", Style::default().fg(colors[idx])));
             } else if row == h - 1 {
-                spans.push(Span::styled(
-                    "▁",
-                    Style::default().fg(pal.get_color("dim")),
-                ));
+                spans.push(Span::styled("▁", Style::default().fg(pal.get_color("dim"))));
             } else {
                 spans.push(Span::raw(" "));
             }
@@ -380,8 +375,8 @@ mod tests {
 
     #[test]
     fn minimal_backdrop_paints_buffer_cells() {
-        use ratatui::{backend::TestBackend, Terminal};
         use ratatui::style::Color;
+        use ratatui::{Terminal, backend::TestBackend};
 
         fn tinted_cells(palette: Option<[[u8; 3]; 3]>, background: bool) -> usize {
             let mut app = test_app();
@@ -413,11 +408,7 @@ mod tests {
             0,
             "toggle off paints nothing"
         );
-        assert_eq!(
-            tinted_cells(None, true),
-            0,
-            "no accent paints nothing"
-        );
+        assert_eq!(tinted_cells(None, true), 0, "no accent paints nothing");
     }
 
     #[test]
@@ -430,7 +421,10 @@ mod tests {
         let stops = [[200, 0, 0], [0, 200, 0], [0, 0, 200]];
         let top = rgb(minimal_backdrop_color(0, 10, stops));
         let bottom = rgb(minimal_backdrop_color(9, 10, stops));
-        assert!(top.0 > 60 && top.1 < 30 && top.2 < 30, "red on top: {top:?}");
+        assert!(
+            top.0 > 60 && top.1 < 30 && top.2 < 30,
+            "red on top: {top:?}"
+        );
         assert!(bottom.2 > 20 && bottom.0 < 20, "blue at bottom: {bottom:?}");
         let mid = rgb(minimal_backdrop_color(5, 10, stops));
         assert!(mid.1 >= mid.0 && mid.1 >= mid.2, "green mid: {mid:?}");
@@ -440,8 +434,8 @@ mod tests {
 
     #[test]
     fn minimal_renders_pixelated_cover_cells() {
-        use ratatui::{backend::TestBackend, Terminal};
-        use ratatui_image::{picker::Picker, Resize};
+        use ratatui::{Terminal, backend::TestBackend};
+        use ratatui_image::{Resize, picker::Picker};
 
         let mut app = test_app();
         app.current_song = Some(Song {
@@ -483,11 +477,7 @@ mod tests {
             .filter(|c| c.symbol() == "▀" || c.symbol() == "▄")
             .count();
         assert!(halfblocks > 100, "cover renders as halfblock pixels");
-        let text: String = buf
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
         for banned in ["COVER", "SPECTRUM", "PROGRESS"] {
             assert!(!text.contains(banned), "no {banned} label");
         }
@@ -495,8 +485,8 @@ mod tests {
 
     #[test]
     fn cover_frame_touches_art_evenly() {
-        use ratatui::{backend::TestBackend, Terminal};
-        use ratatui_image::{picker::Picker, Resize};
+        use ratatui::{Terminal, backend::TestBackend};
+        use ratatui_image::{Resize, picker::Picker};
 
         let mut app = test_app();
         app.current_song = Some(Song {

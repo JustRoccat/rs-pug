@@ -1,7 +1,7 @@
-use serde_json::json;
-use tokio::sync::mpsc;
 use crate::core::CoreCmd;
 use crate::model::{App, Song};
+use serde_json::json;
+use tokio::sync::mpsc;
 
 const SPEED_MIN: f32 = 0.25;
 const SPEED_MAX: f32 = 2.0;
@@ -59,13 +59,72 @@ pub fn bulk_queue_marked_local(app: &mut App, cmd_tx: &mpsc::UnboundedSender<Cor
     if app.multi_select.is_empty() {
         return;
     }
-    let library = app.storage.load_local_library().unwrap_or_default();
-    let songs: Vec<Song> = library
+    let keys: Vec<String> = app.multi_select.iter().cloned().collect();
+    let songs: Vec<Song> = app
+        .storage
+        .load_songs_by_paths(&keys)
+        .unwrap_or_default()
         .iter()
-        .filter(|ls| app.multi_select.contains(&ls.path))
         .map(Song::from)
         .collect();
     queue_songs(app, cmd_tx, songs);
+}
+
+pub fn queue_play_next(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, song: Song) {
+    let was_idle = app.current_song.is_none() && app.queue.is_empty();
+    if was_idle {
+        app.queue.push_back(song.clone());
+        app.selected_queue = 0;
+        let _ = cmd_tx.send(CoreCmd::Play(song));
+        app.set_flash("Playing next", 2);
+        return;
+    }
+    let pos = app
+        .current_song
+        .as_ref()
+        .and_then(|current| app.queue.iter().position(|s| s.id == current.id))
+        .map(|idx| idx + 1)
+        .unwrap_or(1)
+        .min(app.queue.len());
+    app.queue.insert(pos, song);
+    app.set_flash(format!("Queued next: {}", app.queue[pos].title), 2);
+}
+
+pub fn move_queue_item(app: &mut App, delta: isize) {
+    if app.queue.is_empty() {
+        return;
+    }
+    let len = app.queue.len() as isize;
+    let from = app.selected_queue as isize;
+    let to = (from + delta).clamp(0, len - 1) as usize;
+    if from as usize == to {
+        return;
+    }
+    if let Some(song) = app.queue.remove(from as usize) {
+        app.queue.insert(to, song);
+        app.selected_queue = to;
+    }
+}
+
+pub fn save_queue_as_playlist(app: &mut App) {
+    if app.queue.is_empty() {
+        app.set_flash("Queue is empty", 2);
+        return;
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let name = format!("Queue {stamp}");
+    let songs: Vec<Song> = app.queue.iter().cloned().collect();
+    app.playlists.playlists.push(crate::model::Playlist {
+        name: name.clone(),
+        songs,
+    });
+    app.playlists.expanded.push(false);
+    app.playlists.selected_playlist = app.playlists.playlists.len().saturating_sub(1);
+    crate::playlist::save_playlists(app);
+    app.set_flash(format!("Saved queue as {name}"), 3);
 }
 
 fn queue_songs(app: &mut App, cmd_tx: &mpsc::UnboundedSender<CoreCmd>, songs: Vec<Song>) {

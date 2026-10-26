@@ -1,4 +1,4 @@
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{FftPlanner, num_complex::Complex};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -63,8 +63,10 @@ async fn find_default_sink_id() -> Option<String> {
 }
 async fn spawn_capture() -> Option<(Child, CaptureBackend)> {
     let mut parec_args = vec![
-        "--format=s16le".to_string(), "--channels=1".to_string(), "--rate=44100"
-        .to_string(), "--latency-msec=50".to_string(),
+        "--format=s16le".to_string(),
+        "--channels=1".to_string(),
+        "--rate=44100".to_string(),
+        "--latency-msec=50".to_string(),
     ];
     if let Some(idx) = find_mpv_sink_input_index().await {
         parec_args.push(format!("--monitor-stream={idx}"));
@@ -82,9 +84,13 @@ async fn spawn_capture() -> Option<(Child, CaptureBackend)> {
     }
     let default_sink = find_default_sink_id().await;
     let mut pw_cat_args = vec![
-        "--record".to_string(), "--raw".to_string(), "--monitor".to_string(),
-        "--format=s16".to_string(), "--rate=44100".to_string(), "--channels=1"
-        .to_string(), "--latency=50ms".to_string(),
+        "--record".to_string(),
+        "--raw".to_string(),
+        "--monitor".to_string(),
+        "--format=s16".to_string(),
+        "--rate=44100".to_string(),
+        "--channels=1".to_string(),
+        "--latency=50ms".to_string(),
     ];
     if let Some(ref id) = default_sink {
         pw_cat_args.push(format!("--target={id}"));
@@ -99,8 +105,11 @@ async fn spawn_capture() -> Option<(Child, CaptureBackend)> {
         return Some((child, CaptureBackend::PwCatRaw));
     }
     let mut pw_record_args = vec![
-        "--monitor".to_string(), "--format=s16".to_string(), "--rate=44100".to_string(),
-        "--channels=1".to_string(), "--latency=50ms".to_string(),
+        "--monitor".to_string(),
+        "--format=s16".to_string(),
+        "--rate=44100".to_string(),
+        "--channels=1".to_string(),
+        "--latency=50ms".to_string(),
     ];
     if let Some(id) = default_sink {
         pw_record_args.push(format!("--target={id}"));
@@ -116,9 +125,7 @@ async fn spawn_capture() -> Option<(Child, CaptureBackend)> {
     }
     None
 }
-async fn skip_wav_header<R: tokio::io::AsyncRead + Unpin>(
-    reader: &mut R,
-) -> std::io::Result<()> {
+async fn skip_wav_header<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<()> {
     let mut window = [0u8; 4];
     let mut have = 0usize;
     loop {
@@ -139,12 +146,10 @@ async fn skip_wav_header<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 pub fn start_fft_monitor() -> Arc<Mutex<FftState>> {
-    let state = Arc::new(
-        Mutex::new(FftState {
-            bands: vec![0.0; 32],
-            running: false,
-        }),
-    );
+    let state = Arc::new(Mutex::new(FftState {
+        bands: vec![0.0; 32],
+        running: false,
+    }));
     let state_clone = Arc::clone(&state);
     tokio::spawn(async move {
         let (mut child, backend) = match spawn_capture().await {
@@ -177,9 +182,11 @@ pub fn start_fft_monitor() -> Arc<Mutex<FftState>> {
             let mut input: Vec<Complex<f32>> = buffer
                 .chunks_exact(2)
                 .map(|chunk| {
-                    let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32
-                        / 32768.0;
-                    Complex { re: sample, im: 0.0 }
+                    let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+                    Complex {
+                        re: sample,
+                        im: 0.0,
+                    }
                 })
                 .collect();
             if input.len() == 1024 {
@@ -188,8 +195,7 @@ pub fn start_fft_monitor() -> Arc<Mutex<FftState>> {
                 let mut lower_bin = 1usize;
                 for (i, band) in raw_bands.iter_mut().enumerate() {
                     let frac = (i + 1) as f32 / NUM_BANDS as f32;
-                    let target = (USABLE_BINS as f32).powf(frac).round()
-                        as usize;
+                    let target = (USABLE_BINS as f32).powf(frac).round() as usize;
                     let upper_bin = target.max(lower_bin + 1).min(USABLE_BINS);
                     let mut sum = 0.0f32;
                     let mut count = 0usize;
@@ -203,9 +209,7 @@ pub fn start_fft_monitor() -> Arc<Mutex<FftState>> {
                     lower_bin = upper_bin;
                 }
                 for i in 0..NUM_BANDS {
-                    band_peaks[i] = (band_peaks[i] * 0.995)
-                        .max(raw_bands[i])
-                        .max(1e-3);
+                    band_peaks[i] = (band_peaks[i] * 0.995).max(raw_bands[i]).max(1e-3);
                     let ratio = (raw_bands[i] / band_peaks[i]).clamp(0.0, 1.0);
                     let normalized = (ratio.powf(1.5) * 0.9) as f64;
                     if normalized > smoothed[i] {

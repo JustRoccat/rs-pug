@@ -1,64 +1,40 @@
 use crate::config;
-use crate::model::{
-    App, Focus, LocalNavLevel, LocalSortMode, LocalViewMode, PlayerState, RepeatMode, Tab,
-};
+use crate::model::{App, Focus, LocalNavLevel, LocalViewMode, PlayerState, RepeatMode, Tab};
 use crossterm::event::{KeyCode, KeyModifiers};
-pub fn local_visible_songs(app: &App) -> Vec<crate::model::LocalSong> {
-    let mut songs = app.storage.load_local_library().unwrap_or_default();
-    let q = app.search.query.to_lowercase();
-    songs
-        .retain(|s| {
-            (q.is_empty() || s.title.to_lowercase().contains(&q)
-                || s.artist.to_lowercase().contains(&q)
-                || s.album.to_lowercase().contains(&q)
-                || s.genre.to_lowercase().contains(&q)
-                || s.year.map(|y| y.to_string().contains(&q)).unwrap_or(false))
-                && app.local.filter_genre.as_ref().map(|v| &s.genre == v).unwrap_or(true)
-                && app
-                    .local
-                    .filter_artist
-                    .as_ref()
-                    .map(|v| &s.artist == v)
-                    .unwrap_or(true)
-                && app.local.filter_album.as_ref().map(|v| &s.album == v).unwrap_or(true)
-        });
-    match app.local.sort_mode {
-        LocalSortMode::Title => {
-            songs.sort_by(|a, b| crate::utils::natural_compare(&a.title, &b.title))
-        }
-        LocalSortMode::Artist => {
-            songs
-                .sort_by(|a, b| {
-                    crate::utils::natural_compare(&a.artist, &b.artist)
-                        .then_with(|| crate::utils::natural_compare(&a.title, &b.title))
-                })
-        }
-        LocalSortMode::Album => {
-            songs
-                .sort_by(|a, b| {
-                    crate::utils::natural_compare(&a.album, &b.album)
-                        .then_with(|| crate::utils::natural_compare(&a.title, &b.title))
-                })
-        }
-        LocalSortMode::Year => {
-            songs.sort_by_key(|s| (s.year.unwrap_or(0), s.title.clone()))
-        }
-        LocalSortMode::DateAdded => {
-            songs
-                .sort_by(|a, b| {
-                    b.added_at
-                        .cmp(&a.added_at)
-                        .then_with(|| crate::utils::natural_compare(&a.title, &b.title))
-                })
-        }
-    }
-    songs
+pub const LOCAL_WINDOW_SIZE: usize = 200;
+pub fn fetch_local_window(
+    app: &App,
+    target: usize,
+) -> Option<(Vec<crate::model::LocalSong>, usize, usize)> {
+    let total_hint = app.local.total.max(target + 1);
+    let offset = target
+        .saturating_sub(LOCAL_WINDOW_SIZE / 2)
+        .min(total_hint.saturating_sub(LOCAL_WINDOW_SIZE));
+    let (window, total) = app
+        .storage
+        .search_local_songs(crate::db::LocalSearch {
+            query: &app.search.query,
+            genre: app.local.filter_genre.as_deref(),
+            artist: app.local.filter_artist.as_deref(),
+            album: app.local.filter_album.as_deref(),
+            sort: app.local.sort_mode,
+            limit: LOCAL_WINDOW_SIZE,
+            offset,
+        })
+        .ok()?;
+    Some((window, offset, total))
 }
 pub fn refresh_local_visible_window(app: &mut App) {
-    let songs = local_visible_songs(app);
-    app.local.total = songs.len();
-    app.local.offset = 0;
-    app.local.window = songs;
+    let target = 0;
+    if let Some((window, offset, total)) = fetch_local_window(app, target) {
+        app.local.window = window;
+        app.local.offset = offset;
+        app.local.total = total;
+    } else {
+        app.local.window.clear();
+        app.local.offset = 0;
+        app.local.total = 0;
+    }
     app.local.selected_song = app
         .local
         .selected_song
@@ -70,13 +46,17 @@ pub enum LocalNavItems<'a> {
     Albums(Vec<String>),
     Songs(Vec<&'a crate::model::LocalSong>),
 }
-pub const MAX_OPTIONS_INDEX: usize = 16;
+pub const MAX_OPTIONS_INDEX: usize = 20;
 pub const KEY_MUTE_OPTIONS_INDEX: usize = 11;
 pub const SPEED_OPTIONS_INDEX: usize = 12;
 pub const IMAGE_BG_OPTIONS_INDEX: usize = 13;
 pub const ICONS_OPTIONS_INDEX: usize = 14;
 pub const DOWNLOAD_FORMAT_OPTIONS_INDEX: usize = 15;
 pub const DOWNLOAD_DIR_OPTIONS_INDEX: usize = 16;
+pub const NORMALIZE_OPTIONS_INDEX: usize = 17;
+pub const REPLAYGAIN_OPTIONS_INDEX: usize = 18;
+pub const GAPLESS_OPTIONS_INDEX: usize = 19;
+pub const FADE_OPTIONS_INDEX: usize = 20;
 impl<'a> LocalNavItems<'a> {
     pub fn len(&self) -> usize {
         match self {
@@ -89,12 +69,8 @@ impl<'a> LocalNavItems<'a> {
 pub fn get_local_nav_items(app: &App) -> LocalNavItems<'_> {
     match app.local.nav_level {
         LocalNavLevel::Artists => {
-            let mut artists: Vec<String> = app
-                .local
-                .window
-                .iter()
-                .map(|s| s.artist.clone())
-                .collect();
+            let mut artists: Vec<String> =
+                app.local.window.iter().map(|s| s.artist.clone()).collect();
             artists.sort_by(|a, b| crate::utils::natural_compare(a, b));
             artists.dedup();
             LocalNavItems::Artists(artists)
@@ -134,10 +110,7 @@ pub fn player_state_label(state: PlayerState) -> &'static str {
         PlayerState::Paused => "paused",
     }
 }
-pub fn describe_key_event_with_modifiers(
-    code: &KeyCode,
-    modifiers: KeyModifiers,
-) -> String {
+pub fn describe_key_event_with_modifiers(code: &KeyCode, modifiers: KeyModifiers) -> String {
     match code {
         KeyCode::Char(c) => {
             let c = if modifiers.contains(KeyModifiers::SHIFT) {
@@ -161,15 +134,16 @@ pub fn describe_key_event_with_modifiers(
         _ => "other".to_owned(),
     }
 }
-pub fn describe_key_event_labels(
-    code: &KeyCode,
-    modifiers: KeyModifiers,
-) -> Vec<String> {
+pub fn describe_key_event_labels(code: &KeyCode, modifiers: KeyModifiers) -> Vec<String> {
     let primary = describe_key_event_with_modifiers(code, modifiers);
     let Some(alias) = toggled_ascii_char_label(code, primary.as_str()) else {
         return vec![primary];
     };
-    if alias == primary { vec![primary] } else { vec![primary, alias] }
+    if alias == primary {
+        vec![primary]
+    } else {
+        vec![primary, alias]
+    }
 }
 fn toggled_ascii_char_label(code: &KeyCode, primary: &str) -> Option<String> {
     let KeyCode::Char(c) = code else {
@@ -188,106 +162,100 @@ fn toggled_ascii_char_label(code: &KeyCode, primary: &str) -> Option<String> {
 }
 pub fn scroll_selection(app: &mut App, delta: isize, local_nav_len: usize) {
     match app.active_tab {
-        Tab::Discover => {
-            match app.focus {
-                Focus::Results => {
-                    let len = app.search.results.len();
-                    if len > 0 {
-                        app.search.selected_result = ((app.search.selected_result
-                            as isize + delta)
-                            .clamp(0, len as isize - 1)) as usize;
-                    }
+        Tab::Discover => match app.focus {
+            Focus::Results => {
+                let len = app.search.results.len();
+                if len > 0 {
+                    app.search.selected_result = ((app.search.selected_result as isize + delta)
+                        .clamp(0, len as isize - 1))
+                        as usize;
                 }
-                Focus::Queue => {
-                    let len = app.queue.len();
-                    if len > 0 {
-                        app.selected_queue = ((app.selected_queue as isize + delta)
-                            .clamp(0, len as isize - 1)) as usize;
-                    }
-                }
-                Focus::Search => {}
             }
-        }
-        Tab::Albums => {
-            match app.focus {
-                Focus::Results => {
-                    let len = app.albums.results.len();
-                    if len > 0 {
-                        app.albums.selected_result = ((app.albums.selected_result
-                            as isize + delta)
-                            .clamp(0, len as isize - 1)) as usize;
-                        app.albums.selected_song = 0;
-                    }
+            Focus::Queue => {
+                let len = app.queue.len();
+                if len > 0 {
+                    app.selected_queue =
+                        ((app.selected_queue as isize + delta).clamp(0, len as isize - 1)) as usize;
                 }
-                Focus::Queue => {
-                    if let Some(a) = app.albums.results.get(app.albums.selected_result) {
-                        let len = a.songs.len();
-                        if len > 0 {
-                            app.albums.selected_song = ((app.albums.selected_song
-                                as isize + delta)
-                                .clamp(0, len as isize - 1)) as usize;
-                        }
-                    }
-                }
-                Focus::Search => {}
             }
-        }
-        Tab::Library => {
-            match app.focus {
-                Focus::Results => {
-                    let len = app.playlists.playlists.len();
-                    if len > 0 {
-                        app.playlists.selected_playlist = ((app
-                            .playlists
-                            .selected_playlist as isize + delta)
-                            .clamp(0, len as isize - 1)) as usize;
-                        app.playlists.selected_song = 0;
-                    }
+            Focus::Search => {}
+        },
+        Tab::Albums => match app.focus {
+            Focus::Results => {
+                let len = app.albums.results.len();
+                if len > 0 {
+                    app.albums.selected_result = ((app.albums.selected_result as isize + delta)
+                        .clamp(0, len as isize - 1))
+                        as usize;
+                    app.albums.selected_song = 0;
                 }
-                Focus::Queue => {
-                    if let Some(p) = app
-                        .playlists
-                        .playlists
-                        .get(app.playlists.selected_playlist)
-                    {
-                        let len = p.songs.len();
-                        if len > 0 {
-                            app.playlists.selected_song = ((app.playlists.selected_song
-                                as isize + delta)
-                                .clamp(0, len as isize - 1)) as usize;
-                        }
-                    }
-                }
-                Focus::Search => {}
             }
-        }
-        Tab::Local => {
-            match app.focus {
-                Focus::Results => {
-                    if app.local.view_mode == LocalViewMode::Flat {
-                        let len = app.local.total;
-                        if len > 0 {
-                            app.local.selected_song = ((app.local.selected_song as isize
-                                + delta)
-                                .clamp(0, len as isize - 1)) as usize;
-                        }
-                    } else {
-                        let len = local_nav_len;
-                        if len > 0 {
-                            app.local.selected_nav_idx = ((app.local.selected_nav_idx
-                                as isize + delta)
-                                .clamp(0, len as isize - 1)) as usize;
-                        }
-                    }
-                }
-                Focus::Queue => {
-                    let len = app.queue.len();
+            Focus::Queue => {
+                if let Some(a) = app.albums.results.get(app.albums.selected_result) {
+                    let len = a.songs.len();
                     if len > 0 {
-                        app.selected_queue = ((app.selected_queue as isize + delta)
-                            .clamp(0, len as isize - 1)) as usize;
+                        app.albums.selected_song = ((app.albums.selected_song as isize + delta)
+                            .clamp(0, len as isize - 1))
+                            as usize;
                     }
                 }
-                Focus::Search => {}
+            }
+            Focus::Search => {}
+        },
+        Tab::Library => match app.focus {
+            Focus::Results => {
+                let len = app.playlists.playlists.len();
+                if len > 0 {
+                    app.playlists.selected_playlist =
+                        ((app.playlists.selected_playlist as isize + delta)
+                            .clamp(0, len as isize - 1)) as usize;
+                    app.playlists.selected_song = 0;
+                }
+            }
+            Focus::Queue => {
+                if let Some(p) = app.playlists.playlists.get(app.playlists.selected_playlist) {
+                    let len = p.songs.len();
+                    if len > 0 {
+                        app.playlists.selected_song =
+                            ((app.playlists.selected_song as isize + delta)
+                                .clamp(0, len as isize - 1)) as usize;
+                    }
+                }
+            }
+            Focus::Search => {}
+        },
+        Tab::Local => match app.focus {
+            Focus::Results => {
+                if app.local.view_mode == LocalViewMode::Flat {
+                    let len = app.local.total;
+                    if len > 0 {
+                        app.local.selected_song = ((app.local.selected_song as isize + delta)
+                            .clamp(0, len as isize - 1))
+                            as usize;
+                    }
+                } else {
+                    let len = local_nav_len;
+                    if len > 0 {
+                        app.local.selected_nav_idx = ((app.local.selected_nav_idx as isize + delta)
+                            .clamp(0, len as isize - 1))
+                            as usize;
+                    }
+                }
+            }
+            Focus::Queue => {
+                let len = app.queue.len();
+                if len > 0 {
+                    app.selected_queue =
+                        ((app.selected_queue as isize + delta).clamp(0, len as isize - 1)) as usize;
+                }
+            }
+            Focus::Search => {}
+        },
+        Tab::Lyrics => {
+            if app.focus == Focus::Queue && !app.queue.is_empty() {
+                app.selected_queue = ((app.selected_queue as isize + delta)
+                    .clamp(0, app.queue.len() as isize - 1))
+                    as usize;
             }
         }
         Tab::Options => {
@@ -303,33 +271,30 @@ pub fn update_local_library_window(app: &mut App) {
     let start = app.local.offset;
     let end = start + app.local.window.len();
     if app.local.selected_song < start || app.local.selected_song >= end {
-        if app.search.query.is_empty() && app.local.filter_genre.is_none()
-            && app.local.filter_artist.is_none() && app.local.filter_album.is_none()
-            && app.local.sort_mode == LocalSortMode::Title
-        {
-            if let Ok((window, offset, _total)) = app
-                .storage
-                .fetch_local_songs_window(app.local.selected_song, 200)
-            {
-                app.local.window = window;
-                app.local.offset = offset;
-            }
-        } else {
-            refresh_local_visible_window(app);
+        if let Some((window, offset, total)) = fetch_local_window(app, app.local.selected_song) {
+            app.local.window = window;
+            app.local.offset = offset;
+            app.local.total = total;
         }
     }
 }
 pub fn next_theme(theme: config::Theme) -> config::Theme {
     let available = config::get_available_themes();
     let current_str = config::theme_to_str(&theme);
-    let pos = available.iter().position(|s| s == &current_str).unwrap_or(0);
+    let pos = available
+        .iter()
+        .position(|s| s == &current_str)
+        .unwrap_or(0);
     let next_pos = (pos + 1) % available.len();
     config::theme_from_str(&available[next_pos])
 }
 pub fn prev_theme(theme: config::Theme) -> config::Theme {
     let available = config::get_available_themes();
     let current_str = config::theme_to_str(&theme);
-    let pos = available.iter().position(|s| s == &current_str).unwrap_or(0);
+    let pos = available
+        .iter()
+        .position(|s| s == &current_str)
+        .unwrap_or(0);
     let prev_pos = (pos + available.len() - 1) % available.len();
     config::theme_from_str(&available[prev_pos])
 }
@@ -387,11 +352,11 @@ mod tests {
     #[test]
     fn key_labels_include_case_alias_for_letters() {
         assert_eq!(
-            describe_key_event_labels(& KeyCode::Char('z'), KeyModifiers::empty()),
+            describe_key_event_labels(&KeyCode::Char('z'), KeyModifiers::empty()),
             vec!["char:z".to_owned(), "char:Z".to_owned()]
         );
         assert_eq!(
-            describe_key_event_labels(& KeyCode::Char('z'), KeyModifiers::SHIFT),
+            describe_key_event_labels(&KeyCode::Char('z'), KeyModifiers::SHIFT),
             vec!["char:Z".to_owned(), "char:z".to_owned()]
         );
     }

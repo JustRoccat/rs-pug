@@ -116,6 +116,14 @@ impl Core {
             .arg("--audio-display=no")
             .arg("--volume=70")
             .arg("--audio-client-name=rs-pug")
+            .arg(format!(
+                "--replaygain={}",
+                crate::config::mpv_replaygain(&config.general.replaygain_mode)
+            ))
+            .arg(format!(
+                "--gapless-audio={}",
+                if config.general.gapless { "yes" } else { "no" }
+            ))
             .arg(format!("--input-ipc-server={}", config.mpv.socket));
         let sonum_tokens: Vec<&str> = sonum_servers
             .iter()
@@ -401,10 +409,7 @@ impl Core {
 struct MpvBoolResponse {
     data: bool,
 }
-async fn plugin_search_query(
-    plugins: Arc<Mutex<PluginManager>>,
-    query: String,
-) -> String {
+async fn plugin_search_query(plugins: Arc<Mutex<PluginManager>>, query: String) -> String {
     let fallback = query.clone();
     let job = tokio::task::spawn_blocking(move || {
         plugins
@@ -417,10 +422,7 @@ async fn plugin_search_query(
         _ => fallback,
     }
 }
-async fn plugin_search_results(
-    plugins: Arc<Mutex<PluginManager>>,
-    songs: Vec<Song>,
-) -> Vec<Song> {
+async fn plugin_search_results(plugins: Arc<Mutex<PluginManager>>, songs: Vec<Song>) -> Vec<Song> {
     let fallback = songs.clone();
     let job = tokio::task::spawn_blocking(move || {
         plugins
@@ -1154,6 +1156,32 @@ pub fn check_and_refresh_library(
     storage.save_last_scanned_dirs(&config.general.music_directories);
     Some(songs)
 }
+
+pub fn write_local_tags(song: &LocalSong) -> Result<()> {
+    let path = std::path::Path::new(&song.path);
+    let mut tagged_file = lofty::read_from_path(path)
+        .with_context(|| format!("failed to read tags from {}", song.path))?;
+    let tag_type = tagged_file.primary_tag_type();
+    if tagged_file.primary_tag_mut().is_none() {
+        tagged_file.insert_tag(Tag::new(tag_type));
+    }
+    let tag = tagged_file
+        .primary_tag_mut()
+        .ok_or_else(|| anyhow::anyhow!("failed to create tag for {}", song.path))?;
+    tag.set_title(song.title.clone());
+    tag.set_artist(song.artist.clone());
+    tag.set_album(song.album.clone());
+    tag.set_genre(song.genre.clone());
+    if let Some(year) = song.year {
+        tag.insert_text(ItemKey::Year, year.to_string());
+    } else {
+        tag.remove_key(ItemKey::Year);
+    }
+    tagged_file
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("failed to write tags to {}", song.path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1191,9 +1219,11 @@ mod tests {
         let dir = std::env::temp_dir().join("rs_pug_test_play_order");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let plugins = Arc::new(
-            Mutex::new(PluginManager::load(true, dir.to_str().unwrap(), false)),
-        );
+        let plugins = Arc::new(Mutex::new(PluginManager::load(
+            true,
+            dir.to_str().unwrap(),
+            false,
+        )));
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
         let play_tx = spawn_play_pipeline(Arc::clone(&plugins), cmd_tx);
         let song = |id: &str| Song {
@@ -1378,28 +1408,4 @@ mod tests {
         assert_eq!(ffmpeg_codec("flac"), Some("flac"));
         assert_eq!(ffmpeg_codec("best"), None);
     }
-}
-pub fn write_local_tags(song: &LocalSong) -> Result<()> {
-    let path = std::path::Path::new(&song.path);
-    let mut tagged_file = lofty::read_from_path(path)
-        .with_context(|| format!("failed to read tags from {}", song.path))?;
-    let tag_type = tagged_file.primary_tag_type();
-    if tagged_file.primary_tag_mut().is_none() {
-        tagged_file.insert_tag(Tag::new(tag_type));
-    }
-    let tag = tagged_file
-        .primary_tag_mut()
-        .ok_or_else(|| anyhow::anyhow!("failed to create tag for {}", song.path))?;
-    tag.set_title(song.title.clone());
-    tag.set_artist(song.artist.clone());
-    tag.set_album(song.album.clone());
-    tag.set_genre(song.genre.clone());
-    if let Some(year) = song.year {
-        tag.insert_text(ItemKey::Year, year.to_string());
-    } else {
-        tag.remove_key(ItemKey::Year);
-    }
-    tagged_file
-        .save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("failed to write tags to {}", song.path))
 }

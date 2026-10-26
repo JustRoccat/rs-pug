@@ -1,5 +1,5 @@
-use super::*;
 use super::queue::draw_queue_panel;
+use super::*;
 
 pub(super) fn draw_content(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
     let queue = app.ui_layout.queue_width_percent.clamp(10, 90);
@@ -118,7 +118,11 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 "⊞",
                 format!(
                     "Image background  {}  (Minimal tint · h/l toggle)",
-                    if app.opt_image_background { "ON" } else { "OFF" }
+                    if app.opt_image_background {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
                 ),
             ),
             (
@@ -153,6 +157,28 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                     )
                 },
             ),
+            (
+                "⊞",
+                format!(
+                    "Normalize audio  {}  (h/l toggle)",
+                    if app.opt_audio_normalize { "ON" } else { "OFF" }
+                ),
+            ),
+            (
+                "⊞",
+                format!(
+                    "Replaygain  {}  (h/l cycle, restart for mpv flag)",
+                    app.opt_replaygain_mode
+                ),
+            ),
+            (
+                "⊞",
+                format!(
+                    "Gapless  {}  (h/l toggle)",
+                    if app.opt_gapless { "ON" } else { "OFF" }
+                ),
+            ),
+            ("⊞", format!("Fade secs  {}  (h/l 0-10)", app.opt_fade_secs)),
         ];
         rows.into_iter()
             .enumerate()
@@ -221,19 +247,16 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                 }];
                 if open {
                     items.extend(p.songs.iter().map(|song| {
-                    ListItem::new(Line::from(vec![
-                        Span::styled(
-                            format!(
-                                "      {}  ",
-                                crate::icons::song_bullet(app.opt_icons)
+                        ListItem::new(Line::from(vec![
+                            Span::styled(
+                                format!("      {}  ", crate::icons::song_bullet(app.opt_icons)),
+                                Style::default().fg(pal.get_color("accent2")),
                             ),
-                            Style::default().fg(pal.get_color("accent2")),
-                        ),
-                        Span::styled(
-                            song.title.as_str(),
-                            Style::default().fg(pal.get_color("text")),
-                        ),
-                    ]))
+                            Span::styled(
+                                song.title.as_str(),
+                                Style::default().fg(pal.get_color("text")),
+                            ),
+                        ]))
                     }));
                 }
                 items
@@ -264,10 +287,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                                 .fg(pal.get_color("text"))
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(
-                            count.clone(),
-                            Style::default().fg(pal.get_color("muted")),
-                        ),
+                        Span::styled(count.clone(), Style::default().fg(pal.get_color("muted"))),
                     ]))
                 } else {
                     ListItem::new(Line::from(vec![
@@ -281,27 +301,21 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
                             album.name.as_str(),
                             Style::default().fg(pal.get_color("text")),
                         ),
-                        Span::styled(
-                            count,
-                            Style::default().fg(pal.get_color("dim")),
-                        ),
+                        Span::styled(count, Style::default().fg(pal.get_color("dim"))),
                     ]))
                 }];
                 if open {
                     items.extend(album.songs.iter().map(|song| {
-                    ListItem::new(Line::from(vec![
-                        Span::styled(
-                            format!(
-                                "      {}  ",
-                                crate::icons::song_bullet(app.opt_icons)
+                        ListItem::new(Line::from(vec![
+                            Span::styled(
+                                format!("      {}  ", crate::icons::song_bullet(app.opt_icons)),
+                                Style::default().fg(pal.get_color("accent2")),
                             ),
-                            Style::default().fg(pal.get_color("accent2")),
-                        ),
-                        Span::styled(
-                            song.title.as_str(),
-                            Style::default().fg(pal.get_color("text")),
-                        ),
-                    ]))
+                            Span::styled(
+                                song.title.as_str(),
+                                Style::default().fg(pal.get_color("text")),
+                            ),
+                        ]))
                     }));
                 }
                 items
@@ -321,6 +335,8 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             let (list, _) = build_organized_local_list(app, focused, pal, anim);
             list
         }
+    } else if app.active_tab == Tab::Lyrics {
+        build_lyrics_list(app, focused, pal, anim)
     } else {
         build_song_list(
             &app.search.results,
@@ -352,17 +368,14 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         );
     }
     let custom_title = app.plugin_ui.active_custom_tab.as_ref().and_then(|id| {
-        app.main_tabs
-            .iter()
-            .find(|tab| &tab.id == id)
-            .map(|tab| {
-                let icon = crate::icons::tab(&tab.icon, app.opt_icons);
-                if icon.is_empty() {
-                    format!(" {} ", tab.title)
-                } else {
-                    format!(" ✦  {icon} {} ", tab.title)
-                }
-            })
+        app.main_tabs.iter().find(|tab| &tab.id == id).map(|tab| {
+            let icon = crate::icons::tab(&tab.icon, app.opt_icons);
+            if icon.is_empty() {
+                format!(" {} ", tab.title)
+            } else {
+                format!(" ✦  {icon} {} ", tab.title)
+            }
+        })
     });
     let title = if let Some(title) = custom_title {
         title
@@ -372,6 +385,7 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
             Tab::Discover => crate::icons::section("RESULTS", crate::icons::nf::MUSIC, on),
             Tab::Albums => crate::icons::section("ALBUM RESULTS", crate::icons::nf::GRID, on),
             Tab::Library => crate::icons::section("PLAYLISTS", crate::icons::nf::LIST, on),
+            Tab::Lyrics => crate::icons::section("LYRICS", crate::icons::nf::LIST, on),
             Tab::Options => {
                 if let Some(active_id) = &app.plugin_ui.active_tab {
                     if let Some(tab) = app.plugin_ui.tabs.iter().find(|t| &t.id == active_id) {
@@ -464,6 +478,9 @@ fn draw_results_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, 
         Tab::Options => app.options_index,
         Tab::Library => app.playlists.selected_playlist,
         Tab::Albums => app.albums.selected_result,
+        Tab::Lyrics => {
+            crate::lyrics::current_line_index(&app.lyrics.lines, app.playback_pos).unwrap_or(0)
+        }
         Tab::Local => {
             if app.local.view_mode == crate::model::LocalViewMode::Flat {
                 app.local.selected_song
@@ -513,7 +530,10 @@ fn build_song_list(
             let title_line = if is_sel {
                 Line::from(vec![
                     Span::styled(cursor, Style::default().fg(anim)),
-                    Span::styled(mark, Style::default().fg(mark_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        mark,
+                        Style::default().fg(mark_color).add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(" "),
                     Span::styled(
                         song.title.clone(),
@@ -523,7 +543,10 @@ fn build_song_list(
             } else {
                 Line::from(vec![
                     Span::styled(cursor, Style::default()),
-                    Span::styled(mark, Style::default().fg(mark_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        mark,
+                        Style::default().fg(mark_color).add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(" "),
                     Span::styled(
                         song.title.clone(),
@@ -575,7 +598,10 @@ fn build_local_song_list<'a>(
             let title_line = if is_sel {
                 Line::from(vec![
                     Span::styled(cursor, Style::default().fg(anim)),
-                    Span::styled(mark, Style::default().fg(mark_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        mark,
+                        Style::default().fg(mark_color).add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(" "),
                     Span::styled(
                         song.title.as_str(),
@@ -585,7 +611,10 @@ fn build_local_song_list<'a>(
             } else {
                 Line::from(vec![
                     Span::styled(cursor, Style::default()),
-                    Span::styled(mark, Style::default().fg(mark_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        mark,
+                        Style::default().fg(mark_color).add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(" "),
                     Span::styled(
                         song.title.as_str(),
@@ -750,4 +779,57 @@ fn build_organized_local_list<'a>(
             (items, Some(app.local.selected_nav_idx))
         }
     }
+}
+fn build_lyrics_list(
+    app: &App,
+    focused: bool,
+    pal: &Palette,
+    anim: Color,
+) -> Vec<ListItem<'static>> {
+    if app.lyrics.loading {
+        return vec![dim_item("Loading lyrics...", pal)];
+    }
+    if app.current_song.is_none() {
+        return vec![dim_item("Nothing playing", pal)];
+    }
+    if !app.lyrics.lines.is_empty() {
+        let current = crate::lyrics::current_line_index(&app.lyrics.lines, app.playback_pos);
+        return app
+            .lyrics
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, text))| {
+                let is_current = Some(idx) == current;
+                let is_sel = is_current && focused;
+                let style = if is_current {
+                    Style::default().fg(anim).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(pal.get_color("text"))
+                };
+                let prefix = if is_sel { "▶ " } else { "  " };
+                let prefix_style = if is_current {
+                    Style::default().fg(anim)
+                } else {
+                    Style::default().fg(pal.get_color("dim"))
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled(text.clone(), style),
+                ]))
+            })
+            .collect();
+    }
+    if let Some(text) = &app.lyrics.text {
+        return text
+            .lines()
+            .map(|line| {
+                ListItem::new(Line::from(Span::styled(
+                    line.to_owned(),
+                    Style::default().fg(pal.get_color("text")),
+                )))
+            })
+            .collect();
+    }
+    vec![dim_item("No lyrics found", pal)]
 }

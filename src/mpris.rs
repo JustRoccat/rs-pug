@@ -216,12 +216,19 @@ impl PlayerIface {
 
     #[zbus(property)]
     async fn loop_status(&self) -> String {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).loop_status.clone()
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .loop_status
+            .clone()
     }
 
     #[zbus(property)]
     async fn set_loop_status(&self, value: String) -> zbus::Result<()> {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).loop_status = value.clone();
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .loop_status = value.clone();
         let _ = self.action_tx.send(MprisAction::SetLoopStatus(value));
         Ok(())
     }
@@ -275,7 +282,10 @@ impl PlayerIface {
 
     #[zbus(property(emits_changed_signal = "false"))]
     async fn position(&self) -> i64 {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).position_micros
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .position_micros
     }
 
     #[zbus(property)]

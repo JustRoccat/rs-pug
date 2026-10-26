@@ -11,7 +11,10 @@ pub(super) fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rec
         (
             pal.get_color("info"),
             if on {
-                format!(" {}  SEARCHING — type and press Enter ", crate::icons::nf::KEYBOARD)
+                format!(
+                    " {}  SEARCHING — type and press Enter ",
+                    crate::icons::nf::KEYBOARD
+                )
             } else {
                 " SEARCHING — type and press Enter ".to_owned()
             },
@@ -19,9 +22,14 @@ pub(super) fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rec
     } else {
         (
             pal.get_color("dim"),
-            if app.active_tab == Tab::Local {
+            if app.active_tab == Tab::Lyrics {
+                " LYRICS ".to_owned()
+            } else if app.active_tab == Tab::Local {
                 if on {
-                    format!(" {}  SEARCH LOCAL — press / to start ", crate::icons::nf::SEARCH)
+                    format!(
+                        " {}  SEARCH LOCAL — press / to start ",
+                        crate::icons::nf::SEARCH
+                    )
                 } else {
                     " SEARCH LOCAL — press / to start ".to_owned()
                 }
@@ -33,7 +41,9 @@ pub(super) fn draw_search(frame: &mut Frame, app: &App, pal: &Palette, area: Rec
         )
     };
     let content = if active_query.is_empty() && !app.search_mode {
-        let prompt = if app.active_tab == Tab::Local {
+        let prompt = if app.active_tab == Tab::Lyrics {
+            "lyrics for current track...".to_string()
+        } else if app.active_tab == Tab::Local {
             "search local files...".to_string()
         } else {
             format!(

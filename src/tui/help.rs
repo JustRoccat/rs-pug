@@ -3,8 +3,7 @@ use super::*;
 // Status row
 pub(super) fn has_status_content(app: &App) -> bool {
     app.ui_layout.show_statusbar
-        && (!app.plugin_ui.warnings.is_empty()
-            || !app.plugin_ui.inject.statusbar_extra.is_empty())
+        && (!app.plugin_ui.warnings.is_empty() || !app.plugin_ui.inject.statusbar_extra.is_empty())
 }
 
 pub(super) fn draw_help(frame: &mut Frame, app: &App, pal: &Palette, area: Rect) {

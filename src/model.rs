@@ -261,6 +261,7 @@ pub enum Tab {
     Albums,
     Library,
     Local,
+    Lyrics,
     Options,
 }
 #[derive(Debug, Clone)]
@@ -329,6 +330,12 @@ pub fn default_main_tabs() -> Vec<MainTab> {
             kind: MainTabKind::Stock(Tab::Local),
         },
         MainTab {
+            id: "lyrics".to_owned(),
+            title: "LYRICS".to_owned(),
+            icon: crate::icons::nf::LIST.to_owned(),
+            kind: MainTabKind::Stock(Tab::Lyrics),
+        },
+        MainTab {
             id: "options".to_owned(),
             title: "OPTIONS".to_owned(),
             icon: crate::icons::nf::GEAR.to_owned(),
@@ -336,7 +343,7 @@ pub fn default_main_tabs() -> Vec<MainTab> {
         },
     ]
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum RepeatMode {
     Off,
     One,
@@ -401,6 +408,24 @@ impl RepeatMode {
         }
     }
 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SessionState {
+    pub queue: Vec<Song>,
+    pub current: Option<Song>,
+    pub position: f64,
+    pub volume: u8,
+    pub muted: bool,
+    pub repeat: RepeatMode,
+    pub speed: f32,
+}
+#[derive(Debug, Clone, Default)]
+pub struct LyricsState {
+    pub key: String,
+    pub lines: Vec<(f64, String)>,
+    pub text: Option<String>,
+    pub source: String,
+    pub loading: bool,
+}
 #[derive(Debug)]
 pub struct App {
     pub fft_state: Option<std::sync::Arc<std::sync::Mutex<crate::fft::FftState>>>,
@@ -450,6 +475,10 @@ pub struct App {
     pub opt_download_format: String,
     pub opt_download_dir: Option<String>,
     pub opt_smart_playlists_enabled: bool,
+    pub opt_audio_normalize: bool,
+    pub opt_replaygain_mode: String,
+    pub opt_gapless: bool,
+    pub opt_fade_secs: u8,
     pub opt_editing: bool,
     pub opt_edit_buffer: String,
     pub key_next: String,
@@ -474,6 +503,9 @@ pub struct App {
     pub eq: EqState,
     pub plugin_ui: PluginUiState,
     pub local: LocalLibraryState,
+    pub lyrics: LyricsState,
+    pub resume_pending: Option<(String, f64)>,
+    pub last_session_save: Instant,
 }
 impl App {
     pub fn new(storage: crate::storage::Storage) -> Self {
@@ -525,6 +557,10 @@ impl App {
             opt_download_format: "mp3".to_owned(),
             opt_download_dir: None,
             opt_smart_playlists_enabled: true,
+            opt_audio_normalize: false,
+            opt_replaygain_mode: "off".to_owned(),
+            opt_gapless: true,
+            opt_fade_secs: 0,
             opt_editing: false,
             opt_edit_buffer: String::new(),
             key_next: "n".to_string(),
@@ -549,6 +585,9 @@ impl App {
             eq: EqState::default(),
             plugin_ui: PluginUiState::default(),
             local: LocalLibraryState::default(),
+            lyrics: LyricsState::default(),
+            resume_pending: None,
+            last_session_save: Instant::now(),
         }
     }
     pub fn set_flash(&mut self, msg: impl Into<String>, seconds: u64) {
@@ -629,7 +668,22 @@ impl App {
                 Focus::Queue => self.queue_selection().cloned(),
                 Focus::Search => None,
             },
+            Tab::Lyrics => match self.focus {
+                Focus::Queue => self.queue_selection().cloned(),
+                _ => self.current_song.clone(),
+            },
             Tab::Options => None,
+        }
+    }
+    pub fn session_state(&self) -> SessionState {
+        SessionState {
+            queue: self.queue.iter().cloned().collect(),
+            current: self.current_song.clone(),
+            position: self.playback_pos,
+            volume: self.volume,
+            muted: self.muted,
+            repeat: self.repeat_mode,
+            speed: self.playback_speed,
         }
     }
     pub fn apply_config(&mut self, cfg: &Config) {
@@ -649,6 +703,11 @@ impl App {
         self.opt_smart_playlists_enabled = cfg.general.smart_playlists_enabled;
         self.opt_image_background = cfg.general.image_background;
         self.opt_icons = cfg.general.icons;
+        self.opt_audio_normalize = cfg.general.audio_normalize;
+        self.opt_replaygain_mode =
+            crate::config::normalize_replaygain(&cfg.general.replaygain_mode);
+        self.opt_gapless = cfg.general.gapless;
+        self.opt_fade_secs = cfg.general.fade_secs.min(10);
         self.theme = cfg.general.theme.clone();
         self.plugin_ui.allow_lua_ui_changes = cfg.lua.allow_lua_ui_changes;
         self.apply_keybinds(&cfg.keybinds);
@@ -714,6 +773,10 @@ impl App {
                 smart_playlists_enabled: self.opt_smart_playlists_enabled,
                 image_background: self.opt_image_background,
                 icons: self.opt_icons,
+                audio_normalize: self.opt_audio_normalize,
+                replaygain_mode: crate::config::normalize_replaygain(&self.opt_replaygain_mode),
+                gapless: self.opt_gapless,
+                fade_secs: self.opt_fade_secs.min(10),
                 fft_visualizer_default: self.show_fft,
             },
             search: SearchConfig {

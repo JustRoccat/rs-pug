@@ -1,5 +1,5 @@
 use crate::core::CoreCmd;
-use crate::model::{App, Playlist, Tab, Focus, Song, SMART_PLAYLIST_NAME};
+use crate::model::{App, Focus, Playlist, SMART_PLAYLIST_NAME, Song, Tab};
 use tokio::sync::mpsc;
 // Rebuild smart list
 pub fn refresh_smart_playlist(app: &mut App) {
@@ -17,8 +17,11 @@ pub fn refresh_smart_playlist(app: &mut App) {
         app.set_flash(format!("Failed to save smart playlist: {err}"), 5);
         return;
     }
-    if let Some(existing) =
-        app.playlists.playlists.iter_mut().find(|p| p.name == SMART_PLAYLIST_NAME)
+    if let Some(existing) = app
+        .playlists
+        .playlists
+        .iter_mut()
+        .find(|p| p.name == SMART_PLAYLIST_NAME)
     {
         *existing = smart;
     } else {
@@ -32,12 +35,10 @@ pub fn save_playlists(app: &mut App) {
     }
 }
 pub fn create_empty_playlist(app: &mut App, name: &str) {
-    app.playlists
-        .playlists
-        .push(Playlist {
-            name: name.to_owned(),
-            songs: Vec::new(),
-        });
+    app.playlists.playlists.push(Playlist {
+        name: name.to_owned(),
+        songs: Vec::new(),
+    });
     app.playlists.expanded.push(true);
     app.playlists.selected_playlist = app.playlists.playlists.len().saturating_sub(1);
 }
@@ -49,18 +50,12 @@ pub fn add_to_named_playlist(app: &mut App, song: Song, name: &str) {
         }
         p.songs.push(song);
     } else {
-        app.playlists
-            .playlists
-            .push(Playlist {
-                name: name.to_owned(),
-                songs: vec![song],
-            });
+        app.playlists.playlists.push(Playlist {
+            name: name.to_owned(),
+            songs: vec![song],
+        });
         app.playlists.expanded.push(true);
-        app.playlists.selected_playlist = app
-            .playlists
-            .playlists
-            .len()
-            .saturating_sub(1);
+        app.playlists.selected_playlist = app.playlists.playlists.len().saturating_sub(1);
     }
     app.set_flash(format!("Added to playlist: {name}"), 3);
 }
@@ -92,11 +87,7 @@ pub fn import_playlist_action(app: &mut App) {
                 let name = imported.name.clone();
                 app.playlists.playlists.push(imported);
                 app.playlists.expanded.push(true);
-                app.playlists.selected_playlist = app
-                    .playlists
-                    .playlists
-                    .len()
-                    .saturating_sub(1);
+                app.playlists.selected_playlist = app.playlists.playlists.len().saturating_sub(1);
                 app.set_flash(format!("Imported playlist {}", name), 4);
             }
             save_playlists(app);
@@ -105,8 +96,7 @@ pub fn import_playlist_action(app: &mut App) {
     }
 }
 pub fn export_selected_playlist_action(app: &mut App) {
-    if let Some(playlist) = app.playlists.playlists.get(app.playlists.selected_playlist)
-    {
+    if let Some(playlist) = app.playlists.playlists.get(app.playlists.selected_playlist) {
         match app.storage.export_playlist_to_default(playlist) {
             Ok(path) => app.set_flash(format!("Exported to {}", path.display()), 5),
             Err(err) => app.set_flash(err, 5),
@@ -173,7 +163,11 @@ pub fn add_to_selected_playlist(app: &mut App, song: Song) {
         add_to_named_playlist(app, song, "Favorites");
         return;
     }
-    if let Some(pl) = app.playlists.playlists.get_mut(app.playlists.selected_playlist) {
+    if let Some(pl) = app
+        .playlists
+        .playlists
+        .get_mut(app.playlists.selected_playlist)
+    {
         if pl.songs.iter().any(|s| s.id == song.id) {
             let name = pl.name.clone();
             app.set_flash(format!("Song already in {}", name), 3);
@@ -233,16 +227,14 @@ pub fn ensure_album_state(app: &mut App) {
 }
 pub fn ensure_playlist_state(app: &mut App) {
     if app.playlists.expanded.len() < app.playlists.playlists.len() {
+        app.playlists.expanded.extend(std::iter::repeat_n(
+            false,
+            app.playlists.playlists.len() - app.playlists.expanded.len(),
+        ));
+    } else if app.playlists.expanded.len() > app.playlists.playlists.len() {
         app.playlists
             .expanded
-            .extend(
-                std::iter::repeat_n(
-                    false,
-                    app.playlists.playlists.len() - app.playlists.expanded.len(),
-                ),
-            );
-    } else if app.playlists.expanded.len() > app.playlists.playlists.len() {
-        app.playlists.expanded.truncate(app.playlists.playlists.len());
+            .truncate(app.playlists.playlists.len());
     }
     if let Some(p) = app.playlists.playlists.get(app.playlists.selected_playlist) {
         app.playlists.selected_song = app

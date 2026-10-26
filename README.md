@@ -21,13 +21,16 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 ## Features
 
 - Search and stream from YouTube, SoundCloud, or a self hosted [Sonum](https://github.com/JustRoccat/Sonum) server, or play local files, all from one interface
-- Queue management with multiselect bulkadd
+- Queue management with multiselect bulkadd, play next, move up and down, save queue as playlist
 - Playlists and library backed by SQLite, with automatic migration from legacy JSON
+- Session restore: queue, current track, position, volume, repeat and speed come back after restart
+- Lyrics view: synced Sonum lyrics, local LRC files and embedded tags
+- Local library with SQLite filtering, full text search and paged windows for large collections
+- Audio shaping: 10 band equalizer with savable presets, loudnorm normalize, replaygain, gapless and fade
 - Smart Queue (im not very proud about this feature): finds similar tracks to keep the music flowing automatically
 - Real time fft audio spectrum visualizer (with a synthetic fallback)
 - Minimal mode: pixelated cover art, small fft strip, title only
 - Cover-tinted Minimal background that follows the current track, toggleable in Options
-- 10 band graphic equalizer with savable presets
 - Fully remappable keybinds, including modifiers and multi key sequences
 - Built in and custom themes
 - Command palette (`:`) for fuzzy-searching every action
@@ -35,6 +38,7 @@ Community plugins, themes, and EQ presets: [all-rspug](https://github.com/JustRo
 - Extensible with Lua plugins: custom keybinds, live panels, and full UI customization
 - Hot reload: configuration and theme changes apply automatically
 - Add any streaming source you want.
+- Respects XDG_CONFIG_HOME for config, themes, plugins and presets
 
 ## Additional with plugins
 - Discord Rich Presence

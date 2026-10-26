@@ -358,7 +358,7 @@ A snapshot of application state passed to **every** hook that takes a `state` ar
 
 | Field | Lua type | Description |
 |---|---|---|
-| `active_tab` | `string` | Id of the active stock tab (`discover`, `albums`, `library`, `local`, `options`), or a custom tab id (from `on_ui_config`). When a plugin tab (from `on_tabs`) is active, this still holds the backing stock tab (usually `options`): check `active_plugin_tab` for the plugin tab id. |
+| `active_tab` | `string` | Id of the active stock tab (`discover`, `albums`, `library`, `local`, `lyrics`, `options`), or a custom tab id (from `on_ui_config`). When a plugin tab (from `on_tabs`) is active, this still holds the backing stock tab (usually `options`): check `active_plugin_tab` for the plugin tab id. |
 | `active_plugin_tab` | `string \| nil` | Id of the active plugin tab (from `on_tabs`), if one is active. |
 | `active_custom_tab` | `string \| nil` | Id of the active custom tab (from `on_ui_config`), if one is active. |
 | `active_tab_index` | `number` | 1-based position of the active tab in the tab bar (includes main and plugin tabs). |
@@ -680,15 +680,12 @@ Lua ERROR [plugin_name.hook_name]: error text
 - A missing/invalid `position` in `custom_sections`, or a duplicate section `id`.
 - Removing every main tab without replacing them with custom tabs.
 
-### Situations that are silently swallowed (no warning entry)
+### Situations that are reported with throttled warnings
 
-This is an important implementation asymmetry to be aware of while debugging:
-
-- A runtime error or exceeding the time limit **inside** the hooks: `on_search_query`, `on_search_results`, `on_song_start`, `on_key`, `on_event`, `on_tabs`, `on_ui_panels`: in these hooks, an error simply causes that plugin's result to be skipped, **with no message anywhere in the UI or the warning queue**.
-- A shape mismatch in the value returned from `on_search_query`/`on_search_results`/`on_song_start`: the result is silently discarded, and the value from before that plugin ran is passed forward unchanged.
+Runtime errors, timeouts and shape mismatches in `on_search_query`, `on_search_results`, `on_song_start`, `on_key`, `on_event`, `on_tabs` and `on_ui_panels` are reported to the warning queue with plugin and hook names. Hooks that run every frame can repeat the same message, the UI keeps only the latest warning and drops consecutive duplicates.
 
 > [!TIP]
-> If a hook from the second group "isn't working" and no warning ever appears, the most likely cause is a Lua syntax error inside the hook body, a typo in a field name of the returned table, or an infinite loop hitting the 250 ms limit. Run `rs-pug --debug` (logs to `~/.config/rs-pug/rs-pug.log`) and test the hook's logic in a standalone Lua interpreter before wiring it into `rs-pug`, to rule out syntax errors first.
+> If a hook "isn't working", check the warning in the status bar first, then run `rs-pug --debug` (logs to the rs-pug log file) and test the hook's logic in a standalone Lua interpreter.
 
 ## Security and trust boundaries
 

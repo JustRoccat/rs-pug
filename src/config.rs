@@ -1,5 +1,5 @@
-use std::{fs, path::PathBuf};
 use serde::{Deserialize, Serialize};
+use std::{fs, path::PathBuf};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EqPreset {
     pub name: String,
@@ -16,35 +16,32 @@ impl Default for EqPreset {
 fn sanitize_preset_filename(name: &str) -> Result<String, std::io::Error> {
     let sanitized = name.replace(['/', '\\'], "_");
     if sanitized.trim().is_empty() || sanitized.contains("..") {
-        return Err(
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid preset name"),
-        );
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid preset name",
+        ));
     }
     Ok(sanitized)
 }
 pub fn save_eq_preset(preset: &EqPreset) -> Result<(), std::io::Error> {
-    let home = std::env::var("HOME")
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
     let safe_name = sanitize_preset_filename(&preset.name)?;
-    let path = PathBuf::from(home)
-        .join(format!(".config/rs-pug/eqpresets/{}.json", safe_name));
-    let raw = serde_json::to_string_pretty(preset)
-        .map_err(std::io::Error::other)?;
+    let path = crate::paths::rs_pug_dir().join(format!("eqpresets/{safe_name}.json"));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let raw = serde_json::to_string_pretty(preset).map_err(std::io::Error::other)?;
     fs::write(path, raw)
 }
 pub fn load_eq_presets() -> Vec<EqPreset> {
     let mut presets = Vec::new();
-    let home = std::env::var("HOME").ok();
-    if let Some(home_dir) = home {
-        let dir = PathBuf::from(home_dir).join(".config/rs-pug/eqpresets");
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                    if let Ok(raw) = fs::read_to_string(path) {
-                        if let Ok(preset) = serde_json::from_str::<EqPreset>(&raw) {
-                            presets.push(preset);
-                        }
+    let dir = crate::paths::rs_pug_dir().join("eqpresets");
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Ok(raw) = fs::read_to_string(path) {
+                    if let Ok(preset) = serde_json::from_str::<EqPreset>(&raw) {
+                        presets.push(preset);
                     }
                 }
             }
@@ -96,9 +93,18 @@ impl Palette {
 }
 fn default_spectrum() -> Vec<[u8; 3]> {
     vec![
-        [255, 62, 205], [230, 72, 255], [175, 82, 255], [118, 108, 255], [72, 168, 255],
-        [38, 222, 255], [0, 255, 198], [0, 255, 138], [112, 255, 82], [255, 235, 48],
-        [255, 158, 38], [255, 78, 78],
+        [255, 62, 205],
+        [230, 72, 255],
+        [175, 82, 255],
+        [118, 108, 255],
+        [72, 168, 255],
+        [38, 222, 255],
+        [0, 255, 198],
+        [0, 255, 138],
+        [112, 255, 82],
+        [255, 235, 48],
+        [255, 158, 38],
+        [255, 78, 78],
     ]
 }
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -130,7 +136,6 @@ pub enum Theme {
 pub struct GeneralConfig {
     #[serde(default = "default_true")]
     pub mpris_enabled: bool,
-    // Legacy compat
     #[serde(default)]
     pub mpris_command: Option<String>,
     #[serde(default)]
@@ -153,6 +158,14 @@ pub struct GeneralConfig {
     pub image_background: bool,
     #[serde(default = "default_true")]
     pub icons: bool,
+    #[serde(default)]
+    pub audio_normalize: bool,
+    #[serde(default = "default_replaygain")]
+    pub replaygain_mode: String,
+    #[serde(default = "default_true")]
+    pub gapless: bool,
+    #[serde(default)]
+    pub fade_secs: u8,
 }
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -169,12 +182,20 @@ impl Default for GeneralConfig {
             smart_playlists_enabled: true,
             image_background: true,
             icons: true,
+            audio_normalize: false,
+            replaygain_mode: default_replaygain(),
+            gapless: true,
+            fade_secs: 0,
         }
     }
 }
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LuaConfig {
-    #[serde(default, rename = "allow-lua-ui-changes", alias = "allow_lua_ui_changes")]
+    #[serde(
+        default,
+        rename = "allow-lua-ui-changes",
+        alias = "allow_lua_ui_changes"
+    )]
     pub allow_lua_ui_changes: bool,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -557,21 +578,17 @@ pub struct MpvConfig {
 }
 impl Default for MpvConfig {
     fn default() -> Self {
-        Self { socket: default_socket() }
+        Self {
+            socket: default_socket(),
+        }
     }
 }
 pub fn ensure_default_dirs() {
-    let home = std::env::var("HOME").ok();
-    if let Some(home_dir) = home {
-        let music_local = PathBuf::from(&home_dir).join(".config/rs-pug/music-local");
-        let _ = fs::create_dir_all(music_local);
-        let plugins_dir = PathBuf::from(&home_dir).join(".config/rs-pug/plugins");
-        let _ = fs::create_dir_all(plugins_dir);
-        let themes_dir = PathBuf::from(&home_dir).join(".config/rs-pug/themes");
-        let _ = fs::create_dir_all(themes_dir);
-        let eq_presets_dir = PathBuf::from(&home_dir).join(".config/rs-pug/eqpresets");
-        let _ = fs::create_dir_all(eq_presets_dir);
-    }
+    let base = crate::paths::rs_pug_dir();
+    let _ = fs::create_dir_all(base.join("music-local"));
+    let _ = fs::create_dir_all(base.join("plugins"));
+    let _ = fs::create_dir_all(base.join("themes"));
+    let _ = fs::create_dir_all(base.join("eqpresets"));
 }
 pub fn load_config_with_diagnostics() -> (Config, Option<String>, Option<PathBuf>) {
     let paths = config_paths();
@@ -656,18 +673,10 @@ pub fn config_paths() -> Vec<PathBuf> {
     paths
 }
 fn user_config_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/rs-pug/config.toml")
-    } else {
-        PathBuf::from("rs-pug.toml")
-    }
+    crate::paths::rs_pug_dir().join("config.toml")
 }
 pub fn log_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/rs-pug/rs-pug.log")
-    } else {
-        PathBuf::from("rs-pug.log")
-    }
+    crate::paths::rs_pug_dir().join("rs-pug.log")
 }
 fn default_true() -> bool {
     true
@@ -690,19 +699,21 @@ fn default_runtime_socket(name: &str) -> String {
             return format!("{}/{name}", dir.trim_end_matches('/'));
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.trim().is_empty() {
-            return format!("{home}/.config/rs-pug/{name}");
+    let base = crate::paths::rs_pug_dir();
+    let fallback = base.join(name);
+    if let Some(parent) = fallback.parent() {
+        if parent.as_os_str().is_empty() {
+            let user = std::env::var("USER")
+                .or_else(|_| std::env::var("LOGNAME"))
+                .unwrap_or_else(|_| "default".to_owned());
+            let safe: String = user
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            return format!("/tmp/rs-pug-{safe}/{name}");
         }
     }
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "default".to_owned());
-    let safe: String = user
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    format!("/tmp/rs-pug-{safe}/{name}")
+    fallback.to_string_lossy().into_owned()
 }
 pub fn ensure_socket_parent(path: &str) {
     let path = std::path::Path::new(path);
@@ -748,17 +759,45 @@ fn default_minimal_toggle_key() -> String {
     "S-Z".to_string()
 }
 fn default_plugins_dir() -> String {
-    if let Ok(home) = std::env::var("HOME") {
-        format!("{home}/.config/rs-pug/plugins")
-    } else {
-        ".config/rs-pug/plugins".to_owned()
-    }
+    crate::paths::rs_pug_dir()
+        .join("plugins")
+        .to_string_lossy()
+        .into_owned()
 }
 fn default_music_directories() -> Vec<String> {
-    vec!["~/.config/rs-pug/music-local/".to_string()]
+    vec![
+        crate::paths::rs_pug_dir()
+            .join("music-local/")
+            .to_string_lossy()
+            .into_owned(),
+    ]
 }
 fn default_download_format() -> String {
     "mp3".to_owned()
+}
+fn default_replaygain() -> String {
+    "off".to_owned()
+}
+pub fn normalize_replaygain(raw: &str) -> String {
+    match raw.trim().to_lowercase().as_str() {
+        "track" | "album" => raw.trim().to_lowercase(),
+        _ => "off".to_owned(),
+    }
+}
+pub const REPLAYGAIN_MODES: [&str; 3] = ["off", "track", "album"];
+pub fn mpv_replaygain(raw: &str) -> String {
+    match raw.trim().to_lowercase().as_str() {
+        "track" => "track".to_owned(),
+        "album" => "album".to_owned(),
+        _ => "no".to_owned(),
+    }
+}
+pub fn cycle_replaygain(current: &str, delta: isize) -> String {
+    let pos = REPLAYGAIN_MODES
+        .iter()
+        .position(|m| *m == current.trim().to_lowercase().as_str())
+        .unwrap_or(0) as isize;
+    REPLAYGAIN_MODES[(pos + delta).rem_euclid(REPLAYGAIN_MODES.len() as isize) as usize].to_owned()
 }
 pub fn normalize_download_format(raw: &str) -> String {
     match raw.trim().to_lowercase().as_str() {
@@ -772,9 +811,7 @@ pub fn cycle_download_format(current: &str, delta: isize) -> String {
         .iter()
         .position(|f| *f == current.trim().to_lowercase().as_str())
         .unwrap_or(0) as isize;
-    DOWNLOAD_FORMATS
-        [(pos + delta).rem_euclid(DOWNLOAD_FORMATS.len() as isize) as usize]
-        .to_owned()
+    DOWNLOAD_FORMATS[(pos + delta).rem_euclid(DOWNLOAD_FORMATS.len() as isize) as usize].to_owned()
 }
 pub fn theme_to_str(theme: &Theme) -> String {
     match theme {
@@ -798,20 +835,20 @@ pub fn theme_from_str(s: &str) -> Theme {
 }
 pub fn get_available_themes() -> Vec<String> {
     let mut themes = vec![
-        "dark".to_string(), "light".to_string(), "nord".to_string(), "gruvbox"
-        .to_string(), "mono".to_string(),
+        "dark".to_string(),
+        "light".to_string(),
+        "nord".to_string(),
+        "gruvbox".to_string(),
+        "mono".to_string(),
     ];
-    let home = std::env::var("HOME").ok();
-    if let Some(home_dir) = home {
-        let themes_dir = PathBuf::from(&home_dir).join(".config/rs-pug/themes");
-        if let Ok(entries) = fs::read_dir(themes_dir) {
-            for entry in entries.flatten() {
-                if let Ok(name) = entry.file_name().into_string() {
-                    if name.ends_with(".json") {
-                        let theme_name = name.trim_end_matches(".json").to_string();
-                        if !themes.contains(&theme_name) {
-                            themes.push(theme_name);
-                        }
+    let themes_dir = crate::paths::rs_pug_dir().join("themes");
+    if let Ok(entries) = fs::read_dir(themes_dir) {
+        for entry in entries.flatten() {
+            if let Ok(name) = entry.file_name().into_string() {
+                if name.ends_with(".json") {
+                    let theme_name = name.trim_end_matches(".json").to_string();
+                    if !themes.contains(&theme_name) {
+                        themes.push(theme_name);
                     }
                 }
             }
@@ -821,99 +858,112 @@ pub fn get_available_themes() -> Vec<String> {
 }
 pub fn load_palette(theme: &Theme) -> Palette {
     let theme_name = theme_to_str(theme);
-    let home = std::env::var("HOME").ok();
-    if let Some(home_dir) = home {
-        let path = PathBuf::from(&home_dir)
-            .join(format!(".config/rs-pug/themes/{}.json", theme_name));
-        if let Ok(raw) = fs::read_to_string(path) {
-            if let Ok(pal) = serde_json::from_str::<Palette>(&raw) {
-                return pal;
-            }
+    let path = crate::paths::rs_pug_dir().join(format!("themes/{theme_name}.json"));
+    if let Ok(raw) = fs::read_to_string(path) {
+        if let Ok(pal) = serde_json::from_str::<Palette>(&raw) {
+            return pal;
         }
     }
     match theme {
-        Theme::Light => {
-            Palette {
-                text: [20, 20, 35],
-                dim: [90, 90, 115],
-                muted: [140, 135, 158],
-                info: [0, 120, 210],
-                warn: [185, 128, 0],
-                ok: [0, 158, 88],
-                primary: [20, 120, 220],
-                accent2: [110, 10, 210],
-                accent3: [0, 158, 210],
-                spectrum: vec![
-                    [20, 120, 220], [40, 130, 210], [70, 120, 220], [110, 10, 210], [140,
-                    60, 200], [0, 158, 210], [0, 158, 150], [0, 158, 88], [90, 170, 60],
-                    [185, 128, 0], [210, 100, 30], [200, 50, 60],
-                ],
-            }
-        }
-        Theme::Nord => {
-            Palette {
-                text: [216, 222, 233],
-                dim: [76, 86, 106],
-                muted: [129, 161, 193],
-                info: [136, 192, 208],
-                warn: [235, 203, 139],
-                ok: [163, 190, 140],
-                primary: [94, 129, 172],
-                accent2: [129, 161, 193],
-                accent3: [136, 192, 208],
-                spectrum: vec![
-                    [94, 129, 172], [110, 145, 180], [129, 161, 193], [136, 192, 208],
-                    [143, 188, 187], [163, 190, 140], [180, 195, 130], [235, 203, 139],
-                    [208, 135, 112], [191, 97, 106], [180, 142, 173], [129, 161, 193],
-                ],
-            }
-        }
-        Theme::Gruvbox => {
-            Palette {
-                text: [235, 219, 178],
-                dim: [102, 92, 84],
-                muted: [168, 153, 132],
-                info: [131, 165, 152],
-                warn: [250, 189, 47],
-                ok: [184, 187, 38],
-                primary: [215, 153, 33],
-                accent2: [211, 134, 155],
-                accent3: [104, 157, 106],
-                spectrum: vec![
-                    [251, 73, 52], [254, 128, 25], [250, 189, 47], [184, 187, 38], [142,
-                    192, 124], [104, 157, 106], [131, 165, 152], [69, 133, 136], [211,
-                    134, 155], [214, 93, 14], [215, 153, 33], [204, 36, 29],
-                ],
-            }
-        }
-        Theme::Mono => {
-            Palette {
-                text: [230, 230, 230],
-                dim: [90, 90, 90],
-                muted: [150, 150, 150],
-                info: [190, 190, 190],
-                warn: [220, 220, 220],
-                ok: [200, 200, 200],
-                primary: [245, 245, 245],
-                accent2: [210, 210, 210],
-                accent3: [175, 175, 175],
-                spectrum: vec![[255, 255, 255]],
-            }
-        }
-        _ => {
-            Palette {
-                text: [225, 218, 248],
-                dim: [68, 62, 102],
-                muted: [108, 100, 140],
-                info: [82, 216, 255],
-                warn: [255, 205, 52],
-                ok: [52, 255, 162],
-                primary: [255, 62, 205],
-                accent2: [152, 82, 255],
-                accent3: [0, 228, 255],
-                spectrum: default_spectrum(),
-            }
-        }
+        Theme::Light => Palette {
+            text: [20, 20, 35],
+            dim: [90, 90, 115],
+            muted: [140, 135, 158],
+            info: [0, 120, 210],
+            warn: [185, 128, 0],
+            ok: [0, 158, 88],
+            primary: [20, 120, 220],
+            accent2: [110, 10, 210],
+            accent3: [0, 158, 210],
+            spectrum: vec![
+                [20, 120, 220],
+                [40, 130, 210],
+                [70, 120, 220],
+                [110, 10, 210],
+                [140, 60, 200],
+                [0, 158, 210],
+                [0, 158, 150],
+                [0, 158, 88],
+                [90, 170, 60],
+                [185, 128, 0],
+                [210, 100, 30],
+                [200, 50, 60],
+            ],
+        },
+        Theme::Nord => Palette {
+            text: [216, 222, 233],
+            dim: [76, 86, 106],
+            muted: [129, 161, 193],
+            info: [136, 192, 208],
+            warn: [235, 203, 139],
+            ok: [163, 190, 140],
+            primary: [94, 129, 172],
+            accent2: [129, 161, 193],
+            accent3: [136, 192, 208],
+            spectrum: vec![
+                [94, 129, 172],
+                [110, 145, 180],
+                [129, 161, 193],
+                [136, 192, 208],
+                [143, 188, 187],
+                [163, 190, 140],
+                [180, 195, 130],
+                [235, 203, 139],
+                [208, 135, 112],
+                [191, 97, 106],
+                [180, 142, 173],
+                [129, 161, 193],
+            ],
+        },
+        Theme::Gruvbox => Palette {
+            text: [235, 219, 178],
+            dim: [102, 92, 84],
+            muted: [168, 153, 132],
+            info: [131, 165, 152],
+            warn: [250, 189, 47],
+            ok: [184, 187, 38],
+            primary: [215, 153, 33],
+            accent2: [211, 134, 155],
+            accent3: [104, 157, 106],
+            spectrum: vec![
+                [251, 73, 52],
+                [254, 128, 25],
+                [250, 189, 47],
+                [184, 187, 38],
+                [142, 192, 124],
+                [104, 157, 106],
+                [131, 165, 152],
+                [69, 133, 136],
+                [211, 134, 155],
+                [214, 93, 14],
+                [215, 153, 33],
+                [204, 36, 29],
+            ],
+        },
+        Theme::Mono => Palette {
+            text: [230, 230, 230],
+            dim: [90, 90, 90],
+            muted: [150, 150, 150],
+            info: [190, 190, 190],
+            warn: [220, 220, 220],
+            ok: [200, 200, 200],
+            primary: [245, 245, 245],
+            accent2: [210, 210, 210],
+            accent3: [175, 175, 175],
+            spectrum: vec![[255, 255, 255]],
+        },
+        _ => Palette {
+            text: [225, 218, 248],
+            dim: [68, 62, 102],
+            muted: [108, 100, 140],
+            info: [82, 216, 255],
+            warn: [255, 205, 52],
+            ok: [52, 255, 162],
+            primary: [255, 62, 205],
+            accent2: [152, 82, 255],
+            accent3: [0, 228, 255],
+            spectrum: default_spectrum(),
+        },
     }
 }
 #[cfg(test)]
@@ -925,7 +975,10 @@ mod tests {
     }
     #[test]
     fn sanitize_preset_filename_strips_path_separators() {
-        assert_eq!(sanitize_preset_filename("foo/bar\\baz").unwrap(), "foo_bar_baz");
+        assert_eq!(
+            sanitize_preset_filename("foo/bar\\baz").unwrap(),
+            "foo_bar_baz"
+        );
     }
     #[test]
     fn sanitize_preset_filename_rejects_traversal() {
@@ -1133,6 +1186,13 @@ command = ["/bin/echo", "{query}"]
         );
     }
     #[test]
+    fn mpv_replaygain_maps_off_to_no() {
+        assert_eq!(mpv_replaygain("off"), "no");
+        assert_eq!(mpv_replaygain("track"), "track");
+        assert_eq!(mpv_replaygain("album"), "album");
+        assert_eq!(mpv_replaygain("nonsense"), "no");
+    }
+    #[test]
     fn search_config_round_trips_custom_source() {
         let raw = r#"
 [search]
@@ -1150,9 +1210,11 @@ prefix = "ytsearchdate"
         assert_eq!(reparsed.source, SearchSource::Custom(0));
     }
     #[test]
-    fn save_eq_preset_does_not_escape_presets_dir() {        let dir = tempfile::tempdir().unwrap();
+    fn save_eq_preset_does_not_escape_presets_dir() {
+        let dir = tempfile::tempdir().unwrap();
         unsafe {
             std::env::set_var("HOME", dir.path());
+            std::env::remove_var("XDG_CONFIG_HOME");
         }
         let preset = EqPreset {
             name: "../../evil".to_string(),
@@ -1161,8 +1223,8 @@ prefix = "ytsearchdate"
         let result = save_eq_preset(&preset);
         assert!(result.is_err());
         let escaped = dir.path().join("evil.json");
-        assert!(! escaped.exists());
-        let presets_dir = dir.path().join(".config/rs-pug/eqpresets");
+        assert!(!escaped.exists());
+        let presets_dir = crate::paths::rs_pug_dir().join("eqpresets");
         if presets_dir.exists() {
             assert_eq!(fs::read_dir(presets_dir).unwrap().count(), 0);
         }

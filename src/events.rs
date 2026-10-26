@@ -90,6 +90,10 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
         }
         CoreEvent::Started(song) => {
             app.current_song = Some(song.clone());
+            app.lyrics.key.clear();
+            app.lyrics.lines.clear();
+            app.lyrics.text = None;
+            app.lyrics.loading = true;
             app.player_state = PlayerState::Playing;
             app.playback_pos = 0.0;
             app.playback_duration = song.duration.unwrap_or(0.0);
@@ -103,6 +107,7 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
             if song.id.contains('/') || song.id.contains('\\') {
                 let _ = app.storage.record_local_play(&song.id);
             }
+            persist_session(app);
             app.set_flash(format!("Now playing: {} ({})", song.title, song.id), 4);
             None
         }
@@ -141,6 +146,7 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
             } else {
                 app.queue.front().cloned()
             };
+            persist_session(app);
             if let Some(next_song) = next_song {
                 app.selected_queue = app
                     .queue
@@ -161,15 +167,20 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
         CoreEvent::Progress { position, duration } => {
             app.playback_pos = position;
             app.playback_duration = duration;
+            if app.last_session_save.elapsed() > std::time::Duration::from_secs(30) {
+                persist_session(app);
+            }
             None
         }
         CoreEvent::VolumeChanged(volume) => {
             app.volume = volume;
+            persist_session(app);
             app.set_flash(format!("Volume: {volume}%"), 2);
             None
         }
         CoreEvent::MuteChanged(muted) => {
             app.muted = muted;
+            persist_session(app);
             app.set_flash(if muted { "Muted" } else { "Unmuted" }, 2);
             None
         }
@@ -179,9 +190,8 @@ pub fn apply_event(app: &mut App, event: CoreEvent) -> Option<CoreCmd> {
         }
         CoreEvent::LibraryRefreshDone => {
             app.local.scanning = false;
-            if let Ok((window, offset, total)) = app
-                .storage
-                .fetch_local_songs_window(app.local.selected_song, 200)
+            if let Some((window, offset, total)) =
+                ui_helpers::fetch_local_window(app, app.local.selected_song)
             {
                 app.local.window = window;
                 app.local.offset = offset;
@@ -315,6 +325,14 @@ pub fn plugin_event_from_core_event(event: &CoreEvent) -> PluginEvent {
         },
     }
 }
+fn persist_session(app: &mut App) {
+    app.last_session_save = std::time::Instant::now();
+    let session = app.session_state();
+    let _ = app.storage.save_session(&session);
+}
+pub fn persist_session_now(app: &mut App) {
+    persist_session(app);
+}
 pub fn parse_tab_name(raw: &str) -> Option<Tab> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "discover" => Some(Tab::Discover),
@@ -322,6 +340,7 @@ pub fn parse_tab_name(raw: &str) -> Option<Tab> {
         "library" => Some(Tab::Library),
         "options" => Some(Tab::Options),
         "local" => Some(Tab::Local),
+        "lyrics" => Some(Tab::Lyrics),
         _ => None,
     }
 }

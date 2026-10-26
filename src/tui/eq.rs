@@ -20,18 +20,12 @@ pub(super) fn draw_eq_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: C
             if app.eq.enabled {
                 format!(
                     " {} EQUALIZER  (ON) ",
-                    crate::icons::state(
-                        crate::model::PlayerState::Playing,
-                        app.opt_icons
-                    )
+                    crate::icons::state(crate::model::PlayerState::Playing, app.opt_icons)
                 )
             } else {
                 format!(
                     " {} EQUALIZER  (OFF) ",
-                    crate::icons::state(
-                        crate::model::PlayerState::Idle,
-                        app.opt_icons
-                    )
+                    crate::icons::state(crate::model::PlayerState::Idle, app.opt_icons)
                 )
             },
             Style::default()

@@ -1,6 +1,10 @@
 use crate::db::DbStorage;
 use crate::model::{LocalSong, Playlist, Song};
-use std::{fs, path::PathBuf, sync::{Arc, Mutex}};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 #[derive(Clone)]
 pub struct Storage {
     db: Arc<Mutex<DbStorage>>,
@@ -12,7 +16,9 @@ impl std::fmt::Debug for Storage {
 }
 impl Storage {
     fn lock_db(&self) -> std::sync::MutexGuard<'_, DbStorage> {
-        self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.db
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
     #[allow(dead_code)]
     pub fn open_at(path: PathBuf) -> Result<Self, String> {
@@ -38,14 +44,10 @@ impl Storage {
         })
     }
     fn config_dir() -> Result<PathBuf, std::io::Error> {
-        if let Ok(home) = std::env::var("HOME") {
-            Ok(PathBuf::from(home).join(".config/rs-pug"))
-        } else {
-            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))
-        }
+        Ok(crate::paths::rs_pug_dir())
     }
     fn json_path(filename: &str) -> PathBuf {
-        Self::config_dir().unwrap_or_else(|_| PathBuf::from(".")).join(filename)
+        crate::paths::rs_pug_dir().join(filename)
     }
     fn migrate_from_json(db: &mut DbStorage) -> Result<(), String> {
         let local_path = Self::json_path("local_library.json");
@@ -69,9 +71,7 @@ impl Storage {
                 recently_played = data;
             }
         }
-        if !local_library.is_empty() || !playlists.is_empty()
-            || !recently_played.is_empty()
-        {
+        if !local_library.is_empty() || !playlists.is_empty() || !recently_played.is_empty() {
             db.migrate_from_json(local_library, playlists, recently_played)
                 .map_err(|e| e.to_string())?;
             let _ = fs::remove_file(Self::json_path("local_library.json"));
@@ -80,35 +80,25 @@ impl Storage {
         }
         Ok(())
     }
-    pub fn load_local_library(&self) -> Result<Vec<LocalSong>, String> {
-        self.lock_db().load_local_songs().map_err(|e| e.to_string())
-    }
-    pub fn fetch_local_songs_window(
-        &self,
-        target_index: usize,
-        window_size: usize,
-    ) -> Result<(Vec<LocalSong>, usize, usize), String> {
-        let db = self.lock_db();
-        let total = db.get_local_songs_count().map_err(|e| e.to_string())?;
-        let offset = target_index
-            .saturating_sub(window_size / 2)
-            .min(total.saturating_sub(window_size));
-        let songs = db
-            .load_local_songs_paginated(window_size, offset)
-            .map_err(|e| e.to_string())?;
-        Ok((songs, offset, total))
-    }
     pub fn update_local_song(&self, song: &LocalSong) -> Result<(), String> {
-        self.lock_db().update_local_song(song).map_err(|e| e.to_string())
+        self.lock_db()
+            .update_local_song(song)
+            .map_err(|e| e.to_string())
     }
     pub fn save_local_library(&self, songs: &[LocalSong]) -> Result<(), String> {
-        self.lock_db().save_local_songs_bulk(songs).map_err(|e| e.to_string())
+        self.lock_db()
+            .save_local_songs_bulk(songs)
+            .map_err(|e| e.to_string())
     }
     pub fn record_local_play(&self, path: &str) -> Result<(), String> {
-        self.lock_db().record_local_play(path).map_err(|e| e.to_string())
+        self.lock_db()
+            .record_local_play(path)
+            .map_err(|e| e.to_string())
     }
     pub fn upsert_playlist(&self, playlist: &Playlist) -> Result<(), String> {
-        self.lock_db().upsert_playlist(playlist).map_err(|e| e.to_string())
+        self.lock_db()
+            .upsert_playlist(playlist)
+            .map_err(|e| e.to_string())
     }
     pub fn generate_smart_playlist(&self) -> Result<Playlist, String> {
         const MOST_PLAYED_LIMIT: usize = 20;
@@ -117,8 +107,9 @@ impl Storage {
         const STALE_AFTER_DAYS: i64 = 30;
         let (most_played, recently_added, stale) = {
             let db = self.lock_db();
-            let most_played =
-                db.top_played_local_songs(MOST_PLAYED_LIMIT).map_err(|e| e.to_string())?;
+            let most_played = db
+                .top_played_local_songs(MOST_PLAYED_LIMIT)
+                .map_err(|e| e.to_string())?;
             let recently_added = db
                 .recently_added_local_songs(RECENTLY_ADDED_LIMIT)
                 .map_err(|e| e.to_string())?;
@@ -148,13 +139,47 @@ impl Storage {
         self.lock_db().load_playlists().map_err(|e| e.to_string())
     }
     pub fn save_playlists(&self, playlists: &[Playlist]) -> Result<(), String> {
-        self.lock_db().save_playlists(playlists).map_err(|e| e.to_string())
+        self.lock_db()
+            .save_playlists(playlists)
+            .map_err(|e| e.to_string())
     }
     pub fn load_recently_played(&self) -> Result<Vec<Song>, String> {
-        self.lock_db().load_recently_played().map_err(|e| e.to_string())
+        self.lock_db()
+            .load_recently_played()
+            .map_err(|e| e.to_string())
     }
     pub fn save_recently_played(&self, songs: &[Song]) -> Result<(), String> {
-        self.lock_db().save_recently_played(songs).map_err(|e| e.to_string())
+        self.lock_db()
+            .save_recently_played(songs)
+            .map_err(|e| e.to_string())
+    }
+    pub fn save_session(&self, session: &crate::model::SessionState) -> Result<(), String> {
+        let raw = serde_json::to_string(session).map_err(|e| e.to_string())?;
+        self.lock_db().save_session(&raw).map_err(|e| e.to_string())
+    }
+    pub fn load_session(&self) -> Result<Option<crate::model::SessionState>, String> {
+        let raw = self.lock_db().load_session().map_err(|e| e.to_string())?;
+        match raw {
+            Some(text) => {
+                let session: crate::model::SessionState =
+                    serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                Ok(Some(session))
+            }
+            None => Ok(None),
+        }
+    }
+    pub fn search_local_songs(
+        &self,
+        search: crate::db::LocalSearch<'_>,
+    ) -> Result<(Vec<LocalSong>, usize), String> {
+        self.lock_db()
+            .search_local_songs(search)
+            .map_err(|e| e.to_string())
+    }
+    pub fn load_songs_by_paths(&self, paths: &[String]) -> Result<Vec<LocalSong>, String> {
+        self.lock_db()
+            .load_songs_by_paths(paths)
+            .map_err(|e| e.to_string())
     }
     fn migrate_last_scanned_dirs(db: &mut DbStorage) {
         let path = Self::json_path("last_scanned_dirs.json");
@@ -168,17 +193,14 @@ impl Storage {
     pub fn save_last_scanned_dirs(&self, dirs: &[String]) {
         let _ = self.lock_db().save_last_scanned_dirs(dirs);
     }
-    pub fn import_playlist_from_default(
-        &self,
-    ) -> Result<crate::model::Playlist, String> {
+    pub fn import_playlist_from_default(&self) -> Result<crate::model::Playlist, String> {
         let path = Self::json_path("import_playlist.json");
         if !path.exists() {
             let template = crate::model::Playlist {
                 name: "Imported".to_string(),
                 songs: Vec::new(),
             };
-            let raw = serde_json::to_string_pretty(&template)
-                .map_err(|e| e.to_string())?;
+            let raw = serde_json::to_string_pretty(&template).map_err(|e| e.to_string())?;
             fs::write(&path, raw).map_err(|e| e.to_string())?;
         }
         let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;

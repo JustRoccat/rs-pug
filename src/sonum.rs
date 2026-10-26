@@ -108,11 +108,7 @@ fn default_port() -> u16 {
 }
 
 pub fn sonum_config_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/rs-pug/sonumclient.toml")
-    } else {
-        PathBuf::from("sonumclient.toml")
-    }
+    crate::paths::rs_pug_dir().join("sonumclient.toml")
 }
 
 fn default_conf_contents() -> String {

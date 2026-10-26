@@ -1,7 +1,13 @@
-use super::*;
 use super::eq::draw_eq_panel;
+use super::*;
 
-pub(super) fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
+pub(super) fn draw_queue_panel(
+    frame: &mut Frame,
+    app: &App,
+    pal: &Palette,
+    anim: Color,
+    area: Rect,
+) {
     let focused = app.focus == Focus::Queue;
     let chunks = if app.ui_layout.show_volume_bar {
         Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area)
@@ -101,10 +107,7 @@ pub(super) fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim
                             } else {
                                 ListItem::new(Line::from(vec![
                                     Span::styled(
-                                        format!(
-                                            "  {} ",
-                                            crate::icons::song_bullet(app.opt_icons)
-                                        ),
+                                        format!("  {} ", crate::icons::song_bullet(app.opt_icons)),
                                         Style::default().fg(pal.get_color("dim")),
                                     ),
                                     Span::styled(
@@ -170,10 +173,7 @@ pub(super) fn draw_queue_panel(frame: &mut Frame, app: &App, pal: &Palette, anim
                             } else {
                                 ListItem::new(Line::from(vec![
                                     Span::styled(
-                                        format!(
-                                            "  {} ",
-                                            crate::icons::song_bullet(app.opt_icons)
-                                        ),
+                                        format!("  {} ", crate::icons::song_bullet(app.opt_icons)),
                                         Style::default().fg(pal.get_color("dim")),
                                     ),
                                     Span::styled(

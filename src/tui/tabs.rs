@@ -1,6 +1,13 @@
 use super::*;
 
-pub(super) fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, _anim2: Color, area: Rect) {
+pub(super) fn draw_tabs(
+    frame: &mut Frame,
+    app: &App,
+    pal: &Palette,
+    anim: Color,
+    _anim2: Color,
+    area: Rect,
+) {
     let (defs, active) = tab_defs_and_active(app);
     let on = app.opt_icons;
     let tab_lines: Vec<Line> = defs
@@ -42,7 +49,13 @@ pub(super) fn draw_tabs(frame: &mut Frame, app: &App, pal: &Palette, anim: Color
         .divider(Span::styled("│", Style::default().fg(pal.get_color("dim"))));
     frame.render_widget(tabs, area);
 }
-pub(super) fn draw_tabs_vertical(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, area: Rect) {
+pub(super) fn draw_tabs_vertical(
+    frame: &mut Frame,
+    app: &App,
+    pal: &Palette,
+    anim: Color,
+    area: Rect,
+) {
     let (defs, active) = tab_defs_and_active(app);
     let on = app.opt_icons;
     let items: Vec<ListItem> = defs

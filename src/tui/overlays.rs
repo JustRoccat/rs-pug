@@ -1,5 +1,5 @@
-use super::*;
 use super::plugins_panel::draw_plugin_panels;
+use super::*;
 use crate::actions;
 
 pub(super) fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: Color, size: Rect) {
@@ -281,7 +281,9 @@ pub(super) fn draw_overlays(frame: &mut Frame, app: &App, pal: &Palette, anim: C
         };
         let mut state = ListState::default();
         if !matches.is_empty() {
-            state.select(Some(app.palette_selected.min(matches.len().saturating_sub(1))));
+            state.select(Some(
+                app.palette_selected.min(matches.len().saturating_sub(1)),
+            ));
         }
         let list = List::new(items).block(
             Block::default()

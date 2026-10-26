@@ -218,7 +218,7 @@ pub fn handle_key_event_pre_plugin(
                 } else {
                     app.search.query.trim().to_owned()
                 };
-                if !q.is_empty() && app.active_tab != Tab::Local {
+                if !q.is_empty() && !matches!(app.active_tab, Tab::Local | Tab::Lyrics) {
                     app.player_state = PlayerState::Searching;
                     let _ = if app.active_tab == Tab::Albums {
                         cmd_tx.send(CoreCmd::SearchAlbums(q))
@@ -228,9 +228,8 @@ pub fn handle_key_event_pre_plugin(
                 }
                 app.search_mode = false;
                 if app.active_tab == Tab::Local {
-                    if let Ok((window, offset, total)) = app
-                        .storage
-                        .fetch_local_songs_window(app.local.selected_song, 200)
+                    if let Some((window, offset, total)) =
+                        ui_helpers::fetch_local_window(app, app.local.selected_song)
                     {
                         app.local.window = window;
                         app.local.offset = offset;
@@ -245,8 +244,6 @@ pub fn handle_key_event_pre_plugin(
                     app.search.query.pop();
                 }
                 if app.active_tab == Tab::Local {
-                    let q = app.search.query.to_lowercase();
-                    let _ = q;
                     ui_helpers::refresh_local_visible_window(app);
                 }
             }
@@ -257,8 +254,6 @@ pub fn handle_key_event_pre_plugin(
                     app.search.query.push(c);
                 }
                 if app.active_tab == Tab::Local {
-                    let q = app.search.query.to_lowercase();
-                    let _ = q;
                     ui_helpers::refresh_local_visible_window(app);
                 }
             }
@@ -478,6 +473,20 @@ pub fn handle_native_key_event(
                 app.playlists.context_index = 0;
             }
         }
+        KeyCode::Char('w') if app.focus == Focus::Results => {
+            if let Some(song) = app.selected_song_for_context() {
+                extras::queue_play_next(app, cmd_tx, song);
+            }
+        }
+        KeyCode::Char('J') if app.focus == Focus::Queue => {
+            extras::move_queue_item(app, 1);
+        }
+        KeyCode::Char('K') if app.focus == Focus::Queue => {
+            extras::move_queue_item(app, -1);
+        }
+        KeyCode::Char('S') if app.focus == Focus::Queue => {
+            extras::save_queue_as_playlist(app);
+        }
         KeyCode::Char('?') => {
             app.help_open = true;
         }
@@ -587,6 +596,7 @@ pub fn handle_native_key_event(
                                 .min(local_nav_len.saturating_sub(1));
                         }
                     }
+                } else if app.active_tab == Tab::Lyrics {
                 } else if !app.search.results.is_empty() {
                     app.search.selected_result = (app.search.selected_result + 1)
                         .min(app.search.results.len().saturating_sub(1));
@@ -637,6 +647,7 @@ pub fn handle_native_key_event(
                     } else {
                         app.local.selected_nav_idx = app.local.selected_nav_idx.saturating_sub(1);
                     }
+                } else if app.active_tab == Tab::Lyrics {
                 } else {
                     app.search.selected_result = app.search.selected_result.saturating_sub(1);
                 }
@@ -736,13 +747,15 @@ pub fn handle_native_key_event(
                     }
                 } else if app.options_index == 7 {
                     app.eq.enabled = !app.eq.enabled;
-                    if app.eq.enabled {
-                        eq::send_eq_update(cmd_tx, app.eq.bands);
-                        app.set_flash("Equalizer ON", 2);
-                    } else {
-                        eq::send_eq_update(cmd_tx, [0.0f32; 10]);
-                        app.set_flash("Equalizer OFF", 2);
-                    }
+                    eq::send_audio_update(app, cmd_tx);
+                    app.set_flash(
+                        if app.eq.enabled {
+                            "Equalizer ON"
+                        } else {
+                            "Equalizer OFF"
+                        },
+                        2,
+                    );
                 } else if app.options_index == 8 {
                     eq::cycle_eq_preset(app, cmd_tx, 1);
                 } else if app.options_index == ui_helpers::SPEED_OPTIONS_INDEX {
@@ -751,6 +764,33 @@ pub fn handle_native_key_event(
                     toggle_image_background(app);
                 } else if app.options_index == ui_helpers::ICONS_OPTIONS_INDEX {
                     toggle_icons(app);
+                } else if app.options_index == ui_helpers::NORMALIZE_OPTIONS_INDEX {
+                    app.opt_audio_normalize = !app.opt_audio_normalize;
+                    eq::send_audio_update(app, cmd_tx);
+                    save_config(&app.build_config());
+                    app.set_flash(
+                        format!(
+                            "Normalize: {}",
+                            if app.opt_audio_normalize { "ON" } else { "OFF" }
+                        ),
+                        2,
+                    );
+                } else if app.options_index == ui_helpers::REPLAYGAIN_OPTIONS_INDEX {
+                    app.opt_replaygain_mode =
+                        crate::config::cycle_replaygain(&app.opt_replaygain_mode, 1);
+                    save_config(&app.build_config());
+                    app.set_flash(format!("Replaygain: {}", app.opt_replaygain_mode), 3);
+                } else if app.options_index == ui_helpers::GAPLESS_OPTIONS_INDEX {
+                    app.opt_gapless = !app.opt_gapless;
+                    save_config(&app.build_config());
+                    app.set_flash(
+                        format!("Gapless: {}", if app.opt_gapless { "ON" } else { "OFF" }),
+                        2,
+                    );
+                } else if app.options_index == ui_helpers::FADE_OPTIONS_INDEX {
+                    app.opt_fade_secs = (app.opt_fade_secs + 1).min(10);
+                    eq::send_audio_update(app, cmd_tx);
+                    save_config(&app.build_config());
                 }
                 return true;
             }
@@ -966,6 +1006,25 @@ pub fn handle_native_key_event(
                     crate::config::cycle_download_format(&app.opt_download_format, -1);
                 save_config(&app.build_config());
             }
+            ui_helpers::NORMALIZE_OPTIONS_INDEX => {
+                app.opt_audio_normalize = !app.opt_audio_normalize;
+                eq::send_audio_update(app, cmd_tx);
+                save_config(&app.build_config());
+            }
+            ui_helpers::REPLAYGAIN_OPTIONS_INDEX => {
+                app.opt_replaygain_mode =
+                    crate::config::cycle_replaygain(&app.opt_replaygain_mode, -1);
+                save_config(&app.build_config());
+            }
+            ui_helpers::GAPLESS_OPTIONS_INDEX => {
+                app.opt_gapless = !app.opt_gapless;
+                save_config(&app.build_config());
+            }
+            ui_helpers::FADE_OPTIONS_INDEX => {
+                app.opt_fade_secs = app.opt_fade_secs.saturating_sub(1);
+                eq::send_audio_update(app, cmd_tx);
+                save_config(&app.build_config());
+            }
             _ => {}
         },
         KeyCode::Char('l') | KeyCode::Right if is_core_options(app) => match app.options_index {
@@ -998,6 +1057,25 @@ pub fn handle_native_key_event(
                     crate::config::cycle_download_format(&app.opt_download_format, 1);
                 save_config(&app.build_config());
             }
+            ui_helpers::NORMALIZE_OPTIONS_INDEX => {
+                app.opt_audio_normalize = !app.opt_audio_normalize;
+                eq::send_audio_update(app, cmd_tx);
+                save_config(&app.build_config());
+            }
+            ui_helpers::REPLAYGAIN_OPTIONS_INDEX => {
+                app.opt_replaygain_mode =
+                    crate::config::cycle_replaygain(&app.opt_replaygain_mode, 1);
+                save_config(&app.build_config());
+            }
+            ui_helpers::GAPLESS_OPTIONS_INDEX => {
+                app.opt_gapless = !app.opt_gapless;
+                save_config(&app.build_config());
+            }
+            ui_helpers::FADE_OPTIONS_INDEX => {
+                app.opt_fade_secs = (app.opt_fade_secs + 1).min(10);
+                eq::send_audio_update(app, cmd_tx);
+                save_config(&app.build_config());
+            }
             _ => {}
         },
         KeyCode::Char('p') if is_core_options(app) => {
@@ -1006,23 +1084,25 @@ pub fn handle_native_key_event(
         KeyCode::Char('s') if is_core_options(app) => {
             save_config(&app.build_config());
             app.theme = app.opt_theme.clone();
-            app.set_flash("Saved settings to ~/.config/rs-pug/config.toml", 4);
+            app.set_flash(
+                format!(
+                    "Saved settings to {}",
+                    crate::paths::rs_pug_dir().join("config.toml").display()
+                ),
+                4,
+            );
         }
         KeyCode::Char('+') | KeyCode::Char('=')
             if is_core_options(app) && app.options_index == 7 =>
         {
             let b = app.eq.focus_band;
             app.eq.bands[b] = (app.eq.bands[b] + 1.0).min(12.0);
-            if app.eq.enabled {
-                eq::send_eq_update(cmd_tx, app.eq.bands);
-            }
+            eq::send_audio_update(app, cmd_tx);
         }
         KeyCode::Char('-') if is_core_options(app) && app.options_index == 7 => {
             let b = app.eq.focus_band;
             app.eq.bands[b] = (app.eq.bands[b] - 1.0).max(-12.0);
-            if app.eq.enabled {
-                eq::send_eq_update(cmd_tx, app.eq.bands);
-            }
+            eq::send_audio_update(app, cmd_tx);
         }
         _ => {}
     }

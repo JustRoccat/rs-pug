@@ -1,6 +1,6 @@
 use crate::{
     config::{Palette, Theme},
-    model::{eq_preset_name, App, Focus, PlayerState, RepeatMode, Song, Tab},
+    model::{App, Focus, PlayerState, RepeatMode, Song, Tab, eq_preset_name},
     plugins::PluginPanelItem,
     utils::natural_compare,
 };
@@ -12,20 +12,20 @@ use ratatui::{
 mod eq;
 mod help;
 mod library;
+mod minimal;
 mod overlays;
 mod playback;
 mod plugins_panel;
 mod queue;
 mod search;
 mod tabs;
-mod minimal;
 use help::{draw_custom_sections, draw_help, has_status_content};
 use library::draw_content;
+use minimal::draw_minimal;
 use overlays::draw_overlays;
 use playback::{draw_now_playing, draw_progress};
 use search::draw_search;
 use tabs::{draw_tabs, draw_tabs_vertical};
-use minimal::draw_minimal;
 fn palette(theme: &Theme) -> Palette {
     crate::config::load_palette(theme)
 }
